@@ -79,6 +79,27 @@ class Item:
         rid = RARITY_IDX[self.rarity]
         return int(round((5 + self.tier * 0.8 + self.plus * 4) * (1 + rid * 0.35)))
 
+    def reforge_count(self):
+        """当前品质可洗词条数:精良/稀有=1,史诗/传说=2,神话=3"""
+        rid = RARITY_IDX[self.rarity]
+        return min(len(self.affixes), BAL["reforge_slots"][rid])
+
+    def reforge_affixes_with_luck(self, rng, luck_off=1.0):
+        """洗 N 条词缀:重掷选中词条的值(基值区间不变,值域 ×luck_off),
+        数值型词缀的成长部分(tier×k)保持。返回被洗的词条名列表。"""
+        n = self.reforge_count()
+        if n <= 0 or not self.affixes:
+            return []
+        indices = list(range(len(self.affixes)))
+        rng.shuffle(indices)
+        picked = indices[:n]
+        for i in picked:
+            aid = self.affixes[i][0]
+            a = AFFIX_DEF[aid]
+            val = rng.uniform(a[2], a[3] * luck_off) + a[4] * self.tier
+            self.affixes[i] = (aid, val)
+        return [AFFIX_DEF[self.affixes[i][0]][1] for i in picked]
+
     def dismantle(self):
         """分解 → (金币, 重铸石)"""
         rid = RARITY_IDX[self.rarity]

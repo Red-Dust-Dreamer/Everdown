@@ -93,6 +93,7 @@ interface State {
   bag: ItemUI[];
   bag_size: number;
   quests: { desc: string; progress: number; target: number; gold: number; stones: number }[];
+  quest_daily_count: number; quest_daily_limit: number;
   achievements: { id: string; name: string; val: number; tiers: number; total: number;
                   stat: string; per: number; bonus: number; next: number | null }[];
   loadout: { active: string[]; passive: string[] };
@@ -102,7 +103,7 @@ interface State {
   skill_cd: Record<string, number>;
   stats: Record<string, number>;
   settings: Record<string, unknown>;
-  reforge_stones: number;
+  reforge_stones: number; reforge_slots: readonly number[];
   pending_offline: { sec: number; kills: number; deaths: number; gold: number; xp: number;
                      levels: number; zones: number; items: ItemUI[] } | null;
 }
@@ -191,6 +192,8 @@ function buildState(g: Game): State {
     desc: systems.questDesc(q), progress: Math.min(q.progress, q.target),
     target: q.target, gold: q.gold, stones: q.stones,
   }));
+  g.rollDaily();   // 快照前跨日重置(UI 计数即时)
+  const questDaily = { count: g.questDailyCount, limit: D.BAL.quest_daily_limit };
 
   const achievements = D.ACHIEVEMENTS.map(a => {
     const val = g.stats[a.metric] ?? 0;
@@ -222,6 +225,7 @@ function buildState(g: Game): State {
     bag: g.bag.map(itemUI),
     bag_size: D.BAL.bag_size,
     quests, achievements,
+    quest_daily_count: questDaily.count, quest_daily_limit: questDaily.limit,
     loadout: { active: [...g.loadout.active], passive: [...g.loadout.passive] },
     loadout_slots: g.loadoutSlots(),
     loadout_unlock: D.BAL.loadout_unlock,
@@ -229,7 +233,7 @@ function buildState(g: Game): State {
     speed_unlock: D.BAL.speed_unlock,
     skills, skill_cd: g.skillCd,
     stats: { ...g.stats }, settings: { ...g.settings },
-    reforge_stones: D.BAL.reforge_stones,
+    reforge_stones: D.BAL.reforge_stones, reforge_slots: D.BAL.reforge_slots,
     pending_offline: po,
   };
 }
@@ -395,7 +399,8 @@ function renderBattle(st: State): void {
     `<div class="stat-grid" style="margin-top:9px">` +
       kv("攻击", fmt(h.atk)) + kv("防御", fmt(h.def)) +
       kv("攻速", "+" + pctTxt(h.haste)) + kv("暴击", pctTxt(h.crit)) +
-      kv("暴伤", "+" + pctTxt(h.crit_dmg)) + kv("吸血", pctTxt(h.lifesteal)) +
+      kv("暴伤", "+" + pctTxt(h.crit_dmg)) + kv("幸运", "+" + fmt(h.luck ?? 0)) +
+      kv("吸血", pctTxt(h.lifesteal)) +
       kv("DPS", fmt(h.dps)) +
       kv("击杀均时", st.ema_kill ? st.ema_kill.toFixed(1) + "s" : "—") +
     `</div>` + (buffs ? `<div class="buff-row">${buffs}</div>` : "");
@@ -471,7 +476,10 @@ function renderBattle(st: State): void {
       `<div class="bar q"><div class="fill" style="width:${p}%"></div>` +
       `<div class="num" style="font-size:10px">${quest.progress} / ${quest.target}</div></div></div>`;
   }
-  $("quests-mini").innerHTML = `<h3><span class="dot"></span>悬赏任务</h3>` + q;
+  const dailyCap = st.quest_daily_count >= st.quest_daily_limit;
+  $("quests-mini").innerHTML =
+    `<h3><span class="dot"></span>悬赏任务 · 今日 ${st.quest_daily_count}/${st.quest_daily_limit}</h3>` +
+    (dailyCap ? `<div style="color:var(--dim);font-size:12px;margin:-4px 0 8px">今日已达上限,在途进度冻结,明日 0 点恢复</div>` : "") + q;
 }
 
 function renderHeroPage(st: State): void {
@@ -494,7 +502,7 @@ function renderHeroPage(st: State): void {
         `<div class="af">${esc(itemAffixLine(it) || "无词缀")}</div></div>` +
       `<div class="slot-r">` +
         `<button class="btn mini" data-cmd="enhance" data-a="${s}">强化 ◈${fmt(it.ecost)}</button>` +
-        `<button class="btn mini" data-cmd="reforge" data-a="${s}">重铸 ✦${st.reforge_stones}</button>` +
+        `<button class="btn mini" data-cmd="reforge" data-a="${s}" title="按品质洗词条">洗✦${st.reforge_stones}</button>` +
         `<button class="btn mini" data-cmd="unequip" data-a="${s}">卸下</button>` +
       `</div></div>`;
   }
@@ -557,7 +565,7 @@ function renderForge(st: State): void {
       `<div class="slot-r">` +
         `<div class="cost">◈${fmt(it.ecost)}</div>` +
         `<button class="btn" data-cmd="enhance" data-a="${s}">⚒ 强化</button>` +
-        `<button class="btn" data-cmd="reforge" data-a="${s}">✦ 重铸(${st.reforge_stones}石)</button>` +
+        `<button class="btn" data-cmd="reforge" data-a="${s}" title="按品质洗词条(幸运提升值域)">✦ 洗练(${st.reforge_stones}石)</button>` +
       `</div></div>`;
   }
   $("forge-list").innerHTML =
@@ -623,7 +631,10 @@ function renderQuest(st: State): void {
       `<div class="bar q"><div class="fill" style="width:${p}%"></div>` +
       `<div class="num" style="font-size:10px">${q.progress} / ${q.target}</div></div></div>`;
   }
-  $("quest-list").innerHTML = `<h3><span class="dot"></span>悬赏任务(完成后自动刷新)</h3>` + qs;
+  const dailyCap2 = st.quest_daily_count >= st.quest_daily_limit;
+  $("quest-list").innerHTML =
+    `<h3><span class="dot"></span>悬赏任务(完成后自动刷新)· 今日 ${st.quest_daily_count}/${st.quest_daily_limit}</h3>` +
+    (dailyCap2 ? `<div style="color:var(--dim);font-size:12px;margin:-4px 0 8px">今日悬赏已达上限(${st.quest_daily_limit}个):在途任务进度冻结,明日 0 点自动恢复</div>` : "") + qs;
 
   let ach = "";
   for (const a of st.achievements) {

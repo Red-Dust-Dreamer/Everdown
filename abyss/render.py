@@ -280,7 +280,7 @@ def _tab_char_layout(g):
                                       _kv("暴伤", "+%.0f%%" % h["crit_dmg"], 4),
                                       _kv("攻速", "+%.0f%%" % h["haste"], 4)]), left_w))
     left.append(pad("  " + "  ".join([_kv("吸血", "%.1f%%" % h["lifesteal"], 4),
-                                      _kv("金币", "+%.0f%%" % h["goldfind"], 4),
+                                      _kv("幸运", "+%.0f" % h.get("luck", 0), 4),
                                       _kv("评分", fmt(sum(i.score() for i in g.equip.values())), 4)]), left_w))
     while len(left) < BODY_ROWS:
         left.append(" " * left_w)
@@ -301,8 +301,9 @@ def _tab_char_layout(g):
         right.append(" " + c("评分 ", "bright_black") + c(fmt(it.score()), "bright_yellow", bold=True))
         right.append(" " + c("强化 ", "bright_black") + c("+%d" % it.plus, "bright_yellow")
                      + c("  (U 强化费用 %s)" % fmt(it.enhance_cost()), "bright_black"))
-        right.append(" " + c("重铸 ", "bright_black") + c("3 重铸石", "bright_magenta")
-                     + c("  (R 重掷词缀)", "bright_black"))
+        rc = it.reforge_count()
+        right.append(" " + c("洗练 ", "bright_black") + c("%d条/次" % rc, "bright_magenta")
+                     + c("  (R 洗词条,幸运+%.0f提升值域)" % g.hero.get("luck", 0), "bright_black"))
         right.append(" " + c("出售 ", "bright_black") + c("%s 金币" % fmt(it.sell_price()), "bright_yellow"))
     else:
         right.append(" " + c("该部位没有装备,等待掉落…", "bright_black"))
@@ -406,7 +407,8 @@ def _tab_forge(g):
         left.append(pad(trunc(line, left_w), left_w))
     left.append("")
     left.append(" " + c("U 强化:+8%/级(11级起+4%,21级起+2%)", "bright_black"))
-    left.append(" " + c("R 重铸:3 重铸石重掷词缀与主属性", "bright_black"))
+    left.append(" " + c("R 洗练:3重铸石,按品质洗N条(精稀1/史传2/神3)", "bright_black"))
+    left.append(" " + c("   幸运词缀提升掉落品质与洗出值上限", "bright_black"))
     while len(left) < BODY_ROWS:
         left.append(" " * left_w)
 

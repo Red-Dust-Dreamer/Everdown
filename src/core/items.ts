@@ -105,6 +105,26 @@ export class Item {
     return pyRound((5 + this.tier * 0.8 + this.plus * 4) * (1 + rid * 0.35));
   }
 
+  reforgeCount(): number {
+    const rid = RARITY_IDX[this.rarity];
+    return Math.min(this.affixes.length, BAL.reforge_slots[rid]);
+  }
+
+  reforgeAffixesWithLuck(rng: any, luckOff = 1.0): string[] {
+    const n = this.reforgeCount();
+    if (n <= 0 || !this.affixes.length) return [];
+    const indices = this.affixes.map((_, i) => i);
+    rng.shuffle(indices);
+    const picked = indices.slice(0, n);
+    for (const i of picked) {
+      const aid = this.affixes[i].id;
+      const a = AFFIX_DEF[aid];
+      const val = rng.uniform(a.lo, a.hi * luckOff) + a.k * this.tier;
+      this.affixes[i] = { id: aid, val };
+    }
+    return picked.map(i => AFFIX_DEF[this.affixes[i].id].name);
+  }
+
   dismantle(): [number, number] {
     const rid = RARITY_IDX[this.rarity];
     const stones = Math.max(0, rid - 2) + (this.plus >= 10 ? 1 : 0);

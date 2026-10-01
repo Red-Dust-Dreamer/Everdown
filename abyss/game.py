@@ -56,6 +56,8 @@ class Game:
                       "reforge_total": 0, "quest_done": 0}
         self.settings = {"auto_equip": True, "auto_sell_idx": -1}
         self.quests = []
+        self.quest_daily_count = 0   # 今日已完成悬赏数(上限 BAL["quest_daily_limit"])
+        self.quest_daily_date = ""   # 本地日期 %Y-%m-%d,跨日重置计数
         self.events = []           # [(kind, text, color)] 宿主 drain
         self.view = None           # CLI 宿主挂载,核心不读写
         # 特殊属性修饰器(统一挂口):任何渠道想给属性,调 add_stat_mod 即可,
@@ -367,9 +369,15 @@ class Game:
         self.toast("%s +%d" % (it.name, it.plus))
 
     def reforge(self, slot):
+        """洗脸:按品质洗 N 条词缀(精良/稀有1、史诗/传说2、神话3),
+        幸运值提升洗出词条的值上限。主属性与品质保留。"""
         it = self.equip.get(slot)
         if it is None:
             self.toast("该部位没有装备")
+            return
+        n = it.reforge_count()
+        if n <= 0 or not it.affixes:
+            self.toast("该装备没有可洗词条")
             return
         cost = BAL["reforge_stones"]
         if self.stones < cost:
@@ -377,14 +385,15 @@ class Game:
             return
         self.stones -= cost
         self.stats["reforge_total"] += 1
-        fresh = roll_item(it.tier, rng=self.rng)
-        # 保留槽位/稀有度/强化,重掷词缀与主属性
-        it.affixes = fresh.affixes
-        it.main_val = fresh.main_val
-        it.name = fresh.name
+        # 幸运折算:值域上限 × (1 + luck/300)
+        luck = self.hero.get("luck", 0.0)
+        luck_off = 1 + luck / BAL["luck_reforge_k"]
+        picked = it.reforge_affixes_with_luck(self.rng, luck_off)
         self.recalc_hero()
-        self.log("✦ %s 重铸完成" % it.display(), "bright_magenta")
-        self.toast("重铸完成")
+        self.log("✦ %s 洗练 %d 条:%s" % (it.display(), len(picked), "、".join(picked)),
+                 "bright_magenta")
+        self.toast("洗出:%s" % "、".join(picked))
+
 
     # ================================================================ 技能
     def skill_cost(self, sid):
@@ -483,8 +492,18 @@ class Game:
         self.toast("挂机层位:%d层" % self.farm_stage)
 
     # ================================================================ 悬赏
+    def roll_daily(self):
+        """每日悬赏:本地日期跨日重置计数(与 TS 主实现同构,保持对拍)。"""
+        d = time.strftime("%Y-%m-%d")
+        if d != self.quest_daily_date:
+            self.quest_daily_date = d
+            self.quest_daily_count = 0
+
     def quest_progress(self, qtype, n):
+        self.roll_daily()
         for q in self.quests:
+            if self.quest_daily_count >= BAL["quest_daily_limit"]:
+                break   # 今日已达上限:后续槽位进度冻结(明日恢复)
             if q["type"] == qtype and q["progress"] < q["target"]:
                 q["progress"] += n
                 if q["progress"] >= q["target"]:
@@ -494,6 +513,10 @@ class Game:
                     self.stats["quest_done"] += 1
                     self.log("✔ 完成悬赏「%s」 +%s金币 +%d重铸石" % (
                         systems.quest_desc(q), fmt(q["gold"]), q["stones"]), "bright_cyan")
+                    self.quest_daily_count += 1
+                    if self.quest_daily_count == BAL["quest_daily_limit"]:
+                        self.log("今日悬赏已达上限(%d个),明日刷新。" % BAL["quest_daily_limit"],
+                                 "bright_black")
                     new = systems.roll_quest(self.zone, self.rng)
                     q.clear()
                     q.update(new)
@@ -527,6 +550,7 @@ class Game:
     def tick(self, dt):
         """推进一帧(dt 秒 × speed 倍速,核心内实现:三宿主一致)。
         暂停由宿主控制:暂停时宿主不调用本方法。"""
+        self.roll_daily()   # 跨日即时解冻悬赏(无 RNG 消耗,不影响对拍)
         speed = min(self.settings.get("speed", 1), self.max_speed())
         for _ in range(speed):
             self.time += dt
@@ -559,6 +583,8 @@ class Game:
             "settings": self.settings,
             "stat_mods": self.stat_mods,
             "quests": self.quests,
+            "quest_daily_count": self.quest_daily_count,
+            "quest_daily_date": self.quest_daily_date,
             "hero_hp": self.hero.get("hp"),
             "ema_kill": self.ema_kill,
             "last_saved": time.time(),
@@ -598,6 +624,8 @@ class Game:
         g.settings.update(d.get("settings", {}))
         g.stat_mods = d.get("stat_mods") or []
         g.quests = d.get("quests") or g.quests
+        g.quest_daily_count = d.get("quest_daily_count", 0)
+        g.quest_daily_date = d.get("quest_daily_date", "")
         g.ema_kill = d.get("ema_kill", 0.0)
         g.recalc_hero()
         g.hero["hp"] = min(d.get("hero_hp") or g.hero["max_hp"], g.hero["max_hp"])

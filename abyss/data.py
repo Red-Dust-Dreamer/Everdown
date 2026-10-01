@@ -52,6 +52,7 @@ AFFIXES = [
     ("lifesteal", "吸血",     1.0, 2.5, 0.0,  True,  7.0),
     ("goldfind",  "金币加成", 5.0, 12.0, 0.0, True,  1.8),
     ("skill_lv",  "全技能等级", 0.3, 0.8, 0.0, False, 11.0),
+    ("luck",      "幸运",     2.0, 5.0, 0.0, True,  5.0),
 ]
 AFFIX_DEF = {a[0]: a for a in AFFIXES}
 STAT_NAMES = {
@@ -60,9 +61,10 @@ STAT_NAMES = {
     "goldfind": "金币加成", "dmg_pct": "伤害加成",
     "skill_lv": "全技能等级", "skill_dmg": "技能伤害", "cd_reduce": "冷却缩减",
     "dodge": "闪避", "armor_pierce": "无视防御", "xp_pct": "经验加成",
+    "luck": "幸运",
 }
 # 百分比词缀上限(最终汇总时截断)
-CAPS = {"haste": 150.0, "crit": 75.0, "lifesteal": 25.0,
+CAPS = {"haste": 150.0, "crit": 75.0, "lifesteal": 25.0, "luck": 200.0,
         "skill_dmg": 300.0, "cd_reduce": 40.0, "dodge": 40.0,
         "armor_pierce": 50.0, "xp_pct": 200.0}
 
@@ -70,7 +72,7 @@ CAPS = {"haste": 150.0, "crit": 75.0, "lifesteal": 25.0,
 AFFIX_SUFFIX = {
     "atk": "蛮力", "def": "坚壁", "hp": "巨鲸", "haste": "疾风",
     "crit": "鹰眼", "crit_dmg": "斩首", "lifesteal": "嗜血",
-    "goldfind": "贪婪", "skill_lv": "大师",
+    "goldfind": "贪婪", "skill_lv": "大师", "luck": "天命",
 }
 
 # ---------------------------------------------------------------- 职业
@@ -463,7 +465,12 @@ BAL = {
     "enhance_plus_a": 0.5, "enhance_plus_b": 0.04,
     "plus_max": 999,          # 无硬上限,费用多项式即软上限
     "reforge_stones": 3,
+    # 重铸(洗脸)按品质决定洗词条数:精良/稀有=1,史诗/传说=2,神话=3
+    "reforge_slots": [1, 1, 1, 2, 2, 3],
+    # 幸运影响洗脸与掉落:幸运+100 → 洗出值上限+33%、高品质掉率显著提升
+    "luck_reforge_k": 300.0,
     "bag_size": 40,
+    "quest_daily_limit": 10,  # 每日完成悬赏上限(本地 0 点重置;与 TS 主实现同构)
 
     # 技能升级费(线性+平方项:后期费用超线性上涨,等级自然收敛——
     # 防止"无限升技能"成为另一条无衰减的金币换DPS通道)

@@ -250,7 +250,7 @@ function tabChar(g: Game): string[] {
   left.push(pad("  " + [kv("攻击", fmt(h.atk)), kv("防御", fmt(h.def)), kv("生命", fmt(h.max_hp))].join("  "), leftW));
   left.push(pad("  " + [kv("暴击", `${h.crit.toFixed(0)}%`), kv("暴伤", `+${h.crit_dmg.toFixed(0)}%`),
     kv("攻速", `+${h.haste.toFixed(0)}%`)].join("  "), leftW));
-  left.push(pad("  " + [kv("吸血", `${h.lifesteal.toFixed(1)}%`), kv("金币", `+${h.goldfind.toFixed(0)}%`),
+  left.push(pad("  " + [kv("吸血", `${h.lifesteal.toFixed(1)}%`), kv("幸运", `+${(h.luck ?? 0).toFixed(0)}`),
     kv("评分", fmt(Object.values(g.equip).reduce((a, i) => a + i.score(), 0)))].join("  "), leftW));
   while (left.length < BODY_ROWS) left.push(" ".repeat(leftW));
 
@@ -268,8 +268,9 @@ function tabChar(g: Game): string[] {
     right.push(" " + c("评分 ", "bright_black") + c(fmt(it.score()), "bright_yellow", "", true));
     right.push(" " + c("强化 ", "bright_black") + c(`+${it.plus}`, "bright_yellow")
       + c(`  (U 强化费用 ${fmt(it.enhanceCost())})`, "bright_black"));
-    right.push(" " + c("重铸 ", "bright_black") + c("3 重铸石", "bright_magenta")
-      + c("  (R 重掷词缀)", "bright_black"));
+    const rc = it.reforgeCount();
+    right.push(" " + c("洗练 ", "bright_black") + c(`${rc}条/次`, "bright_magenta")
+      + c(`  (R 洗词条,幸运+${(g.hero.luck ?? 0).toFixed(0)}提升值域)`, "bright_black"));
     right.push(" " + c("出售 ", "bright_black") + c(`${fmt(it.sellPrice())} 金币`, "bright_yellow"));
   } else {
     right.push(" " + c("该部位没有装备,等待掉落…", "bright_black"));
@@ -376,7 +377,8 @@ function tabForge(g: Game): string[] {
   }
   left.push("");
   left.push(" " + c("U 强化:+8%/级(11级起+4%,21级起+2%)", "bright_black"));
-  left.push(" " + c("R 重铸:3 重铸石重掷词缀与主属性", "bright_black"));
+  left.push(" " + c("R 洗练:3重铸石,按品质洗N条(精稀1/史传2/神3)", "bright_black"));
+  left.push(" " + c("   幸运词缀提升掉落品质与洗出值上限", "bright_black"));
   while (left.length < BODY_ROWS) left.push(" ".repeat(leftW));
 
   const right: string[] = [];

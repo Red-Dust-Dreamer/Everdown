@@ -20,13 +20,13 @@ export const RARITY_PREFIX = ["破旧的", "精制的", "秘银", "龙裔", "星
 // ---------------------------------------------------------------- 属性键
 export type StatKey = "atk" | "def" | "hp" | "haste" | "crit" | "crit_dmg"
   | "lifesteal" | "goldfind" | "skill_lv" | "skill_dmg" | "cd_reduce"
-  | "dodge" | "armor_pierce" | "xp_pct" | "dmg_pct" | "all";
+  | "dodge" | "armor_pierce" | "xp_pct" | "dmg_pct" | "luck" | "all";
 export const STAT_NAMES: Record<string, string> = {
   atk: "攻击", def: "防御", hp: "生命", haste: "攻速",
   crit: "暴击率", crit_dmg: "暴击伤害", lifesteal: "吸血",
   goldfind: "金币加成", dmg_pct: "伤害加成",
   skill_lv: "全技能等级", skill_dmg: "技能伤害", cd_reduce: "冷却缩减",
-  dodge: "闪避", armor_pierce: "无视防御", xp_pct: "经验加成",
+  dodge: "闪避", armor_pierce: "无视防御", xp_pct: "经验加成", luck: "幸运",
 };
 
 // ---------------------------------------------------------------- 装备槽
@@ -63,15 +63,16 @@ export const AFFIXES: AffixDef[] = [
   { id: "lifesteal", name: "吸血", lo: 1.0, hi: 2.5, k: 0, pct: true, weight: 7.0 },
   { id: "goldfind", name: "金币加成", lo: 5.0, hi: 12.0, k: 0, pct: true, weight: 1.8 },
   { id: "skill_lv", name: "全技能等级", lo: 0.3, hi: 0.8, k: 0, pct: false, weight: 11.0 },
+  { id: "luck", name: "幸运", lo: 2.0, hi: 5.0, k: 0, pct: true, weight: 5.0 },
 ];
 export const AFFIX_DEF: Record<string, AffixDef> = Object.fromEntries(AFFIXES.map(a => [a.id, a]));
 export const AFFIX_SUFFIX: Record<string, string> = {
   atk: "蛮力", def: "坚壁", hp: "巨鲸", haste: "疾风",
   crit: "鹰眼", crit_dmg: "斩首", lifesteal: "嗜血",
-  goldfind: "贪婪", skill_lv: "大师",
+  goldfind: "贪婪", skill_lv: "大师", luck: "天命",
 };
 export const CAPS: Partial<Record<StatKey, number>> = {
-  haste: 150, crit: 75, lifesteal: 25,
+  haste: 150, crit: 75, lifesteal: 25, luck: 200,
   skill_dmg: 300, cd_reduce: 40, dodge: 40,
   armor_pierce: 50, xp_pct: 200,
 };
@@ -302,7 +303,11 @@ export const BAL = {
   enhance_plus_a: 0.5, enhance_plus_b: 0.04,
   plus_max: 999,
   reforge_stones: 3,
+  // 重铸(洗脸)按品质决定洗词条数:精良/稀有=1,史诗/传说=2,神话=3
+  reforge_slots: [1, 1, 1, 2, 2, 3],
+  luck_reforge_k: 300,
   bag_size: 40,
+  quest_daily_limit: 10,      // 每日完成悬赏上限(本地 0 点重置)
 
   skill_cost0: 60.0, skill_cost_lv: 35.0, skill_cost_lv2: 6.0,
   skill_cost_t: 2.0,

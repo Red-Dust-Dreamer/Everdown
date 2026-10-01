@@ -67,6 +67,8 @@ export class Game {
   };
   settings: Record<string, any> = { auto_equip: true, auto_sell_idx: -1 };
   quests: systems.Quest[] = [];
+  questDailyCount = 0;        // 今日已完成悬赏数(上限 BAL.quest_daily_limit)
+  questDailyDate = "";        // 本地日期 YYYY-MM-DD,跨日重置计数
   events: [string, string, string][] = [];
   statMods: { src: string; stat: string; op: "add" | "pct"; v: number }[] = [];
   view: any = null;          // 宿主挂载呈现层,核心不读写
@@ -368,19 +370,22 @@ export class Game {
   reforge(slot: string): void {
     const it = this.equip[slot];
     if (!it) { this.toast("该部位没有装备"); return; }
-    if (this.stones < BAL.reforge_stones) {
-      this.toast(`重铸石不足 (需要 ${BAL.reforge_stones})`);
+    const n = it.reforgeCount();
+    if (n <= 0 || !it.affixes.length) { this.toast("该装备没有可洗词条"); return; }
+    const cost = BAL.reforge_stones;
+    if (this.stones < cost) {
+      this.toast(`重铸石不足 (需要 ${cost})`);
       return;
     }
-    this.stones -= BAL.reforge_stones;
+    this.stones -= cost;
     this.stats.reforge_total += 1;
-    const fresh = rollItem(it.tier, this.rng);
-    it.affixes = fresh.affixes;
-    it.mainVal = fresh.mainVal;
-    it.name = fresh.name;
+    const luck = this.hero.luck ?? 0;
+    const luckOff = 1 + luck / BAL.luck_reforge_k;
+    const picked = it.reforgeAffixesWithLuck(this.rng, luckOff);
     this.recalcHero();
-    this.log(`✦ ${it.display()} 重铸完成`, "bright_magenta");
-    this.toast("重铸完成");
+    this.log(`✦ ${it.display()} 洗练 ${picked.length} 条:${picked.join("、")}`,
+      "bright_magenta");
+    this.toast(`洗出:${picked.join("、")}`);
   }
 
   // ================================================================ 技能
@@ -490,8 +495,20 @@ export class Game {
   }
 
   // ================================================================ 悬赏
+  /** 每日悬赏:本地日期跨日重置计数;达 BAL.quest_daily_limit 后冻结进度(在途任务明日恢复)。 */
+  rollDaily(): void {
+    const t = new Date();
+    const d = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+    if (d !== this.questDailyDate) {
+      this.questDailyDate = d;
+      this.questDailyCount = 0;
+    }
+  }
+
   questProgress(qtype: string, n: number): void {
+    this.rollDaily();
     for (const q of this.quests) {
+      if (this.questDailyCount >= BAL.quest_daily_limit) break;  // 今日已达上限:后续槽位冻结
       if (q.type === qtype && q.progress < q.target) {
         q.progress += n;
         if (q.progress >= q.target) {
@@ -501,6 +518,9 @@ export class Game {
           this.stats.quest_done += 1;
           this.log(`✔ 完成悬赏「${systems.questDesc(q)}」 +${fmt(q.gold)}金币 +${q.stones}重铸石`,
             "bright_cyan");
+          this.questDailyCount += 1;
+          if (this.questDailyCount === BAL.quest_daily_limit)
+            this.log(`今日悬赏已达上限(${BAL.quest_daily_limit}个),明日刷新。`, "bright_black");
           Object.assign(q, systems.rollQuest(this.zone, this.rng));
         }
       }
@@ -533,6 +553,7 @@ export class Game {
   }
 
   tick(dt: number): void {
+    this.rollDaily();   // 跨日即时解冻悬赏(无 RNG 消耗,不影响对拍)
     const speed = Math.min(this.settings.speed ?? 1, this.maxSpeed());
     for (let i = 0; i < speed; i++) {
       this.time += dt;
@@ -565,6 +586,8 @@ export class Game {
       bag: this.bag.map(i => i.toDict()),
       stats: this.stats,
       settings: this.settings,
+      quest_daily_count: this.questDailyCount,
+      quest_daily_date: this.questDailyDate,
       stat_mods: this.statMods,
       quests: this.quests,
       hero_hp: this.hero.hp,
@@ -604,6 +627,8 @@ export class Game {
     Object.assign(g.settings, d.settings ?? {});
     g.statMods = d.stat_mods ?? [];
     g.quests = d.quests ?? g.quests;
+    g.questDailyCount = d.quest_daily_count ?? 0;
+    g.questDailyDate = d.quest_daily_date ?? "";
     g.emaKill = d.ema_kill ?? 0;
     g.recalcHero();
     g.hero.hp = Math.min(d.hero_hp ?? g.hero.max_hp, g.hero.max_hp);

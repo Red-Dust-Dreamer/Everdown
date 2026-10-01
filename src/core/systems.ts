@@ -206,7 +206,7 @@ export function resolve(g: Game, elapsed: number): ResolveReport {
     let chance: number = mon.elite ? BAL.elite_drop : BAL.drop_chance;
     if (mon.boss) chance = BAL.boss_drop;
     if (g.rng.random() < chance) {
-      const item = rollItem(mon.tier, g.rng, g.hero.goldfind,
+      const item = rollItem(mon.tier, g.rng, g.hero.luck ?? 0,
         mon.boss ? 2 : 0, mon.boss ? 0.6 : mon.elite ? 0.25 : 0);
       if (rep.items.length < BAL.offline_item_cap) rep.items.push(item);
       g.addItem(item);

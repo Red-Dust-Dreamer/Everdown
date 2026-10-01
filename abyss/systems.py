@@ -233,7 +233,7 @@ def resolve(g, elapsed):
         if mon.boss:
             chance = BAL["boss_drop"]
         if g.rng.random() < chance:
-            item = roll_item(mon.tier, rng=g.rng, luck=g.hero["goldfind"],
+            item = roll_item(mon.tier, rng=g.rng, luck=g.hero.get("luck", 0.0),
                              min_idx=(2 if mon.boss else 0),
                              boost=(0.6 if mon.boss else (0.25 if mon.elite else 0.0)))
             if len(rep["items"]) < BAL["offline_item_cap"]:
