@@ -206,17 +206,31 @@ export const THEMES: ThemeDef[] = [
   { name: "虚空裂隙", mobs: ["imp", "goblin", "hound"], boss: "虚空吞噬者", color: "bright_magenta" },
 ];
 
-export interface MobDef { name: string; color: Color; power: number }
+export interface MobSkill {
+  name: string; icon: string; cd: number; mult: number; hits: number;
+  lifesteal?: boolean; defdown?: [number, number]; atkdown?: [number, number];
+  stun?: number;
+}
+export interface MobDef { name: string; color: Color; power: number; skill: MobSkill }
 export const MONSTERS: Record<string, MobDef> = {
-  slime: { name: "史莱姆", color: "green", power: 1.0 },
-  wolf: { name: "恐狼", color: "yellow", power: 1.05 },
-  goblin: { name: "哥布林", color: "bright_green", power: 0.95 },
-  bat: { name: "吸血蝠", color: "magenta", power: 0.9 },
-  skeleton: { name: "骷髅兵", color: "white", power: 1.05 },
-  golem: { name: "石魔像", color: "bright_black", power: 1.15 },
-  imp: { name: "小恶魔", color: "bright_red", power: 1.05 },
-  hound: { name: "地狱犬", color: "red", power: 1.1 },
-  elemental: { name: "元素灵", color: "bright_cyan", power: 1.05 },
+  slime: { name: "史莱姆", color: "green", power: 1.0,
+    skill: { name: "酸液喷吐", icon: "☣", cd: 10, mult: 1.2, hits: 1, defdown: [0.3, 5] } },
+  wolf: { name: "恐狼", color: "yellow", power: 1.05,
+    skill: { name: "狂暴撕咬", icon: "🐍", cd: 8, mult: 0.6, hits: 3 } },
+  goblin: { name: "哥布林", color: "bright_green", power: 0.95,
+    skill: { name: "卑鄙飞刀", icon: "🔪", cd: 12, mult: 2.5, hits: 1 } },
+  bat: { name: "吸血蝠", color: "magenta", power: 0.9,
+    skill: { name: "血之盛宴", icon: "🩸", cd: 10, mult: 1.5, hits: 1, lifesteal: true } },
+  skeleton: { name: "骷髅兵", color: "white", power: 1.05,
+    skill: { name: "白骨之刺", icon: "🦴", cd: 12, mult: 2.0, hits: 1, atkdown: [0.2, 5] } },
+  golem: { name: "石魔像", color: "bright_black", power: 1.15,
+    skill: { name: "大地震颤", icon: "💢", cd: 15, mult: 1.3, hits: 1, stun: 1.2 } },
+  imp: { name: "小恶魔", color: "bright_red", power: 1.05,
+    skill: { name: "火焰投掷", icon: "🔥", cd: 9, mult: 2.2, hits: 1 } },
+  hound: { name: "地狱犬", color: "red", power: 1.1,
+    skill: { name: "三头撕咬", icon: "🐺", cd: 9, mult: 0.85, hits: 3 } },
+  elemental: { name: "元素灵", color: "bright_cyan", power: 1.05,
+    skill: { name: "元素风暴", icon: "⚡", cd: 14, mult: 2.8, hits: 1 } },
 };
 
 export const ART: Record<string, string[]> = {
@@ -265,13 +279,16 @@ export const BAL = {
 
   kills_per_stage: 3,
 
-  mob_hp0: 50.0, mob_hp_k: 26.0, mob_hp_p: 1.28,
-  mob_atk0: 6.8, mob_atk_k: 2.2, mob_atk_p: 1.05,
+  // 怪物属性(2026-10-01 提升):装备等级落后 20~30 级将明显打不过
+  mob_hp0: 50.0, mob_hp_k: 32.0, mob_hp_p: 1.28,
+  mob_atk0: 6.8, mob_atk_k: 2.8, mob_atk_p: 1.05,
   mob_def0: 3.0, mob_def_k: 1.5, mob_def_p: 1.0,
   mob_interval: 1.6,
   boss_hp: 2.6, boss_atk: 1.15, boss_gold: 5.0, boss_interval: 3.2,
   elite_hp: 3.0, elite_atk: 1.3, elite_gold: 2.5,
   elite_chance: 0.10,
+  // 等级压制:怪物tier超过装备最高tier 100以上,每差100 → 全属性×2(叠乘)
+  gear_gap_base: 100, gear_gap_mult: 2.0,
 
   gold0: 6.0, gold_k: 3.0, gold_p: 0.85,
   xp0: 9.0, xp_k: 3.5, xp_p: 0.75,
@@ -280,7 +297,7 @@ export const BAL = {
 
   item_main_p: 1.12,
 
-  plus_pct_1: 8.0, plus_pct_2: 4.0, plus_pct_3: 2.0,
+  plus_pct_1: 8.0, plus_pct_2: 4.0, plus_pct_3: 1.5,
   enhance_cost0: 25.0, enhance_cost_t: 1.8,
   enhance_plus_a: 0.5, enhance_plus_b: 0.04,
   plus_max: 999,

@@ -1,6 +1,7 @@
 /** 战斗引擎(与 abyss/combat.py 语义一致,随机全部走 g.rng) */
 import { fmt } from "./ansi.ts";
 import { ACTIVE_DEF as ACTIVE_LOOKUP, ART, BAL, MONSTERS, RARITY_IDX, THEMES } from "./data.ts";
+import type { MobSkill } from "./data.ts";
 import { rollItem } from "./items.ts";
 import * as S from "./skills.ts";
 import type { Game } from "./game.ts";
@@ -27,13 +28,18 @@ export class Monster implements S.MonLike {
   atkDownUntil = 0;
   defDownPct = 0;
   defDownUntil = 0;
+  skill: MobSkill;
+  skillTimer: number;
 
   constructor(name: string, art: string[], color: Color, hp: number, atk: number,
-              def_: number, interval: number, boss: boolean, elite: boolean, tier: number) {
+              def_: number, interval: number, boss: boolean, elite: boolean, tier: number,
+              skill: MobSkill) {
     this.name = name; this.art = art; this.color = color;
     this.hp = this.maxHp = hp;
     this.atk = atk; this.def_ = def_; this.interval = interval;
     this.boss = boss; this.elite = elite; this.tier = tier;
+    this.skill = skill;
+    this.skillTimer = skill.cd * 0.5;  // 半 CD 后首放
   }
   hpPct(): number { return this.maxHp ? this.hp / this.maxHp : 0; }
 }
@@ -57,7 +63,8 @@ export function mobXp(tier: number): number {
   return BAL.xp0 + BAL.xp_k * Math.pow(tier, BAL.xp_p);
 }
 
-export function spawnMonster(zone: number, stage: number, rng: PyRandom): Monster {
+export function spawnMonster(zone: number, stage: number, rng: PyRandom,
+                             heroGearTier?: number): Monster {
   const tier = tierOf(zone, stage);
   const [themeName, pool, bossName, themeColor] = zoneTheme(zone);
   const boss = stage >= 10;
@@ -65,8 +72,16 @@ export function spawnMonster(zone: number, stage: number, rng: PyRandom): Monste
   const mob = MONSTERS[key];
   let hp = (BAL.mob_hp0 + BAL.mob_hp_k * Math.pow(tier, BAL.mob_hp_p)) * mob.power;
   let atk = (BAL.mob_atk0 + BAL.mob_atk_k * Math.pow(tier, BAL.mob_atk_p)) * mob.power;
+  // 等级压制:怪物tier超过装备最高tier 100+,每差100 → 全属性×2(叠乘)
+  if (heroGearTier !== undefined && tier - heroGearTier > BAL.gear_gap_base) {
+    const pressure = Math.pow(BAL.gear_gap_mult,
+      (tier - heroGearTier - BAL.gear_gap_base) / 100);
+    hp *= pressure;
+    atk *= pressure;
+  }
   const dfn = BAL.mob_def0 + BAL.mob_def_k * Math.pow(tier, BAL.mob_def_p);
   let name = mob.name, color: Color = mob.color;
+  let skill = mob.skill;
   let elite = false;
   let interval: number = BAL.mob_interval;
   if (boss) {
@@ -75,13 +90,14 @@ export function spawnMonster(zone: number, stage: number, rng: PyRandom): Monste
     atk *= BAL.boss_atk;
     color = "bright_yellow";
     interval = BAL.boss_interval;
+    skill = { name: "灭世之击", icon: "☄", cd: 12, mult: 3.0, hits: 1, stun: 1.5 };
   } else if (zone > 1 && rng.random() < BAL.elite_chance) {
     elite = true;
     hp *= BAL.elite_hp;
     atk *= BAL.elite_atk;
     color = "bright_green";
   }
-  return new Monster(name, ART[key], color, hp, atk, dfn, interval, boss, elite, tier);
+  return new Monster(name, ART[key], color, hp, atk, dfn, interval, boss, elite, tier, skill);
 }
 
 /** 平滑减伤:atk²/(atk+def) */
@@ -108,11 +124,13 @@ export function battleTick(g: Game, dt: number): void {
 
   castSkills(g, dt, mon);
 
-  h.atk_timer += dt;
-  const interval = h.interval / (1 + (h.haste + S.buffPct(g, "haste")) / 100);
-  while (h.atk_timer >= interval) {
-    h.atk_timer -= interval;
-    heroAttack(g, mon);
+  if ((h.stun_until ?? 0) <= g.time) {
+    h.atk_timer += dt;
+    const interval = h.interval / (1 + (h.haste + S.buffPct(g, "haste")) / 100);
+    while (h.atk_timer >= interval) {
+      h.atk_timer -= interval;
+      heroAttack(g, mon);
+    }
   }
 
   if (mon.hp <= 0) {
@@ -121,6 +139,18 @@ export function battleTick(g: Game, dt: number): void {
   }
 
   if (mon.stunUntil > g.time) return;
+  if (mon.skill) {
+    mon.skillTimer += dt;
+    if (mon.skillTimer >= mon.skill.cd) {
+      mon.skillTimer = 0;
+      castMonsterSkill(g, mon);
+      if (h.hp <= 0) {
+        onHeroDeath(g);
+        return;
+      }
+      return;  // 技能回合不接普攻
+    }
+  }
   mon.atkTimer += dt;
   while (mon.atkTimer >= mon.interval) {
     mon.atkTimer -= mon.interval;
@@ -132,9 +162,55 @@ export function battleTick(g: Game, dt: number): void {
   }
 }
 
+function castMonsterSkill(g: Game, mon: Monster): void {
+  const h = g.hero;
+  const sk = mon.skill;
+  let total = 0;
+  let defv = h.def;
+  if ((h.defdown_until ?? 0) > g.time) defv *= 1 - (h.defdown_pct ?? 0) / 100;
+  for (let i = 0; i < (sk.hits ?? 1); i++) {
+    total += _dmg(mon.atk * sk.mult, defv);
+  }
+  const shield = h.shield ?? 0;
+  if (shield > 0) {
+    const absorb = Math.min(shield, total);
+    h.shield = shield - absorb;
+    total -= absorb;
+  }
+  h.hp -= total;
+  g.addFloater(`${sk.icon} -${fmt(total)}`, "bright_red");
+  g.log(`敌方 ${mon.name} 施放了【${sk.name}】!`, "bright_red");
+  if (sk.lifesteal && total > 0) {
+    mon.hp = Math.min(mon.maxHp, mon.hp + total);
+    g.addFloater("+" + fmt(total), "magenta");
+  }
+  if (sk.defdown) {
+    h.defdown_pct = sk.defdown[0];
+    h.defdown_until = g.time + sk.defdown[1];
+  }
+  if (sk.atkdown) {
+    h.atkdown_pct = sk.atkdown[0];
+    h.atkdown_until = g.time + sk.atkdown[1];
+  }
+  if (sk.stun) {
+    h.stun_until = g.time + sk.stun;
+    g.addFloater("⛔ 眩晕", "bright_red");
+  }
+  if (h.hp <= 0 && S.hookDef(g, "undying")) {
+    const ready = h.undying_at ?? -999;
+    if (g.time - ready >= BAL.undying_cd
+        && g.rng.random() * 100 < S.hookVal(g, "undying")) {
+      h.hp = 1;
+      h.undying_at = g.time;
+      g.addFloater("不屈!", "bright_yellow");
+    }
+  }
+}
+
 function heroAttack(g: Game, mon: Monster): void {
   const h = g.hero;
-  const atk = S.atkNow(g);
+  let atk = S.atkNow(g);
+  if ((h.atkdown_until ?? 0) > g.time) atk *= 1 - (h.atkdown_pct ?? 0) / 100;
   const pierce = Math.min((h.armor_pierce ?? 0) / 100, 0.5);
   let defv = mon.def_;
   if (mon.defDownUntil > g.time) defv *= 1 - mon.defDownPct / 100;
@@ -186,7 +262,9 @@ function monsterAttack(g: Game, mon: Monster): void {
   }
   let atk = mon.atk;
   if (mon.atkDownUntil > g.time) atk *= 1 - mon.atkDownPct / 100;
-  let raw = _dmg(atk, h.def);
+  let defv = h.def;
+  if ((h.defdown_until ?? 0) > g.time) defv *= 1 - (h.defdown_pct ?? 0) / 100;
+  let raw = _dmg(atk, defv);
   const shield = h.shield ?? 0;
   if (shield > 0) {
     const absorb = Math.min(shield, raw);

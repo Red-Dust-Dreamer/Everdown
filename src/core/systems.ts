@@ -108,11 +108,16 @@ function effLvOf(g: Game, sid: string): number {
   return Math.max(1, g.skillLv[sid] ?? 1) + equipBonus;
 }
 
-function netIncoming(g: Game, mobAtk: number, mobInterval: number, _dps: number): number {
+function netIncoming(g: Game, mobAtk: number, mobInterval: number, _dps: number,
+                    skill?: { mult: number; hits?: number; cd: number }): number {
   const h = g.hero;
   let hit = mobAtk * mobAtk / (mobAtk + Math.max(0, h.def));
   let inc = hit / mobInterval;
   inc *= 1 - Math.min(h.dodge ?? 0, 40) / 100;
+  if (skill) {
+    const mult = skill.mult * (skill.hits ?? 1);
+    inc += mobAtk * mult * 0.7 / skill.cd;  // 0.7: 减伤口径折算
+  }
   const regen = _dps * h.lifesteal / 100;
   return inc - regen;
 }
@@ -168,7 +173,7 @@ export function resolve(g: Game, elapsed: number): ResolveReport {
       const knives = rollKnives(g.rng, Math.max(0, effHp - skillTotal), baseHit, pCrit, critMul);
       killT = Math.max(0.3, swing * Math.max(1, knives));
     }
-    const net = netIncoming(g, mon.atk, mon.interval, dps);
+    const net = netIncoming(g, mon.atk, mon.interval, dps, mon.skill);
     const ttd = net > 0 ? g.hero.hp / net : 1e9;
     if (killT > ttd) {
       remaining -= ttd + BAL.respawn_sec;

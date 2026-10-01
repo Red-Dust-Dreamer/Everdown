@@ -409,7 +409,9 @@ export class Game {
 
   // ================================================================ 推进
   spawn(): void {
-    this.monster = spawnMonster(this.zone, this.stage, this.rng);
+    let eqT = 0;
+    for (const it of Object.values(this.equip)) eqT = Math.max(eqT, it.tier);
+    this.monster = spawnMonster(this.zone, this.stage, this.rng, eqT);
     this.lastSpawnTime = this.time;
   }
 

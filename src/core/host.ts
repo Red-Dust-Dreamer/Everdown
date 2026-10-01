@@ -175,6 +175,21 @@ export function autopilot(g: Game, sim = false): void {
       }
     }
   }
+  // 背包维护:快满就按评分清 lowest(防止新掉落被"背包已满自动出售")
+  if (g.bag.length > 30) {
+    g.bag.sort((a, b) => a.score() - b.score());
+    const nDrop = g.bag.length - 20;
+    for (const it of g.bag.slice(0, nDrop)) {
+      g.gold += it.sellPrice();
+      g.stats.gold_earned += it.sellPrice();
+    }
+    g.bag = g.bag.slice(nDrop);
+  }
+  // 装备替换:tier 明显更高(≥30)就换(autopilot 专用,弥补评分策略盲区)
+  for (const it of [...g.bag]) {
+    const cur = g.equip[it.slot];
+    if (!cur || it.tier >= cur.tier + 30) g.equipItem(it);
+  }
   if (Object.keys(g.equip).length) {
     const items = Object.values(g.equip);
     const slotItem = items.reduce((a, b) => (b.plus < a.plus ? b : a));
@@ -188,7 +203,11 @@ export function autopilot(g: Game, sim = false): void {
       }
     }
   }
-  if (sim && g.mode === "farm" && g.time - g.lastDeathTime > 60) {
-    g.setMode("push");
+  if (sim && g.mode === "farm" && g.time - g.lastDeathTime > 30) {
+    // 装备等级接近当前层才回推进(门槛:装备tier >= 层tier - 12)
+    let eqT = 0;
+    for (const it of Object.values(g.equip)) eqT = Math.max(eqT, it.tier);
+    const curT = g.zone * 10 + g.stage - 1;
+    if (eqT >= curT - 12) g.setMode("push");
   }
 }

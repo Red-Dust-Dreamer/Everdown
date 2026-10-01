@@ -8,10 +8,11 @@
   --bg:#0a0a0f; --panel:#10101a; --panel2:#151522; --line:#26263a; --line2:#33334d;
   --txt:#c8c8d0; --dim:#7a7a8c; --red:#ff6b6b; --gold:#ffd94a;
   --hp:#e0553f; --hp-h:#c23a2a;
-  --nav-h:64px;              /* 手机端底部导航高度 */
+  --nav-h:52px;              /* 手机端底部导航高度(JS 按实测校准) */
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
+@supports (height:100dvh){ html,body{height:100dvh} }  /* 手机地址栏收展稳定 */
 body{
   background:
     radial-gradient(1200px 500px at 50% -10%, #1a1225 0%, transparent 60%),
@@ -366,51 +367,61 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
 /* ================================================= 手机端(≤768px) */
 @media (max-width:768px){
   body{font-size:14px}
-  /* 布局骨架:导航沉底,内容区滚动 */
+  /* 布局骨架:导航沉底(紧凑单行),内容区滚动 */
   #main{flex-direction:column}
   #nav{position:fixed;left:0;right:0;bottom:0;z-index:30;width:auto;
-    flex-direction:row;gap:0;padding:4px 6px calc(4px + env(safe-area-inset-bottom));
+    flex-direction:row;gap:0;
+    padding:4px 4px calc(4px + env(safe-area-inset-bottom));
     border-right:none;border-top:1px solid var(--line);
-    background:linear-gradient(180deg,#12121e,#0e0e17)}
-  .nav-item{flex:1;flex-direction:column;gap:3px;min-width:48px;padding:7px 2px;
-    border-radius:10px}
-  .nav-item .ic{font-size:19px}
-  .nav-item .tx{display:block;font-size:10.5px}
+    background:linear-gradient(180deg,#12121e,#0e0e17);
+    overflow-x:auto;overscroll-behavior:contain}
+  .nav-item{flex:1 1 0;min-width:46px;flex-direction:column;flex-wrap:nowrap;
+    gap:2px;padding:5px 2px;border-radius:10px}
+  .nav-item .ic{font-size:18px;line-height:1.1}
+  .nav-item .tx{display:block;font-size:10px;line-height:1.2;white-space:nowrap}
   .nav-item .kbd{display:none}
   .nav-item.on{box-shadow:inset 0 3px 0 var(--red)}   /* 高亮条移到底部 */
-  #content{flex:1;overflow-y:auto;padding:10px 10px calc(var(--nav-h) + env(safe-area-inset-bottom) + 14px)}
+  #content{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;
+    padding:10px 10px calc(var(--nav-h) + env(safe-area-inset-bottom) + 18px)}
   .page{min-height:0}
   .card.grow{overflow:visible;flex:none}   /* 整页滚动,卡片不再内滚 */
 
-  /* 顶栏压缩 */
-  #topbar{gap:8px;padding:8px 10px;flex-wrap:wrap}
+  /* 顶栏压缩为单行,不再换行占两行 */
+  #topbar{gap:8px;padding:6px 10px;flex-wrap:nowrap;overflow:hidden;
+    padding-top:max(6px, env(safe-area-inset-top))}
   .logo{display:none}
-  .zone-chip{max-width:none;font-size:12.5px;padding:3px 10px}
-  .res{font-size:13px}
-  #topbar .btn{padding:6px 10px}
+  #topbar .btn{padding:6px 10px;font-size:12px}
+  #topbar [data-local="save"]{display:none}          /* 手机收进设置页 */
+  .zone-chip{max-width:none;font-size:12px;padding:3px 9px;flex:1 1 auto;
+    min-width:0;overflow:hidden}
+  .zone-chip span:first-child{white-space:nowrap}
+  .zone-chip .theme{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .res{font-size:12.5px;flex:none}
+  .res-time{display:none}
 
-  /* 战斗页:纵向堆叠,舞台优先 */
+  /* 战斗页:纵向堆叠,舞台优先,首屏尽量装下战斗区 */
   #battle-top{flex-direction:column}
   #stage-wrap{order:1}
   #col-hero{order:2;width:auto}
   #col-right{order:3;width:auto}
-  #stage{min-height:44vh}
+  #stage{min-height:34vh}
   #stage-track{order:0}
-  .mon-art{font-size:18px}
-  #log-body{max-height:180px;overflow-y:auto;justify-content:flex-start}
+  .mon-art{font-size:17px}
+  #log-card{order:3}
+  #log-body{max-height:170px;overflow-y:auto;justify-content:flex-start}
 
   /* 网格全部单列/双列化 */
-  .bag-grid{grid-template-columns:repeat(auto-fill,minmax(164px,1fr));gap:7px}
+  .bag-grid{grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:7px}
   .skill-pools{grid-template-columns:1fr;gap:10px}
   .pool{overflow:visible}
-  .stat-grid.wide{grid-template-columns:repeat(auto-fill,minmax(128px,1fr))}
+  .stat-grid.wide{grid-template-columns:repeat(auto-fill,minmax(126px,1fr))}
   .slot-card{flex-direction:column;gap:8px}
   .slot-l{width:auto;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
   .slot-r{flex-direction:row;flex-wrap:wrap}
-  .slot-r .btn{flex:1;min-height:40px}
+  .slot-r .btn{flex:1;min-height:42px}
   .sk-ops{flex-direction:row;align-items:center}
-  .sk-ops .btn{min-height:40px}
-  .item .ops .btn{min-height:38px}
+  .sk-ops .btn{min-height:42px}
+  .item .ops .btn{min-height:40px}
   .cls-grid{grid-template-columns:1fr}
   .cls-card{flex-direction:row;text-align:left;justify-content:flex-start;gap:14px;padding:14px}
   .cls-card .ic{font-size:30px}

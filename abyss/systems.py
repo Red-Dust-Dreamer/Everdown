@@ -129,12 +129,16 @@ def _hero_dps(g, mob_def, mob_hp, boss_or_elite):
     return dps, per_base_hit, eff_hp
 
 
-def _net_incoming(g, mob_atk, mob_interval, dps):
-    """怪物的净侵血速率(扣除吸血期望回复;护盾/治疗不折算,轻微悲观)"""
+def _net_incoming(g, mob_atk, mob_interval, dps, skill=None):
+    """怪物的净侵血速率(扣除吸血期望回复;护盾/治疗不折算,轻微悲观)。
+    怪物专属技能按冷却折算期望 DPS 计入(与在线施放口径一致)。"""
     h = g.hero
     hit = mob_atk * mob_atk / (mob_atk + max(0.0, h["def"]))
     inc = hit / mob_interval
     inc *= 1 - min(h.get("dodge", 0), 40.0) / 100.0      # 闪避期望
+    if skill:
+        mult = skill.get("mult", 1.0) * skill.get("hits", 1)
+        inc += mob_atk * mult * 0.7 / skill.get("cd", 10)  # 0.7: 减伤口径折算
     regen = dps * h["lifesteal"] / 100.0
     return inc - regen
 
@@ -193,7 +197,7 @@ def resolve(g, elapsed):
             knives = _roll_knives(g.rng, max(0.0, eff_hp - skill_total),
                                   base_hit, p_crit, crit_mul)
             kill_t = max(0.3, swing * max(1, knives))
-        net = _net_incoming(g, mon.atk, mon.interval, dps)
+        net = _net_incoming(g, mon.atk, mon.interval, dps, mon.skill)
         ttd = g.hero["hp"] / net if net > 0 else 1e9
         if kill_t > ttd:
             # 打不过:按存活时间死亡退层

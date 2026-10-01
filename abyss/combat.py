@@ -15,13 +15,17 @@ class Monster:
     __slots__ = ("name", "art", "color", "hp", "max_hp", "atk", "def_", "interval",
                  "boss", "elite", "tier", "atk_timer", "stun_until",
                  "marked_pct", "marked_until",
-                 "atk_down_pct", "atk_down_until", "def_down_pct", "def_down_until")
+                 "atk_down_pct", "atk_down_until", "def_down_pct", "def_down_until",
+                 "skill", "skill_timer")
 
-    def __init__(self, name, art, color, hp, atk, def_, interval, boss, elite, tier):
+    def __init__(self, name, art, color, hp, atk, def_, interval, boss, elite, tier,
+                 skill=None):
         self.name, self.art, self.color = name, art, color
         self.hp = self.max_hp = hp
         self.atk, self.def_, self.interval = atk, def_, interval
         self.boss, self.elite, self.tier = boss, elite, tier
+        self.skill = skill or {}
+        self.skill_timer = (self.skill.get("cd", 10) * 0.5)  # 半 CD 后首放
         self.atk_timer = 0.0
         self.stun_until = 0.0
         self.marked_pct = 0.0
@@ -55,15 +59,22 @@ def mob_xp(tier):
     return BAL["xp0"] + BAL["xp_k"] * (tier ** BAL["xp_p"])
 
 
-def spawn_monster(zone, stage, rng=None):
+def spawn_monster(zone, stage, rng=None, hero_gear_tier=None):
     rng = rng or _random
     tier = tier_of(zone, stage)
     theme_name, pool, boss_name, theme_color = zone_theme(zone)
     boss = stage >= 10
     key = rng.choice(pool)
-    name, color, power = MONSTERS[key]
+    name, color, power, skill = MONSTERS[key]
     hp = (BAL["mob_hp0"] + BAL["mob_hp_k"] * (tier ** BAL["mob_hp_p"])) * power
     atk = (BAL["mob_atk0"] + BAL["mob_atk_k"] * (tier ** BAL["mob_atk_p"])) * power
+    # 等级压制:怪物tier超过装备最高tier 100+,每差100 → 全属性×2(叠乘)
+    if hero_gear_tier is not None:
+        gap = tier - hero_gear_tier
+        if gap > BAL["gear_gap_base"]:
+            pressure = BAL["gear_gap_mult"] ** ((gap - BAL["gear_gap_base"]) / 100.0)
+            hp *= pressure
+            atk *= pressure
     dfn = BAL["mob_def0"] + BAL["mob_def_k"] * (tier ** BAL["mob_def_p"])
     elite = False
     interval = BAL["mob_interval"]
@@ -71,12 +82,13 @@ def spawn_monster(zone, stage, rng=None):
         # 头目:血厚、攻速减半(蓄力重击)——开局也可凭生存磨过
         name, hp, atk, color = boss_name, hp * BAL["boss_hp"], atk * BAL["boss_atk"], "bright_yellow"
         interval = BAL["boss_interval"]
+        skill = dict(name="灭世之击", icon="☄", cd=12, mult=3.0, hits=1, stun=1.5)
     elif zone > 1 and rng.random() < BAL["elite_chance"]:  # 第1区不刷精英,保护开局
         elite = True
         hp *= BAL["elite_hp"]
         atk *= BAL["elite_atk"]
         color = "bright_green"
-    return Monster(name, ART[key], color, hp, atk, dfn, interval, boss, elite, tier)
+    return Monster(name, ART[key], color, hp, atk, dfn, interval, boss, elite, tier, skill)
 
 
 # ---------------------------------------------------------------- 伤害公式
@@ -108,12 +120,15 @@ def battle_tick(game, dt):
     # 技能自动施放(按装配)
     _cast_skills(game, dt, mon)
 
-    # 英雄攻击(含动态攻速buff)
-    h["atk_timer"] += dt
-    interval = h["interval"] / (1 + (h["haste"] + S.buff_pct(game, "haste")) / 100.0)
-    while h["atk_timer"] >= interval:
-        h["atk_timer"] -= interval
-        _hero_attack(game, mon)
+    # 英雄攻击(含动态攻速buff;被眩晕时跳过)
+    if h.get("stun_until", 0) > game.time:
+        pass
+    else:
+        h["atk_timer"] += dt
+        interval = h["interval"] / (1 + (h["haste"] + S.buff_pct(game, "haste")) / 100.0)
+        while h["atk_timer"] >= interval:
+            h["atk_timer"] -= interval
+            _hero_attack(game, mon)
 
     if mon.hp <= 0:
         _on_monster_killed(game, mon)
@@ -122,6 +137,16 @@ def battle_tick(game, dt):
     # 怪物攻击(冻结/闪避/护盾/不屈)
     if mon.stun_until > game.time:
         return
+    # 专属主动技能:冷却好了优先施放(代替该次普攻)
+    if mon.skill:
+        mon.skill_timer += dt
+        if mon.skill_timer >= mon.skill.get("cd", 10):
+            mon.skill_timer = 0.0
+            _cast_monster_skill(game, mon)
+            if h["hp"] <= 0:
+                _on_hero_death(game)
+                return
+            return  # 技能回合不接普攻
     mon.atk_timer += dt
     while mon.atk_timer >= mon.interval:
         mon.atk_timer -= mon.interval
@@ -134,6 +159,8 @@ def battle_tick(game, dt):
 def _hero_attack(game, mon):
     h = game.hero
     atk = S.atk_now(game)
+    if h.get("atkdown_until", 0) > game.time:
+        atk *= 1 - h.get("atkdown_pct", 0) / 100.0
     pierce = min(h.get("armor_pierce", 0) / 100.0, 0.5)
     defv = mon.def_
     if mon.def_down_until > game.time:
@@ -155,6 +182,52 @@ def _hero_attack(game, mon):
         game.add_floater("-" + fmt(dmg), "white")
     if h["lifesteal"] > 0 and h["hp"] < h["max_hp"]:
         h["hp"] = min(h["max_hp"], h["hp"] + dmg * h["lifesteal"] / 100.0)
+
+
+def _cast_monster_skill(game, mon):
+    """怪物专属主动技能:多段伤害 + 附加效果(吸血/降防/降攻/眩晕)"""
+    h = game.hero
+    sk = mon.skill
+    atk = mon.atk
+    if mon.atk_down_until > game.time:
+        pass  # 怪物自己不受 debuff
+    total = 0.0
+    # 英雄防御 debuff 生效于本次结算
+    defv = h["def"]
+    if h.get("defdown_until", 0) > game.time:
+        defv *= 1 - h.get("defdown_pct", 0) / 100.0
+    for _i in range(int(sk.get("hits", 1))):
+        total += _dmg(atk * sk.get("mult", 1.0), defv)
+    # 护盾吸收
+    shield = h.get("shield", 0.0)
+    if shield > 0:
+        absorb = min(shield, total)
+        h["shield"] = shield - absorb
+        total -= absorb
+    h["hp"] -= total
+    game.add_floater("%s -%s" % (sk.get("icon", ""), fmt(total)), "bright_red")
+    game.log("敌方 %s 施放了【%s】!" % (mon.name, sk.get("name", "技能")), "bright_red")
+    if sk.get("lifesteal") and total > 0:
+        mon.hp = min(mon.max_hp, mon.hp + total)
+        game.add_floater("+" + fmt(total), "magenta")
+    if sk.get("defdown"):
+        pct_v, dur = sk["defdown"]
+        h["defdown_pct"] = pct_v
+        h["defdown_until"] = game.time + dur
+    if sk.get("atkdown"):
+        pct_v, dur = sk["atkdown"]
+        h["atkdown_pct"] = pct_v
+        h["atkdown_until"] = game.time + dur
+    if sk.get("stun"):
+        h["stun_until"] = game.time + sk["stun"]
+        game.add_floater("⛔ 眩晕", "bright_red")
+    # 不屈判定
+    if h["hp"] <= 0 and S.hook_def(game, "undying"):
+        ready = h.get("undying_at", -999.0)
+        if game.time - ready >= BAL["undying_cd"]                 and game.rng.random() * 100 < S.hook_val(game, "undying"):
+            h["hp"] = 1.0
+            h["undying_at"] = game.time
+            game.add_floater("不屈!", "bright_yellow")
 
 
 def _cast_skills(game, dt, mon):
@@ -185,7 +258,10 @@ def _monster_attack(game, mon):
     atk = mon.atk
     if mon.atk_down_until > game.time:
         atk *= 1 - mon.atk_down_pct / 100.0
-    raw = _dmg(atk, h["def"])
+    defv = h["def"]
+    if h.get("defdown_until", 0) > game.time:
+        defv *= 1 - h.get("defdown_pct", 0) / 100.0
+    raw = _dmg(atk, defv)
     # 护盾吸收
     shield = h.get("shield", 0.0)
     if shield > 0:

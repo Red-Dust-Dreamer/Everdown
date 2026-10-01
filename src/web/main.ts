@@ -86,7 +86,8 @@ interface State {
   respawn: number; ema_kill: number;
   hero: Record<string, number>;
   monster: { name: string; art: string[]; hp: number; max_hp: number; tier: number;
-             boss: boolean; elite: boolean; atk: number; def: number; color: string } | null;
+             boss: boolean; elite: boolean; atk: number; def: number; color: string;
+             skill?: string } | null;
   buffs: { key: string; name: string; pct: number; remain: number }[];
   equip: Record<string, ItemUI>;
   bag: ItemUI[];
@@ -178,6 +179,7 @@ function buildState(g: Game): State {
     max_hp: g.monster.maxHp, tier: g.monster.tier, boss: g.monster.boss,
     elite: g.monster.elite, atk: g.monster.atk, def: g.monster.def_,
     color: g.monster.color,
+    skill: g.monster.skill ? `${g.monster.skill.icon} ${g.monster.skill.name}` : undefined,
   } : null;
 
   const skills = g.classId ? {
@@ -426,10 +428,11 @@ function renderBattle(st: State): void {
   } else if (mon) {
     const tag = mon.boss ? `<span class="tag boss">头目</span>`
               : mon.elite ? `<span class="tag elite">精英</span>` : "";
+    const skTag = mon.skill ? `<span class="tier" style="color:#ff8888">${esc(mon.skill)}</span>` : "";
     const hpPctM = Math.max(0, mon.hp / mon.max_hp * 100);
     inner =
       `<div class="mon-name c-${mon.color}">${esc(mon.name)}${tag}` +
-        `<span class="tier">T${mon.tier}</span></div>` +
+        `<span class="tier">T${mon.tier}</span>${skTag}</div>` +
       `<div class="mon-art">${esc(mon.art.join("\n"))}</div>` +
       `<div style="width:min(320px,72vw)"><div class="bar hp lg"><div class="fill" style="width:${hpPctM}%"></div>` +
         `<div class="num">${fmt(Math.max(0, mon.hp))} / ${fmt(mon.max_hp)}</div></div></div>`;
@@ -792,6 +795,28 @@ function boot(): void {
 
   $("loading").classList.add("hide");
   renderNow();
+
+  // 手机端底栏高度校准:--nav-h 只用于内容留白/toast 定位。
+  // 测条目的固有内容高(icon+文字+内距),不能测条目盒高——
+  // nav 是 row 容器,子项会被 stretch 拉到容器高,测盒高会形成"写大→撑高→测更大"的自激。
+  const navEl = document.getElementById("nav");
+  if (navEl) {
+    const calibrateNav = (): void => {
+      const item = navEl.querySelector<HTMLElement>(".nav-item");
+      const ic = item?.querySelector<HTMLElement>(".ic");
+      const tx = item?.querySelector<HTMLElement>(".tx");
+      if (!item || !ic || !tx) return;
+      const cs = getComputedStyle(item);
+      const h = ic.offsetHeight + tx.offsetHeight
+        + (parseFloat(cs.rowGap) || 0) + (parseFloat(cs.paddingTop) || 0)
+        + (parseFloat(cs.paddingBottom) || 0) + 8;   // nav 上下 padding
+      if (h >= 44 && h <= 72)
+        document.documentElement.style.setProperty("--nav-h", Math.ceil(h) + "px");
+    };
+    calibrateNav();
+    if (typeof ResizeObserver !== "undefined")
+      new ResizeObserver(calibrateNav).observe(navEl);
+  }
 
   // 主循环:setInterval 驱动 0.1s 固定步进(与 CLI 一致)。
   // 页面隐藏时不步进(定时器被节流),回切时用 resolve() 懒结算补算。

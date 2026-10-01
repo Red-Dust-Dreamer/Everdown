@@ -414,7 +414,8 @@ class Game:
 
     # ================================================================ 推进
     def spawn(self):
-        self.monster = spawn_monster(self.zone, self.stage, self.rng)
+        eq_t = max((it.tier for it in self.equip.values()), default=0)
+        self.monster = spawn_monster(self.zone, self.stage, self.rng, eq_t)
         self.last_spawn_time = self.time
 
     def _advance_zone_stage(self):

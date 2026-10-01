@@ -294,16 +294,28 @@ THEMES = [
 ]
 CN_NUM = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十"]
 
+# (名称, 颜色, 属性系数, 专属主动技能)
+# 技能: name/icon/cd(秒)/mult(每段伤害=攻击×mult)/hits(段数)/
+#        lifesteal(伤害全额回复自身)/defdown=(降英雄防%,秒)/atkdown=(降英雄攻%,秒)/stun(眩晕英雄秒)
 MONSTERS = {
-    "slime":     ("史莱姆", "green", 1.0),
-    "wolf":      ("恐狼", "yellow", 1.05),
-    "goblin":    ("哥布林", "bright_green", 0.95),
-    "bat":       ("吸血蝠", "magenta", 0.9),
-    "skeleton":  ("骷髅兵", "white", 1.05),
-    "golem":     ("石魔像", "bright_black", 1.15),
-    "imp":       ("小恶魔", "bright_red", 1.05),
-    "hound":     ("地狱犬", "red", 1.1),
-    "elemental": ("元素灵", "bright_cyan", 1.05),
+    "slime":     ("史莱姆", "green", 1.0,
+                  dict(name="酸液喷吐", icon="☣", cd=10, mult=1.2, hits=1, defdown=(0.30, 5))),
+    "wolf":      ("恐狼", "yellow", 1.05,
+                  dict(name="狂暴撕咬", icon="🐍", cd=8, mult=0.6, hits=3)),
+    "goblin":    ("哥布林", "bright_green", 0.95,
+                  dict(name="卑鄙飞刀", icon="🔪", cd=12, mult=2.5, hits=1)),
+    "bat":       ("吸血蝠", "magenta", 0.9,
+                  dict(name="血之盛宴", icon="🩸", cd=10, mult=1.5, hits=1, lifesteal=True)),
+    "skeleton":  ("骷髅兵", "white", 1.05,
+                  dict(name="白骨之刺", icon="🦴", cd=12, mult=2.0, hits=1, atkdown=(0.20, 5))),
+    "golem":     ("石魔像", "bright_black", 1.15,
+                  dict(name="大地震颤", icon="💢", cd=15, mult=1.3, hits=1, stun=1.2)),
+    "imp":       ("小恶魔", "bright_red", 1.05,
+                  dict(name="火焰投掷", icon="🔥", cd=9, mult=2.2, hits=1)),
+    "hound":     ("地狱犬", "red", 1.1,
+                  dict(name="三头撕咬", icon="🐺", cd=9, mult=0.85, hits=3)),
+    "elemental": ("元素灵", "bright_cyan", 1.05,
+                  dict(name="元素风暴", icon="⚡", cd=14, mult=2.8, hits=1)),
 }
 
 ART = {
@@ -419,13 +431,17 @@ BAL = {
     "kills_per_stage": 3,     # 每层击杀数(第10层为头目,1只)
 
     # 怪物 (t = zone*10+stage-1;属性 = base + k × t^p)
-    "mob_hp0": 50.0, "mob_hp_k": 26.0, "mob_hp_p": 1.28,
-    "mob_atk0": 6.8, "mob_atk_k": 2.2, "mob_atk_p": 1.05,
+    # 怪物属性(2026-10-01 提升):装备等级落后 20~30 级将明显打不过,
+    # 必须刷当前深度等级的装备才能推进
+    "mob_hp0": 50.0, "mob_hp_k": 32.0, "mob_hp_p": 1.28,
+    "mob_atk0": 6.8, "mob_atk_k": 2.8, "mob_atk_p": 1.05,
     "mob_def0": 3.0, "mob_def_k": 1.5, "mob_def_p": 1.0,
     "mob_interval": 1.6,
     "boss_hp": 2.6, "boss_atk": 1.15, "boss_gold": 5.0, "boss_interval": 3.2,
     "elite_hp": 3.0, "elite_atk": 1.3, "elite_gold": 2.5,
     "elite_chance": 0.10,
+    # 等级压制:怪物tier超过装备最高tier 100以上,每差100 → 全属性×2(叠乘)
+    "gear_gap_base": 100, "gear_gap_mult": 2.0,
 
     # 奖励(近线性)
     "gold0": 6.0, "gold_k": 3.0, "gold_p": 0.85,
@@ -440,7 +456,7 @@ BAL = {
 
     # 强化收益分段递减(每级全属性加成):0-10级 / 11-20级 / 21级起
     # 递减让质量乘数自然饱和,进度墙回归;费用多项式继续上涨即软上限
-    "plus_pct_1": 8.0, "plus_pct_2": 4.0, "plus_pct_3": 2.0,
+    "plus_pct_1": 8.0, "plus_pct_2": 4.0, "plus_pct_3": 1.5,
     # 强化费 = (base + t×斜率) × (1 + 0.5×plus + 0.04×plus²):低斜率多项式,
     # 替代旧 1.30^plus 指数——金币投入长期可持续,成型感来自时间而非数值爆炸
     "enhance_cost0": 25.0, "enhance_cost_t": 1.8,

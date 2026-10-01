@@ -397,6 +397,19 @@ def _autopilot(g, sim=False):
                      if s.get("kind") in kinds and s["id"] not in g.loadout[which]]
             if cands and len(g.loadout[which]) < g.loadout_slots():
                 g.equip_skill(cands[0]["id"], which)
+    # 背包维护:快满就按评分清 lowest(防止新掉落被"背包已满自动出售")
+    if len(g.bag) > 30:
+        g.bag.sort(key=lambda it: it.score())
+        n_drop = len(g.bag) - 20
+        for it in g.bag[:n_drop]:
+            g.gold += it.sell_price()
+            g.stats["gold_earned"] += it.sell_price()
+        g.bag = g.bag[n_drop:]
+    # 装备替换:tier 明显更高(≥30)就换(autopilot 专用,弥补评分策略盲区)
+    for it in list(g.bag):
+        cur = g.equip.get(it.slot)
+        if cur is None or it.tier >= cur.tier + 30:
+            g.equip_item(it)
     # 装备强化
     if g.equip:
         slot_item = min(g.equip.values(), key=lambda it: it.plus)
@@ -408,8 +421,12 @@ def _autopilot(g, sim=False):
             if g.gold > g.skill_cost(sid) * 4:
                 g.skill_up(sid)
                 break
-    if sim and g.mode == "farm" and (g.time - g.last_death_time) > 60:
-        g.set_mode("push")
+    if sim and g.mode == "farm" and (g.time - g.last_death_time) > 30:
+        # 装备等级接近当前层才回推进(门槛:装备tier >= 层tier - 12)
+        eq_t = max((it.tier for it in g.equip.values()), default=0)
+        cur_t = g.zone * 10 + g.stage - 1
+        if eq_t >= cur_t - 12:
+            g.set_mode("push")
 
 
 def run_sim(seconds=1800.0, verbose=True, seed=DEFAULT_SEED, cls="warrior"):
