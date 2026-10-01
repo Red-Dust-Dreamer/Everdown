@@ -420,6 +420,9 @@ class Game:
         if d is None or d["cls"] != self.class_id or self.level < d["unlock"]:
             self.toast("技能未解锁")
             return
+        if self.skill_lv.get(sid, 1) >= BAL["skill_lv_max"]:
+            self.toast("已达上限 Lv.%d" % BAL["skill_lv_max"])
+            return
         cost = self.skill_cost(sid)
         if self.gold < cost:
             self.toast("金币不足 (需要 %s)" % fmt(cost))
@@ -537,7 +540,8 @@ class Game:
             self.gold += int(gold)
             self.stats["gold_earned"] += int(gold)
             # 掉落遗物(必掉)
-            relic = TW.roll_tower_drop(floor, self.rng, luck=self.hero.get("luck", 0))
+            relic = TW.roll_tower_drop(floor, self.rng, luck=self.hero.get("luck", 0),
+                                       loadout=self.loadout["active"])
             self.add_relic(relic)
             # 新高奖励
             if floor > self.tower["max_floor"]:

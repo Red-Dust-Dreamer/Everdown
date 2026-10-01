@@ -105,8 +105,15 @@ export function heroDps(g: Game, mobDef: number, mobHp: number, bossOrElite: boo
 function effLvOf(g: Game, sid: string): number {
   // 与 skills.effLv 相同(避免运行时循环依赖的本地副本语义)
   const equipBonus = Math.trunc(g.hero.skill_lv ?? 0);
-  return Math.max(1, g.skillLv[sid] ?? 1) + equipBonus
-    + Math.trunc(g.hero.all_skill_lv ?? 0);
+  let relicLv = 0;
+  for (const r of g.relics) {
+    if (r && r.skillId === sid) {
+      for (const e of r.effects) {
+        if (e.id === "skill_lv_r") relicLv += Math.trunc(e.val);
+      }
+    }
+  }
+  return Math.max(1, g.skillLv[sid] ?? 1) + equipBonus + relicLv;
 }
 
 function netIncoming(g: Game, mobAtk: number, mobInterval: number, _dps: number,

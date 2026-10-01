@@ -43,12 +43,12 @@ def tower_gold(floor):
     return mob_gold(t) * TOWER["drop_gold_mult"]
 
 
-def roll_tower_drop(floor, rng, luck=0.0):
+def roll_tower_drop(floor, rng, luck=0.0, loadout=None):
     """塔掉落:必掉 1 件遗物,头目层保底稀有"""
     boss = floor % TOWER["boss_every"] == 0
     min_idx = 2 if boss else 0
     tier = tower_relic_tier(floor)
-    return roll_relic(tier, rng=rng, min_idx=min_idx)
+    return roll_relic(tier, rng=rng, min_idx=min_idx, loadout=loadout)
 
 
 def refresh_keys(tower_state, now_ts):

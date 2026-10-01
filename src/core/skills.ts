@@ -16,9 +16,16 @@ export function equipSkillLv(g: Game): number {
 }
 
 export function effLv(g: Game, sid: string): number {
-  // 技能有效等级 = 自身等级(默认1) + 装备加成 + 遗物全技能等级
-  return Math.max(1, g.skillLv[sid] ?? 1) + equipSkillLv(g)
-    + Math.trunc(g.hero.all_skill_lv ?? 0);
+  // 技能有效等级 = 自身等级(1~10) + 装备词缀加成 + 遗物单技能加成
+  let relicLv = 0;
+  for (const r of g.relics) {
+    if (r && r.skillId === sid) {
+      for (const e of r.effects) {
+        if (e.id === "skill_lv_r") relicLv += Math.trunc(e.val);
+      }
+    }
+  }
+  return Math.max(1, g.skillLv[sid] ?? 1) + equipSkillLv(g) + relicLv;
 }
 
 export function skillVal(def: { base: number; per?: number }, lv: number): number {

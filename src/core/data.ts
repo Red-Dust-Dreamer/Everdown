@@ -303,7 +303,7 @@ export const BAL = {
   plus_pct_1: 8.0, plus_pct_2: 4.0, plus_pct_3: 1.5,
   enhance_cost0: 25.0, enhance_cost_t: 1.8,
   enhance_plus_a: 0.5, enhance_plus_b: 0.04,
-  plus_max: 999,
+  plus_max: 100,          // 装备强化等级上限
   reforge_stones: 3,
   // 重铸(洗脸)按品质决定洗词条数:精良/稀有=1,史诗/传说=2,神话=3
   reforge_slots: [1, 1, 1, 2, 2, 3],
@@ -313,6 +313,7 @@ export const BAL = {
 
   skill_cost0: 60.0, skill_cost_lv: 35.0, skill_cost_lv2: 6.0,
   skill_cost_t: 2.0,
+  skill_lv_max: 10,        // 金币升级技能等级上限
   loadout_unlock: [1, 8, 16, 26],
   undying_cd: 60.0,
 
@@ -348,7 +349,7 @@ export const TOWER: TowerDef = {
 /** 遗物效果池:(id, 名, lo, hi, 单位) */
 export interface RelicEffDef { id: string; name: string; lo: number; hi: number; unit: string }
 export const RELIC_EFFECTS: RelicEffDef[] = [
-  { id: "all_skill_lv", name: "全技能等级", lo: 1.0, hi: 3.0, unit: "级" },
+  { id: "skill_lv_r", name: "单技能等级", lo: 1.0, hi: 2.0, unit: "级" },  // 随机指定一个已装配主动技能
   { id: "cd_reduce", name: "冷却缩减", lo: 3.0, hi: 8.0, unit: "%" },
   { id: "skill_dmg", name: "技能伤害", lo: 5.0, hi: 15.0, unit: "%" },
   { id: "crit_extra", name: "暴击追击", lo: 5.0, hi: 15.0, unit: "%" },

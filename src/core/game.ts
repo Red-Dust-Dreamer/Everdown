@@ -22,7 +22,7 @@ import * as S from "./skills.ts";
 export const SAVE_VERSION = 5;
 export const EVENT_CAP = 2000;
 const VIRTUAL_STATS = ["skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct",
-  "all_skill_lv", "crit_extra", "kill_heal", "deathward",
+  "crit_extra", "kill_heal", "deathward",
   "boss_dmg_r", "kill_haste"];
 
 export type Loadout = { active: string[]; passive: string[] };
@@ -40,7 +40,7 @@ export interface HeroStats {
   lifesteal: number; goldfind: number;
   skill_lv: number; skill_dmg: number; cd_reduce: number; dodge: number;
   armor_pierce: number; xp_pct: number;
-  all_skill_lv: number; crit_extra: number; kill_heal: number;
+  crit_extra: number; kill_heal: number;
   deathward: number; boss_dmg_r: number; kill_haste: number;
   interval: number; atk_timer: number; max_hp: number;
   shield: number; undying_at: number; next_hit_bonus: number;
@@ -417,6 +417,10 @@ export class Game {
       this.toast("技能未解锁");
       return;
     }
+    if ((this.skillLv[sid] ?? 1) >= BAL.skill_lv_max) {
+      this.toast(`已达上限 Lv.${BAL.skill_lv_max}`);
+      return;
+    }
     const cost = this.skillCost(sid);
     if (this.gold < cost) { this.toast(`金币不足 (需要 ${fmt(cost)})`); return; }
     this.gold -= cost;
@@ -546,7 +550,7 @@ export class Game {
       this.gold += Math.trunc(gold);
       this.stats.gold_earned += Math.trunc(gold);
       // 掉落遗物(必掉)
-      const relic = TW.rollTowerDrop(floor, this.rng, this.hero.luck ?? 0);
+      const relic = TW.rollTowerDrop(floor, this.rng, this.hero.luck ?? 0, this.loadout.active);
       this.addRelic(relic);
       // 新高奖励
       if (floor > this.tower.max_floor) {

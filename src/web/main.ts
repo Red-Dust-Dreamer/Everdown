@@ -317,6 +317,65 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
   }
 }
 
+// ---------------------------------------------------------------- 音效
+// 普攻命中音(CC0 复古音效,出处与许可见 public/sfx/README.txt)。
+// WebAudio 解码一次缓存播放;音调微变防重复感,暴击更亮更响;
+// 极高攻速/倍速下按 70ms 节流;开关存 localStorage(客户端偏好,不进核心存档)。
+const BASE_URL = (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL || "/";
+const SFX_KEY = "abyss_sfx";
+let sfxOn = localStorage.getItem(SFX_KEY) !== "0";
+let sfxCtx: AudioContext | null = null;
+let attackBuf: AudioBuffer | null = null;
+let sfxLastMs = 0;
+let sfxPlays = 0;
+
+function ensureSfx(): void {
+  if (sfxCtx) {
+    if (sfxOn && sfxCtx.state === "suspended") void sfxCtx.resume();
+    return;
+  }
+  if (!sfxOn) return;
+  const AC = window.AudioContext ??
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AC) return;
+  sfxCtx = new AC();
+  fetch(BASE_URL + "sfx/attack-hit.wav")
+    .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`sfx ${r.status}`))))
+    .then(b => sfxCtx!.decodeAudioData(b))
+    .then(buf => { attackBuf = buf; })
+    .catch(() => { /* 音效缺失时静默降级,游戏照常 */ });
+}
+function playAttackHit(crit = false): void {
+  if (!sfxOn || !attackBuf) return;
+  const ctx = sfxCtx;
+  if (!ctx || ctx.state !== "running") return;
+  const now = performance.now();
+  if (now - sfxLastMs < 70) return;
+  sfxLastMs = now;
+  const src = ctx.createBufferSource();
+  src.buffer = attackBuf;
+  src.playbackRate.value = crit ? 1.12 + Math.random() * 0.1 : 0.92 + Math.random() * 0.16;
+  const gain = ctx.createGain();
+  gain.gain.value = crit ? 0.62 : 0.5;
+  src.connect(gain).connect(ctx.destination);
+  src.start();
+  sfxPlays += 1;
+}
+function toggleSfx(): void {
+  sfxOn = !sfxOn;
+  localStorage.setItem(SFX_KEY, sfxOn ? "1" : "0");
+  if (sfxOn) ensureSfx();   // 趁点击手势解锁 AudioContext
+  toast(sfxOn ? "音效:开" : "音效:关");
+  renderNow();
+}
+function sfxDebug(): string {
+  return `on=${sfxOn} ready=${attackBuf !== null} ctx=${sfxCtx?.state ?? "none"} plays=${sfxPlays}`;
+}
+
+// 浏览器自动播放策略:首次交互预热解锁(选职业的点击必然先于战斗事件)。
+for (const ev of ["pointerdown", "keydown"] as const)
+  document.addEventListener(ev, ensureSfx, { once: true });
+
 // ---------------------------------------------------------------- 事件流
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 const LOG_CAP = 60;
@@ -325,7 +384,8 @@ function drainEvents(): void {
   if (!g.events.length) return;
   const evs = g.events.splice(0, g.events.length);
   const logs: string[] = [];
-  for (const [kind, rawText, color] of evs) {
+  for (let i = 0; i < evs.length; i++) {
+    const [kind, rawText, color] = evs[i];
     const text = rawText.replace(ANSI_RE, "");
     if (kind === "log") {
       logs.push(`<div><span class="c-bright_black">${fmtTime(g.time)}</span> ` +
@@ -336,6 +396,11 @@ function drainEvents(): void {
       toast(text);
     } else if (kind === "anim") {
       if (text === "mob_flash") flashMon();
+      else if (text === "hero_attack") {
+        const crit = nextEvtIsCrit(evs, i);
+        playAttackFx(undefined, crit);
+        playAttackHit(crit);
+      }
     }
   }
   if (logs.length) {
@@ -366,6 +431,66 @@ function flashMon(): void {
   if (!el) return;
   el.classList.add("flash");
   setTimeout(() => el.classList.remove("flash"), 70);
+}
+
+// ---------------------------------------------------------------- 普攻特效(每职业一套)
+const FX_CAP = 24;
+
+/** 生成一个自清理特效元素:动画播完即移除,超量裁最旧 */
+function fxSpawn(cls: string, x: number, y: number, vars: Record<string, string> = {}): HTMLElement {
+  const layer = $("fx-layer");
+  while (layer.children.length >= FX_CAP) layer.removeChild(layer.firstChild!);
+  const el = document.createElement("div");
+  el.className = cls;
+  el.style.left = x + "px";
+  el.style.top = y + "px";
+  for (const [k, v] of Object.entries(vars)) el.style.setProperty(k, v);
+  el.addEventListener("animationend", () => el.remove());
+  layer.appendChild(el);
+  return el;
+}
+
+/** 职业·战士/法师/射手的普攻形态;crit 时放大提亮。命中点取怪物中心(无怪时舞台中心)。 */
+function playAttackFx(cls0?: string, crit = false): void {
+  const stage = document.getElementById("stage");
+  const layer = document.getElementById("fx-layer");
+  if (!stage || !layer) return;
+  const cls = cls0 ?? g.classId;
+  if (!cls) return;
+  const sr = stage.getBoundingClientRect();
+  const art = stage.querySelector<HTMLElement>(".mon-art");
+  let hx: number, hy: number;
+  if (art) {
+    const ar = art.getBoundingClientRect();
+    hx = ar.left + ar.width / 2 - sr.left;
+    hy = ar.top + ar.height / 2 - sr.top;
+  } else {
+    hx = sr.width / 2;
+    hy = sr.height * 0.42;
+  }
+  const c = crit ? " crit" : "";
+  if (cls === "warrior") {
+    fxSpawn("fx-slash" + c, hx, hy,
+      { "--r": `${Math.floor(Math.random() * 70 - 55)}deg` });
+  } else if (cls === "mage") {
+    const dy = Math.floor(Math.random() * 28 - 14);
+    fxSpawn("fx-bolt" + c, -34, hy + dy, { "--x": `${hx + 34}px` });
+    fxSpawn("fx-burst" + c, hx, hy + dy).style.animationDelay = "160ms";
+  } else if (cls === "ranger") {
+    const dy = Math.floor(Math.random() * 22 - 11);
+    fxSpawn("fx-arrow" + c, -40, hy + dy, { "--x": `${hx + 40}px` });
+    fxSpawn("fx-hit" + c, hx, hy + dy).style.animationDelay = "110ms";
+  }
+}
+
+/** hero_attack 之后紧随的飘字是「暴击」→ 本次普攻按暴击呈现 */
+function nextEvtIsCrit(evs: [string, string, string][], from: number): boolean {
+  for (let j = from + 1; j < evs.length; j++) {
+    const [k, t, c] = evs[j];
+    if (k === "floater") return c === "bright_yellow" && t.startsWith("暴击");
+    if (k !== "anim") return false;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------- 渲染
@@ -758,6 +883,8 @@ function renderSettings(st: State): void {
         `<div style="display:flex;gap:6px"><button class="btn" data-cmd="farm_stage" data-a="-1">− 1 层</button>` +
         `<button class="btn" data-cmd="farm_stage" data-a="1">+ 1 层</button></div></div>`
       : "") +
+    `<div class="set-row"><div class="lbl">音效<div class="d">普通攻击命中音(复古 8-bit,CC0)</div></div>` +
+      `<div class="toggle${sfxOn ? " on" : ""}" data-local="sfx"></div></div>` +
     `<div class="set-row"><div class="lbl">存档<div class="d">自动存档于浏览器(localStorage),离线收益自动结算</div></div>` +
       `<div style="display:flex;gap:6px;flex-wrap:wrap">` +
       `<button class="btn" data-local="save">手动存档</button>` +
@@ -866,6 +993,7 @@ function localCmd(name: string): void {
     URL.revokeObjectURL(a.href);
     toast("存档已导出");
   } else if (name === "import") ($("file-input") as HTMLInputElement).click();
+  else if (name === "sfx") toggleSfx();
   else if (name === "reset") {
     if (confirm("确定清空浏览器存档并重新开始?")) { doCmd("reset"); renderNow(); }
   }
@@ -980,17 +1108,18 @@ function boot(): void {
   });
   window.addEventListener("pagehide", () => g.save());
 
-  // 调试钩子:控制台 __abyss.state() 验证游戏推进
-  (window as unknown as { __abyss?: { state(): string } }).__abyss = {
+  // 调试钩子:控制台 __abyss.state() 验证游戏推进;__abyss.fx("warrior") 演示普攻特效与音效
+  (window as unknown as { __abyss?: { state(): string; fx(cls?: string, crit?: boolean): void; sfx(): string } }).__abyss = {
     state: () => `t=${g.time | 0}s Lv${g.level} ${g.zone}区 kills=${g.stats.kills}`,
+    fx: (cls, crit) => { playAttackFx(cls, crit); playAttackHit(crit ?? false); },
+    sfx: () => sfxDebug(),
   };
 
   // PWA:注册 Service Worker(离线可玩/可安装)。
   // 路径跟随 vite base(本地 / 或 GitHub Pages 子路径);dev(8614)跳过,
   // 避免缓存 vite 开发资产导致改动不生效。
   if (location.port !== "8614" && "serviceWorker" in navigator) {
-    const base = (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL || "/";
-    navigator.serviceWorker.register(base + "sw.js")
+    navigator.serviceWorker.register(BASE_URL + "sw.js")
       .catch(() => { /* 离线壳降级:在线玩 */ });
   }
 }

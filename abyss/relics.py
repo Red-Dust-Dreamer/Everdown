@@ -17,26 +17,30 @@ RELIC_NAMES = [
 
 
 class Relic:
-    __slots__ = ("rarity", "tier", "effects", "name")
+    __slots__ = ("rarity", "tier", "effects", "name", "skill_id")
 
-    def __init__(self, rarity, tier, effects, name=None, rng=None):
+    def __init__(self, rarity, tier, effects, name=None, rng=None, skill_id=None):
         self.rarity = rarity
         self.tier = tier          # 塔层数档(10/20/30...)
         self.effects = effects    # [(eff_id, val), ...]
+        self.skill_id = skill_id  # skill_lv_r 效果绑定的技能id(None=无)
         self.name = name or self._gen_name(rng or random)
 
     def _gen_name(self, rng):
         rid = RARITY_IDX[self.rarity]
         return rng.choice(RELIC_NAMES[rid])
 
-    def eff_count(self):
-        return RELIC_EFF_COUNT[RARITY_IDX[self.rarity]]
-
     def display(self, width=0):
         rid = RARITY_IDX[self.rarity]
         tag = "◆" * (rid + 1)
+        sk = ""
+        if self.skill_id:
+            from .data import ACTIVE_DEF
+            d = ACTIVE_DEF.get(self.skill_id)
+            if d:
+                sk = c("·%s" % d["name"], d["color"])
         s = c("[", "bright_black") + c(tag, RARITIES[rid][2]) + c("]", "bright_black") \
-            + c(self.name, RARITIES[rid][2]) + c(" T%d" % self.tier, "bright_black")
+            + c(self.name, RARITIES[rid][2]) + sk + c(" T%d" % self.tier, "bright_black")
         if width:
             from .ansi import pad
             s = pad(s, width)
@@ -46,8 +50,13 @@ class Relic:
         lines = []
         for eid, val in self.effects:
             d = RELIC_EFF_DEF[eid]
-            if d[4] == "级":
-                lines.append("  ◈ %s +%s%s" % (d[1], ("%.0f" % val), d[4]))
+            if eid == "skill_lv_r" and self.skill_id:
+                from .data import ACTIVE_DEF
+                sk = ACTIVE_DEF.get(self.skill_id)
+                lines.append("  ◈ %s(%s) +%.0f%s" % (
+                    d[1], sk["name"] if sk else "?", val, d[4]))
+            elif d[4] == "级":
+                lines.append("  ◈ %s +%.0f%s" % (d[1], val, d[4]))
             else:
                 lines.append("  ◈ %s +%.1f%s" % (d[1], val, d[4]))
         return lines
@@ -55,16 +64,17 @@ class Relic:
     def to_dict(self):
         return {"rarity": self.rarity, "tier": self.tier,
                 "effects": [(a, round(v, 2)) for a, v in self.effects],
-                "name": self.name}
+                "name": self.name, "skill_id": self.skill_id}
 
     @classmethod
     def from_dict(cls, d):
         return cls(d["rarity"], d["tier"],
-                   [(a, v) for a, v in d["effects"]], d["name"])
+                   [(a, v) for a, v in d["effects"]], d["name"],
+                   skill_id=d.get("skill_id"))
 
 
-def roll_relic(tier, rng=None, min_idx=0):
-    """按塔层档位生成遗物"""
+def roll_relic(tier, rng=None, min_idx=0, loadout=None):
+    """按塔层档位生成遗物;loadout=当前装配主动技能列表(用于 skill_lv_r 绑定)"""
     from .items import roll_rarity
     rng = rng or random
     rid = roll_rarity(rng, 0, min_idx, 0)
@@ -73,20 +83,22 @@ def roll_relic(tier, rng=None, min_idx=0):
     pool = [e for e in RELIC_EFFECTS]
     rng.shuffle(pool)
     effects = [(e[0], rng.uniform(e[2], e[3])) for e in pool[:n_eff]]
-    return Relic(rar[0], tier, effects, rng=rng)
+    skill_id = None
+    if any(e[0] == "skill_lv_r" for e in effects) and loadout:
+        skill_id = rng.choice(loadout)
+    return Relic(rar[0], tier, effects, rng=rng, skill_id=skill_id)
 
 
 def relic_mods(relics):
     """已装备遗物的效果 → 统一修饰器列表(数值型)。
-    触发型效果(crit_extra 等)由 combat 直接读 hero.xxx。"""
-    from .data import CAPS
+    skill_lv_r 由 effLv 特殊读取 relic.skill_id,不进通用 mods。"""
     mods = []
     for r in relics:
         if r is None:
             continue
         for eid, val in r.effects:
-            if eid == "all_skill_lv":
-                mods.append({"stat": "all_skill_lv", "op": "add", "v": val})
+            if eid == "skill_lv_r":
+                continue  # effLv 特殊处理
             elif eid == "cd_reduce":
                 mods.append({"stat": "cd_reduce", "op": "add", "v": val})
             elif eid == "skill_dmg":

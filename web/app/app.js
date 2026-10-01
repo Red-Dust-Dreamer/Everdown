@@ -140,6 +140,45 @@ async function main() {
   window.__abyss = { state: () => py.debug_state() };
 }
 
+// ---------------------------------------------------------------- 音效
+// 普攻命中音(CC0,出处见 sfx/README.txt);与 src/web 宿主同款行为:
+// 解码一次缓存播放,音调微变,70ms 节流,开关存 localStorage(abyss_sfx)。
+const SFX_KEY = "abyss_sfx";
+let sfxOn = localStorage.getItem(SFX_KEY) !== "0";
+let sfxCtx = null, attackBuf = null, sfxLastMs = 0;
+
+function ensureSfx() {
+  if (sfxCtx) {
+    if (sfxOn && sfxCtx.state === "suspended") sfxCtx.resume();
+    return;
+  }
+  if (!sfxOn) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  sfxCtx = new AC();
+  fetch("sfx/attack-hit.wav")
+    .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error("sfx " + r.status))))
+    .then(b => sfxCtx.decodeAudioData(b))
+    .then(buf => { attackBuf = buf; })
+    .catch(() => {});   // 音效缺失静默降级
+}
+function playAttackHit() {
+  if (!sfxOn || !attackBuf || !sfxCtx || sfxCtx.state !== "running") return;
+  const now = performance.now();
+  if (now - sfxLastMs < 70) return;
+  sfxLastMs = now;
+  const src = sfxCtx.createBufferSource();
+  src.buffer = attackBuf;
+  src.playbackRate.value = 0.92 + Math.random() * 0.16;
+  const gain = sfxCtx.createGain();
+  gain.gain.value = 0.5;
+  src.connect(gain).connect(sfxCtx.destination);
+  src.start();
+}
+// 自动播放策略:首次交互预热解锁(选职业点击必先于战斗)
+["pointerdown", "keydown"].forEach(ev =>
+  document.addEventListener(ev, ensureSfx, { once: true }));
+
 // ---------------------------------------------------------------- 事件流
 const LOG_CAP = 60;
 function drainEvents() {
@@ -158,7 +197,7 @@ function drainEvents() {
       toast(ev.text);
     } else if (ev.kind === "anim") {
       if (ev.text === "mob_flash") flashMon();
-      else if (ev.text === "hero_attack") bumpHero();
+      else if (ev.text === "hero_attack") { bumpHero(); playAttackHit(); }
     }
   }
   if (logs.length) {

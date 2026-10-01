@@ -464,7 +464,7 @@ BAL = {
     # 替代旧 1.30^plus 指数——金币投入长期可持续,成型感来自时间而非数值爆炸
     "enhance_cost0": 25.0, "enhance_cost_t": 1.8,
     "enhance_plus_a": 0.5, "enhance_plus_b": 0.04,
-    "plus_max": 999,          # 无硬上限,费用多项式即软上限
+    "plus_max": 100,         # 装备强化等级上限
     "reforge_stones": 3,
     # 重铸(洗脸)按品质决定洗词条数:精良/稀有=1,史诗/传说=2,神话=3
     "reforge_slots": [1, 1, 1, 2, 2, 3],
@@ -477,6 +477,7 @@ BAL = {
     # 防止"无限升技能"成为另一条无衰减的金币换DPS通道)
     "skill_cost0": 60.0, "skill_cost_lv": 35.0, "skill_cost_lv2": 6.0,
     "skill_cost_t": 2.0,
+    "skill_lv_max": 10,        # 金币升级技能等级上限
     # 装配槽位:4 主动 + 4 被动,按等级依次解锁
     "loadout_unlock": [1, 8, 16, 26],
     "undying_cd": 60.0,         # 不屈被动的内置冷却
@@ -506,7 +507,7 @@ TOWER = {
     "drop_gold_mult": 2.0, "new_height_stones": 2,
 }
 RELIC_EFFECTS = [
-    ("all_skill_lv", "全技能等级", 1.0, 3.0, "级"),
+    ("skill_lv_r", "单技能等级", 1.0, 2.0, "级"),   # 随机指定一个已装配主动技能
     ("cd_reduce",    "冷却缩减",  3.0, 8.0, "%"),
     ("skill_dmg",    "技能伤害",  5.0, 15.0, "%"),
     ("crit_extra",   "暴击追击",  5.0, 15.0, "%"),

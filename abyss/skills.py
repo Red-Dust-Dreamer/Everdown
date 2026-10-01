@@ -26,8 +26,14 @@ def equip_skill_lv(g):
 
 
 def eff_lv(g, sid):
-    """技能有效等级 = 自身等级(默认1) + 装备加成 + 遗物全技能等级"""
-    return max(1, g.skill_lv.get(sid, 1)) + equip_skill_lv(g)         + int(g.hero.get("all_skill_lv", 0))
+    """技能有效等级 = 自身等级(1~10) + 装备词缀加成 + 遗物单技能加成"""
+    relic_lv = 0
+    for r in g.relics:
+        if r and r.skill_id == sid:
+            for eid, val in r.effects:
+                if eid == "skill_lv_r":
+                    relic_lv += int(val)
+    return max(1, g.skill_lv.get(sid, 1)) + equip_skill_lv(g) + relic_lv
 
 
 def skill_val(defn, lv):
