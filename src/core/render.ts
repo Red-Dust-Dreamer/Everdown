@@ -257,7 +257,7 @@ function tabChar(g: Game): string[] {
     left.push(pad(trunc(line, leftW), leftW));
   }
   left.push(" " + c("▌遗物", "bright_white", "", true)
-    + c(" 深渊塔掉落 · 自动装入空槽", "bright_black"));
+    + c(` 深渊塔掉落 · 背包 ${g.relicBag.length}/${g.relicBagCap()}`, "bright_black"));
   for (let i = 0; i < 4; i++) {
     const r: Relic | null = g.relics[i] ?? null;
     const label = c(`遗物${i + 1}:`, "bright_black");
@@ -615,7 +615,9 @@ function tabTower(g: Game): string[] {
   const rows: string[] = [];
   const reach = g.tower.max_floor + 1;          // 最高可挑战层
   const selFloor = Math.max(1, Math.min(g.towerFloorSel, reach));
-  const slotSel = (ui.tower_sel ?? 0) % 4;
+  const bagShow = Math.min(g.relicBag.length, 4);          // 背包前 4 件可选(与 host.ts 一致)
+  const selTotal = 4 + bagShow;
+  const slotSel = (ui.tower_sel ?? 0) % selTotal;
 
   rows.push(" " + c("▌深渊塔", "bright_white", "", true)
     + c(" │ ", "bright_black")
@@ -642,8 +644,8 @@ function tabTower(g: Game): string[] {
   rows.push("");
 
   rows.push(" " + c("▌遗物", "bright_white", "", true)
-    + c(" 通关必得 · 自动装入空槽", "bright_black")
-    + c("  │  ↑↓ 选槽 E 卸下", "bright_black"));
+    + c(" 通关必得 · 空槽优先装满", "bright_black")
+    + c("  │  ↑↓ 选槽/背包 E 卸下·装备", "bright_black"));
   for (let i = 0; i < 4; i++) {
     const r: Relic | null = g.relics[i] ?? null;
     const marker = i === slotSel ? c("▸", "bright_yellow") : " ";
@@ -653,6 +655,29 @@ function tabTower(g: Game): string[] {
       : c("(空)", "bright_black");
     const line = ` ${marker} ${label} ${body}`;
     rows.push(pad(trunc(line, W - 2), W - 2));
+  }
+
+  // 遗物背包:满槽收纳 + U 扩容
+  const cap = g.relicBagCap();
+  const upCost = g.relicBagCost();
+  rows.push(" " + c("▌遗物背包", "bright_white", "", true)
+    + c(` ${g.relicBag.length}/${cap} 格 · 槽满掉落自动存入`, "bright_black")
+    + c("  │  ", "bright_black")
+    + (upCost !== null
+      ? c(`U 扩容→${Math.min(cap * 2, BAL.relic_bag_cap)}格(◈${fmt(upCost)})`, "bright_cyan")
+      : c("已满级", "bright_black")));
+  for (let i = 0; i < bagShow; i++) {
+    const r = g.relicBag[i];
+    const marker = 4 + i === slotSel ? c("▸", "bright_yellow") : " ";
+    const label = c(`背包${i + 1}:`, "bright_black");
+    const line = ` ${marker} ${label} ` + r.display()
+      + "  " + c(r.effectLines().map(ln => ln.trim()).join("  "), "white");
+    rows.push(pad(trunc(line, W - 2), W - 2));
+  }
+  if (g.relicBag.length > bagShow) {
+    rows.push(" " + c(`  …另有 ${g.relicBag.length - bagShow} 件(网页端可查看全部)`, "bright_black"));
+  } else if (!g.relicBag.length) {
+    rows.push(" " + c("  (空)卸下的遗物也会保存在这里", "bright_black"));
   }
 
   rows.push("");
@@ -756,6 +781,34 @@ function modalOffline(g: Game): string[] | null {
   return modalBox("☾ 离线收益结算 ☽", lines);
 }
 
+function modalSwap(g: Game): string[] | null {
+  const p = g.pendingSwap;
+  if (!p) return null;
+  const lines: string[] = [];
+  if (p.kind === "item") {
+    const cur = p.slot ? g.equip[p.slot] : undefined;
+    lines.push(c("当前: ", "bright_black") + (cur
+      ? cur.display() + c(`  (评分 ${fmt(cur.score())})`, "bright_yellow")
+      : c("(空)", "bright_black")));
+    for (const ln of cur ? cur.statLines() : []) lines.push("  " + trunc(ln, 60));
+    lines.push(c("新的: ", "bright_black") + p.item!.display()
+      + c(`  (评分 ${fmt(p.item!.score())})`, "bright_yellow"));
+    for (const ln of p.item!.statLines()) lines.push("  " + trunc(ln, 60));
+  } else {
+    const old = g.relics[p.relicSlot ?? 0];
+    lines.push(c(`当前(遗物${(p.relicSlot ?? 0) + 1}): `, "bright_black") + (old
+      ? old.display() + c(` · ${old.effects.length}效果`, "bright_black")
+      : c("(空)", "bright_black")));
+    for (const ln of old ? old.effectLines() : []) lines.push("  " + trunc(ln, 60));
+    lines.push(c("新的: ", "bright_black") + p.newRelic!.display()
+      + c(` · ${p.newRelic!.effects.length}效果`, "bright_black"));
+    for (const ln of p.newRelic!.effectLines()) lines.push("  " + trunc(ln, 60));
+  }
+  lines.push("");
+  lines.push(c("E 换上新的    X 保留旧的", "bright_green", "", true));
+  return modalBox(p.kind === "item" ? "⚔ 更强的装备掉落 — 用哪个?" : "◆ 更强的遗物 — 用哪个?", lines);
+}
+
 // ================================================================ 主入口
 export function renderFrame(g: Game, termW: number, termH: number): string {
   if (termW < W || termH < H) {
@@ -772,6 +825,7 @@ export function renderFrame(g: Game, termW: number, termH: number): string {
   let body: string[] | null;
   if (g.classId === null) body = modalClass();
   else if (g.pendingOffline) body = modalOffline(g)!;
+  else if (g.pendingSwap) body = modalSwap(g)!;
   else if (g.view.ui.help) body = modalHelp();
   else if (tab === 0) body = tabBattle(g);
   else if (tab === 1) body = tabChar(g);

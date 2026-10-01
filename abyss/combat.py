@@ -16,10 +16,10 @@ class Monster:
                  "boss", "elite", "tier", "atk_timer", "stun_until",
                  "marked_pct", "marked_until",
                  "atk_down_pct", "atk_down_until", "def_down_pct", "def_down_until",
-                 "skill", "skill_timer")
+                 "skill", "skill_timer", "id")
 
     def __init__(self, name, art, color, hp, atk, def_, interval, boss, elite, tier,
-                 skill=None):
+                 skill=None, mid=""):
         self.name, self.art, self.color = name, art, color
         self.hp = self.max_hp = hp
         self.atk, self.def_, self.interval = atk, def_, interval
@@ -34,6 +34,7 @@ class Monster:
         self.atk_down_until = 0.0
         self.def_down_pct = 0.0
         self.def_down_until = 0.0
+        self.id = mid   # 怪物图鉴 id(供 Web 宿主映射立绘;不参与任何计算)
 
     def hp_pct(self):
         return self.hp / self.max_hp if self.max_hp else 0.0
@@ -88,7 +89,7 @@ def spawn_monster(zone, stage, rng=None, hero_gear_tier=None):
         hp *= BAL["elite_hp"]
         atk *= BAL["elite_atk"]
         color = "bright_green"
-    return Monster(name, ART[key], color, hp, atk, dfn, interval, boss, elite, tier, skill)
+    return Monster(name, ART[key], color, hp, atk, dfn, interval, boss, elite, tier, skill, key)
 
 
 # ---------------------------------------------------------------- 伤害公式

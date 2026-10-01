@@ -5,7 +5,7 @@ import random
 from .ansi import c, fmt
 from .data import (AFFIX_DEF, AFFIX_SUFFIX, AFFIXES, BAL, RARITIES,
                    RARITY_IDX, RARITY_PREFIX, SLOTS, SLOT_IDX, SLOT_INNATE,
-                   SLOT_MAIN_K, STAT_NAMES, CAPS)
+                   MAIN_ROLLS, STAT_NAMES, CAPS)
 
 
 def plus_bonus(plus):
@@ -16,9 +16,10 @@ def plus_bonus(plus):
 
 
 class Item:
-    __slots__ = ("slot", "rarity", "tier", "plus", "main_val", "affixes", "name")
+    __slots__ = ("slot", "rarity", "tier", "plus", "main_val", "affixes", "name", "main_id")
 
-    def __init__(self, slot, rarity, tier, main_val, affixes, plus=0, name=None, rng=None):
+    def __init__(self, slot, rarity, tier, main_val, affixes, plus=0, name=None, rng=None,
+                 main_id=None):
         self.slot = slot          # weapon/helmet/...
         self.rarity = rarity      # common/.../mythic
         self.tier = tier          # 掉落时的怪物档位
@@ -26,12 +27,13 @@ class Item:
         self.main_val = main_val  # 主属性基础值(未乘稀有度/强化)
         self.affixes = affixes    # [(id, 基础值), ...]
         self.name = name or self._gen_name(rng or random)
+        self.main_id = main_id   # roll 定的主属性;None=旧存档,回落 LEGACY_MAIN
 
     # ------------------------------------------------ 命名
     def _gen_name(self, rng):
         rid = RARITY_IDX[self.rarity]
         slot_def = SLOTS[SLOT_IDX[self.slot]]
-        base = rng.choice(slot_def[4])
+        base = rng.choice(slot_def[2])
         prefix = RARITY_PREFIX[rid]
         if self.affixes and rng.random() < 0.55:
             suffix = AFFIX_SUFFIX.get(self.affixes[0][0], "")
@@ -63,7 +65,7 @@ class Item:
         return out
 
     def _main_stat(self):
-        return SLOTS[SLOT_IDX[self.slot]][2]
+        return self.main_id or "atk"
 
     def score(self):
         """装备评分(用于对比/自动换装)"""
@@ -126,15 +128,19 @@ class Item:
 
     # ------------------------------------------------ 序列化
     def to_dict(self):
-        return {"slot": self.slot, "rarity": self.rarity, "tier": self.tier,
-                "plus": self.plus, "main_val": round(self.main_val, 2),
-                "affixes": [(a, round(v, 2)) for a, v in self.affixes],
-                "name": self.name}
+        d = {"slot": self.slot, "rarity": self.rarity, "tier": self.tier,
+             "plus": self.plus, "main_val": round(self.main_val, 2),
+             "affixes": [(a, round(v, 2)) for a, v in self.affixes],
+             "name": self.name}
+        if self.main_id:
+            d["main_id"] = self.main_id
+        return d
 
     @classmethod
     def from_dict(cls, d):
         return cls(d["slot"], d["rarity"], d["tier"], d["main_val"],
-                   [(a, v) for a, v in d["affixes"]], d.get("plus", 0), d["name"])
+                   [(a, v) for a, v in d["affixes"]], d.get("plus", 0), d["name"],
+                   main_id=d.get("main_id"))
 
     # ------------------------------------------------ 显示
     def rarity_color(self):
@@ -213,13 +219,13 @@ def roll_item(tier, rng=None, luck=0.0, min_idx=0, boost=0.0):
     slot_def = SLOTS[rng.randrange(len(SLOTS))]
     rid = roll_rarity(rng, luck, min_idx, boost)
     rar = RARITIES[rid]
-    main_stat = slot_def[2]
-    if main_stat in ("haste", "crit", "crit_dmg", "goldfind", "lifesteal"):
-        main_val = slot_def[3] * rng.uniform(0.9, 1.1)
+    # 主属性按槽位候选表 roll(防具槽生命/防御二选一);rng 调用顺序与 TS 严格一致
+    stat, base, k = MAIN_ROLLS[slot_def[0]][rng.randrange(len(MAIN_ROLLS[slot_def[0]]))]
+    if stat in ("haste", "crit", "crit_dmg", "goldfind", "lifesteal"):
+        main_val = base * rng.uniform(0.9, 1.1)
     else:
-        k = SLOT_MAIN_K.get(slot_def[0], 1.0)
-        main_val = (slot_def[3]
-                    + k * (tier ** BAL["item_main_p"]) * rng.uniform(0.85, 1.15))
+        main_val = base + k * (tier ** BAL["item_main_p"]) * rng.uniform(0.85, 1.15)
+    main_stat = stat
     n_affix = rar[3]
     pool = [a for a in AFFIXES]
     rng.shuffle(pool)
@@ -233,4 +239,4 @@ def roll_item(tier, rng=None, luck=0.0, min_idx=0, boost=0.0):
         else:
             val = rng.uniform(a[2], a[3]) + a[4] * tier
         affixes.append((a[0], val))
-    return Item(slot_def[0], rar[0], tier, main_val, affixes, rng=rng)
+    return Item(slot_def[0], rar[0], tier, main_val, affixes, rng=rng, main_id=stat)

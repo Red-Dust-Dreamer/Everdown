@@ -3,7 +3,7 @@ import { c, fmt, pad } from "./ansi.ts";
 import type { PyRandom } from "./rng.ts";
 import {
   AFFIX_DEF, AFFIX_SUFFIX, AFFIXES, BAL, CAPS, RARITIES, RARITY_IDX,
-  RARITY_PREFIX, SLOTS, SLOT_INNATE, SLOT_MAIN_K, STAT_NAMES,
+  RARITY_PREFIX, SLOTS, SLOT_INNATE, MAIN_ROLLS, STAT_NAMES,
 } from "./data.ts";
 import type { StatKey } from "./data.ts";
 
@@ -35,10 +35,12 @@ export class Item {
   mainVal: number;
   affixes: AffixRoll[];
   name: string;
+  /** roll 定的主属性(防具槽生命/防御二选一);null=旧存档,回落 LEGACY_MAIN */
+  mainId: StatKey | null;
 
   constructor(slot: string, rarity: string, tier: number, mainVal: number,
               affixes: AffixRoll[], plus = 0, name: string | null = null,
-              rng?: PyRandom) {
+              rng?: PyRandom, mainId: StatKey | null = null) {
     this.slot = slot;
     this.rarity = rarity;
     this.tier = tier;
@@ -46,6 +48,7 @@ export class Item {
     this.mainVal = mainVal;
     this.affixes = affixes;
     this.name = name ?? this.genName(rng);
+    this.mainId = mainId;
   }
 
   private genName(rng?: PyRandom): string {
@@ -62,7 +65,7 @@ export class Item {
   }
 
   mainStat(): StatKey {
-    return SLOTS.find(s => s.id === this.slot)!.main;
+    return this.mainId ?? "atk";
   }
 
   mult(): number {
@@ -150,13 +153,14 @@ export class Item {
       main_val: round2(this.mainVal),
       affixes: this.affixes.map(a => [a.id, round2(a.val)] as [string, number]),
       name: this.name,
+      ...(this.mainId ? { main_id: this.mainId } : {}),
     };
   }
 
   static fromDict(d: any): Item {
     return new Item(d.slot, d.rarity, d.tier, d.main_val,
       d.affixes.map((a: any) => ({ id: a[0] as StatKey, val: a[1] })),
-      d.plus ?? 0, d.name);
+      d.plus ?? 0, d.name, undefined, d.main_id ?? null);
   }
 
   rarityColor() {
@@ -230,13 +234,13 @@ export function rollItem(tier: number, rng: PyRandom, luck = 0, minIdx = 0, boos
   const slotDef = SLOTS[rng.randrange(SLOTS.length)];
   const rid = rollRarity(rng, luck, minIdx, boost);
   const rar = RARITIES[rid];
-  const mainStat = slotDef.main;
+  // 主属性按槽位候选表 roll(防具槽生命/防御二选一);rng 调用顺序与 python 严格一致
+  const pick = MAIN_ROLLS[slotDef.id][rng.randrange(MAIN_ROLLS[slotDef.id].length)];
   let mainVal: number;
-  if (PCT_MAINS.includes(mainStat)) {
-    mainVal = slotDef.mainBase * rng.uniform(0.9, 1.1);
+  if (PCT_MAINS.includes(pick.stat)) {
+    mainVal = pick.base * rng.uniform(0.9, 1.1);
   } else {
-    const k = SLOT_MAIN_K[slotDef.id] ?? 1.0;
-    mainVal = slotDef.mainBase + k * Math.pow(tier, BAL.item_main_p) * rng.uniform(0.85, 1.15);
+    mainVal = pick.base + pick.k * Math.pow(tier, BAL.item_main_p) * rng.uniform(0.85, 1.15);
   }
   const nAffix = rar.affixes;
   const pool = [...AFFIXES];
@@ -250,7 +254,7 @@ export function rollItem(tier: number, rng: PyRandom, luck = 0, minIdx = 0, boos
       : rng.uniform(a.lo, a.hi) + a.k * tier;
     affixes.push({ id: a.id, val });
   }
-  return new Item(slotDef.id, rar.key, tier, mainVal, affixes, 0, null, rng);
+  return new Item(slotDef.id, rar.key, tier, mainVal, affixes, 0, null, rng, pick.stat);
 }
 
 /** 词缀斜率修正的展示信息(与 CAPS 无关,评分权重在 AFFIXES 中) */

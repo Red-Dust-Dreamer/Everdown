@@ -29,7 +29,7 @@ def tower_monster(floor, rng=None):
         color = "bright_yellow"
         name = "塔·%s" % name
 
-    return Monster(name, ART[key], color, hp, atk, dfn, interval, boss, False, floor)
+    return Monster(name, ART[key], color, hp, atk, dfn, interval, boss, False, floor, None, key)
 
 
 def tower_relic_tier(floor):
@@ -44,11 +44,11 @@ def tower_gold(floor):
 
 
 def roll_tower_drop(floor, rng, luck=0.0, loadout=None):
-    """塔掉落:必掉 1 件遗物,头目层保底稀有"""
+    """塔掉落:必掉 1 件遗物,头目层保底稀有;luck 影响稀有度权重"""
     boss = floor % TOWER["boss_every"] == 0
     min_idx = 2 if boss else 0
     tier = tower_relic_tier(floor)
-    return roll_relic(tier, rng=rng, min_idx=min_idx, loadout=loadout)
+    return roll_relic(tier, rng=rng, min_idx=min_idx, loadout=loadout, luck=luck)
 
 
 def refresh_keys(tower_state, now_ts):

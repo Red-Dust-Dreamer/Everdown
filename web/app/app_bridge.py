@@ -33,7 +33,7 @@ def _item_ui(it):
     """Item → 无 ANSI 的展示 dict(背包/装备/离线掉落共用)。"""
     rid = D.RARITY_IDX[it.rarity]
     slot_def = D.SLOTS[D.SLOT_IDX[it.slot]]
-    mstat = slot_def[2]
+    mstat = it._main_stat()
     st = it.stats()
     affixes = []
     for aid, _ in it.affixes:
@@ -176,7 +176,7 @@ def state():
     mon = g.monster
     monster = None
     if mon is not None:
-        monster = {"name": mon.name, "art": list(mon.art),
+        monster = {"id": mon.id, "name": mon.name, "art": list(mon.art),
                    "hp": mon.hp, "max_hp": mon.max_hp, "tier": mon.tier,
                    "boss": mon.boss, "elite": mon.elite,
                    "atk": mon.atk, "def": mon.def_, "color": mon.color}

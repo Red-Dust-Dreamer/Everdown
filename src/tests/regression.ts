@@ -19,6 +19,7 @@ import { handleKey } from "../core/host.ts";
 import { renderFrame } from "../core/render.ts";
 import { BAL, CLASSES } from "../core/data.ts";
 import { pyRound, Item } from "../core/items.ts";
+import { Relic, rollRelic } from "../core/relics.ts";
 import { fmt, dwidth } from "../core/ansi.ts";
 import type { ResolveReport } from "../core/systems.ts";
 
@@ -243,7 +244,7 @@ function testSaveRoundtrip(): void {
     equip: {}, bag: [], stats: {}, settings: {},
   };
   const m = migrateSave(JSON.parse(JSON.stringify(v3)));
-  eq(m.version, 5, "v3 迁移后版本应为 5(v4→v5 塔系统)");
+  eq(m.version, SAVE_VERSION, "v3 迁移后应一路迁到最新版本");
   eq(m.class_id, "warrior", "v3 迁移后应为 warrior");
   eq(m.skill_lv["w_strike"], 12, "v3 迁移 strike:12 → w_strike=12");
   eq(m.skill_lv["w_warcry"], 5, "v3 迁移 warcry:5 → w_warcry=5");
@@ -381,6 +382,207 @@ function testFmtPyRound(): void {
   eq(pyRound(2.6), 3, "pyRound(2.6) 应为 3");
 }
 
+// ================================================================ 9. 遗物背包
+function testRelicBag(): void {
+  const mk = (n: number) => new Relic("rare", 10, [{ id: "atk", val: n }], `测${n}`);
+
+  // ---- 容量曲线与升级费用:40 → 80 → 160 → 200 封顶;1w/5w/25w(每级 ×5) ----
+  const g = newGame(77);
+  g.chooseClass("warrior");
+  eq(g.relicBagCap(), 40, "Lv1 容量 40");
+  eq(g.relicBagCost(), 10000, "Lv1→2 费用 1w");
+  g.gold = 0;
+  g.upgradeRelicBag();                       // 金币不足:不动
+  eq(g.relicBagLv, 1, "金币不足不升级");
+  g.gold = 1000000;
+  g.upgradeRelicBag();
+  eq(g.relicBagLv, 2, "升到 Lv2");
+  eq(g.gold, 990000, "扣 1w");
+  eq(g.relicBagCap(), 80, "Lv2 容量 80");
+  eq(g.relicBagCost(), 50000, "Lv2→3 费用 5w");
+  g.upgradeRelicBag();                       // 99w ≥ 5w
+  eq(g.relicBagCap(), 160, "Lv3 容量 160");
+  g.upgradeRelicBag();                       // 94w ≥ 25w
+  eq(g.relicBagCap(), 200, "Lv4 容量封顶 200");
+  eq(g.relicBagCost(), null, "满级后费用 null");
+  g.upgradeRelicBag();
+  eq(g.relicBagLv, 4, "等级封顶 4");
+
+  // ---- 满槽掉落进背包;卸下存背包;背包装备回空槽 ----
+  for (let i = 0; i < 4; i++) g.relics[i] = mk(i + 1);
+  g.recalcHero();
+  const r5 = mk(5);
+  g.addRelic(r5);
+  eq(g.relicBag.length, 1, "满槽掉落存入背包");
+  eq(g.relicBag[0], r5, "背包首件即新遗物");
+  g.unequipRelic(0);
+  eq(g.relics[0], null, "卸下后槽空");
+  eq(g.relicBag.length, 2, "卸下存入背包");
+  g.equipRelicFromBag(0);
+  eq(g.relics[0], r5, "背包装备回空槽");
+  eq(g.relicBag.length, 1, "装备后移出背包");
+  g.equipRelicFromBag(0);                    // 4 槽全满:拒绝
+  eq(g.relicBag.length, 1, "槽满拒绝装备");
+  ok(toastTexts(g).some(t => t.includes("遗物槽已满")), "槽满 toast");
+
+  // ---- 新档:背包满时卸下被拒;槽+背包全满时替换效果最少的 ----
+  const g2 = newGame(88);
+  g2.chooseClass("mage");
+  const cap1 = g2.relicBagCap();             // 40
+  for (let i = 0; i < 4; i++) g2.relics[i] = mk(i + 1);
+  for (let i = 0; i < cap1; i++) g2.relicBag.push(mk(100 + i));
+  g2.recalcHero();
+  g2.unequipRelic(0);
+  ok(g2.relics[0] !== null, "背包满拒绝卸下:槽上遗物保留");
+  eq(g2.relicBag.length, cap1, "背包满拒绝卸下:背包不超容");
+  const old0 = g2.relics[0];
+  g2.addRelic(mk(999));
+  eq(g2.relicBag.length, cap1, "背包满:不进背包");
+  ok(g2.relics.some(r => r && r.name === "测999"), "背包满:替换装入");
+  ok(!g2.relics.includes(old0), "背包满:被替换者移除");
+
+  // ---- 存档往返 + v5→v6 迁移 ----
+  const mem = memHooks();
+  g.relicBag.push(mk(6));
+  g.save();
+  const g3 = Game.fromDict(JSON.parse(mem.raw));
+  eq(g3.relicBagLv, g.relicBagLv, "往返:背包等级");
+  eq(g3.relicBag.length, g.relicBag.length, "往返:背包容器数");
+  eq(g3.relicBag[0].name, g.relicBag[0].name, "往返:背包遗物内容");
+  const d5: Record<string, any> = { version: 5, seed: 1 };
+  const d6 = migrateSave(d5);
+  eq(d6.version, SAVE_VERSION, "v5 迁移应一路迁到最新版本");
+  eq(d6.relic_bag.length, 0, "v6 默认空背包");
+  eq(d6.relic_bag_lv, 1, "v6 默认 Lv1");
+}
+
+// ================================================================ 10. 手动模式换装对比
+function testPendingSwap(): void {
+  // ---- 装备:自动换装关 → 更强掉落弹对比;确认换上 / 保留 ----
+  const g = newGame(91);
+  g.chooseClass("warrior");
+  g.settings.auto_equip = false;
+  const weak = new Item("weapon", "common", 5, 10, [{ id: "atk", val: 1 }]);
+  g.equip.weapon = weak;
+  g.recalcHero();
+  const strong = new Item("weapon", "rare", 5, 30, [{ id: "atk", val: 5 }]);
+  g.addItem(strong);
+  ok(g.pendingSwap !== null && g.pendingSwap.kind === "item", "手动模式更强掉落触发对比");
+  g.resolveSwap(true);
+  eq(g.equip.weapon, strong, "确认后换上新的");
+  ok(g.bag.includes(weak), "旧装备入背包");
+  eq(g.pendingSwap, null, "处理后清空");
+
+  const stronger = new Item("weapon", "epic", 5, 40, [{ id: "atk", val: 8 }]);
+  g.addItem(stronger);
+  ok(g.pendingSwap !== null, "再次更强触发");
+  g.resolveSwap(false);
+  eq(g.equip.weapon, strong, "保留:不换");
+  ok(g.bag.includes(stronger), "保留:新装备留在背包");
+
+  // 弱于当前:不弹
+  const weaker = new Item("weapon", "fine", 5, 12, [{ id: "atk", val: 1 }]);
+  g.addItem(weaker);
+  eq(g.pendingSwap, null, "不强于当前不弹");
+
+  // ---- 自动模式:不弹,直接按 5% 规则换 ----
+  g.settings.auto_equip = true;
+  const auto = new Item("weapon", "legendary", 5, 50, [{ id: "atk", val: 9 }]);
+  g.addItem(auto);
+  eq(g.pendingSwap, null, "自动模式不弹对比");
+  eq(g.equip.weapon, auto, "自动模式直接换上");
+
+  // ---- 遗物:满槽更强 → 对比;换上(旧入遗物背包)/ 保留(新入包) ----
+  const g2 = newGame(92);
+  g2.chooseClass("mage");
+  const mk = (n: number, ne: number) => new Relic("rare", 10,
+    Array.from({ length: ne }, (_, i) => ({ id: "goldfind", val: 5 + i })), `R${n}`);
+  for (let i = 0; i < 4; i++) g2.relics[i] = mk(i, 1);
+  g2.recalcHero();
+  const better = mk(9, 3);
+  g2.addRelic(better);
+  ok(g2.pendingSwap !== null && g2.pendingSwap.kind === "relic", "遗物满槽更强触发对比");
+  eq(g2.relicBag.length, 0, "待确认遗物不先入包");
+  g2.resolveSwap(true);
+  ok(g2.relics.includes(better), "确认后新遗物入槽");
+  eq(g2.relicBag.length, 1, "旧遗物存入遗物背包");
+
+  // 不强于最弱件(效果数不多于):直接入包,不弹
+  const same = mk(10, 1);
+  g2.addRelic(same);
+  eq(g2.pendingSwap, null, "不强于最弱件不弹");
+  ok(g2.relicBag.includes(same), "直接入包");
+
+  // 再触发一次,选保留
+  const best = mk(11, 3);
+  g2.addRelic(best);
+  ok(g2.pendingSwap !== null, "更强遗物触发");
+  g2.resolveSwap(false);
+  ok(g2.relicBag.includes(best), "保留:新遗物入包");
+  ok(!g2.relics.includes(best), "保留:不入槽");
+
+  // ---- 存档兜底:待确认遗物不因关页丢失 ----
+  const mem = memHooks();
+  const p2 = mk(12, 3);
+  g2.addRelic(p2);
+  ok(g2.pendingSwap !== null, "触发待确认");
+  g2.save();
+  const d = JSON.parse(mem.raw);
+  ok((d.relic_bag as any[]).some(r => r.name === "R12"), "存档把待确认遗物并入背包");
+}
+
+// ================================================================ 11. 存档防御 + 遗物 roll 修正
+function testSaveDefenseAndRelicRoll(): void {
+  // ---- 损坏的 relics/tower/relic_bag 字段:不抛异常,坏条目置空/剔除 ----
+  const valid = { rarity: "rare", tier: 10, effects: [["goldfind", 6]], name: "验证件", skill_id: null };
+  const g = Game.fromDict({
+    version: SAVE_VERSION, seed: 3, class_id: "warrior",
+    equip: {}, bag: [], skill_lv: {}, loadout: { active: ["w_strike"], passive: [] },
+    relics: [valid, "碎片", 3, null],
+    relic_bag: [valid, "垃圾", 42],
+    tower: "坏数据",
+    hero_hp: 0,
+  });
+  eq(g.relics.length, 4, "遗物槽保持 4 格");
+  ok(g.relics[0] !== null && g.relics[0].name === "验证件", "合法遗物保留");
+  eq(g.relics[1], null, "字符串条目置空");
+  eq(g.relics[2], null, "数字条目置空");
+  eq(g.relics[3], null, "null 保持");
+  eq(g.relicBag.length, 1, "背包坏条目剔除");
+  eq(g.relicBag[0].name, "验证件", "背包合法条目保留");
+  eq(g.tower.keys, 3, "坏 tower 回默认钥匙 3");
+  eq(g.tower.max_floor, 0, "坏 tower 回默认 0 层");
+  eq(g.hero.hp, 0, "hero_hp=0 应保留(仅 null 回满)");
+
+  // ---- 空装配:roll 不再产出未绑定的 skill_lv_r 废词条 ----
+  const rng = new PyRandom(20261002);
+  for (let i = 0; i < 200; i++) {
+    const r = rollRelic(10, rng, 0, []);
+    for (const e of r.effects) {
+      ok(e.id !== "skill_lv_r", `空装配不应出现 skill_lv_r(第 ${i} 次:` +
+        `${r.effects.map(x => x.id).join(",")})`);
+    }
+  }
+  // 有装配时仍正常绑定
+  const rng2 = new PyRandom(20261002);
+  let bound = 0;
+  for (let i = 0; i < 200; i++) {
+    const r = rollRelic(10, rng2, 0, ["w_strike", "w_exec"]);
+    for (const e of r.effects) {
+      if (e.id === "skill_lv_r") { bound++; ok(r.skillId !== null, "有装配时 skill_lv_r 必绑定"); }
+    }
+  }
+  ok(bound > 0, "200 次内应出现 skill_lv_r 绑定案例(池含该词条)");
+
+  // ---- luck 接入:巨量幸运下稀有度显著上移 ----
+  const rng3 = new PyRandom(20261002);
+  for (let i = 0; i < 30; i++) {
+    const r = rollRelic(10, rng3, 0, ["w_strike"], 1e7);
+    const rid = ["common", "fine", "rare", "epic", "legendary", "mythic"].indexOf(r.rarity);
+    ok(rid >= 2, `luck=1e7 时稀有度应 ≥ 稀有(实际 ${r.rarity})`);
+  }
+}
+
 // ================================================================ runner
 const TESTS: [string, () => void][] = [
   ["1.RNG(MT19937 与 CPython 对拍)", testRng],
@@ -391,6 +593,9 @@ const TESTS: [string, () => void][] = [
   ["6.resolve 离线结算", testResolveOffline],
   ["7.渲染尺寸(7 tab × 100 宽 + 弹窗)", testRenderSize],
   ["8.fmt/pyRound(银行家舍入)", testFmtPyRound],
+  ["9.遗物背包(容量/升级/收纳/存档)", testRelicBag],
+  ["10.手动模式换装对比(装备/遗物)", testPendingSwap],
+  ["11.存档防御+遗物roll修正(损坏/luck/空装配)", testSaveDefenseAndRelicRoll],
 ];
 
 let failed = 0;

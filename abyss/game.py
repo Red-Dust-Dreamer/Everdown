@@ -23,7 +23,7 @@ from . import relics as RL
 from . import tower as TW
 
 SAVE_PATH = Path(__file__).resolve().parent.parent / "save.json"
-SAVE_VERSION = 5
+SAVE_VERSION = 7
 EVENT_CAP = 2000
 VIRTUAL_STATS = ("skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct",
                  "all_skill_lv", "crit_extra", "kill_heal", "deathward",
@@ -663,7 +663,7 @@ class Game:
     # ================================================================ 存档
     def to_dict(self):
         return {
-            "version": SAVE_VERSION,
+            "version": SAVE_VERSION, "gear_rules_21": True,
             "seed": self.seed,
             "time": self.time, "playtime": self.playtime,
             "gold": self.gold, "stones": self.stones,
@@ -722,14 +722,30 @@ class Game:
         g.stats.update(d.get("stats", {}))
         g.settings.update(d.get("settings", {}))
         g.stat_mods = d.get("stat_mods") or []
-        g.relics = [RL.Relic.from_dict(r) if r else None for r in d.get("relics", [None]*4)]
-        g.tower = d.get("tower") or {"keys": 3, "max_floor": 0, "last_refresh": None}
+        # 防御:损坏的遗物条目跳过(槽位置空),坏 tower 字段回默认 — 与 TS 侧同口径
+        def _relic_or_none(r):
+            if not isinstance(r, dict):
+                return None
+            try:
+                return RL.Relic.from_dict(r)
+            except Exception:
+                return None
+        relics_raw = d.get("relics") or [None] * 4
+        g.relics = [_relic_or_none(r) for r in relics_raw[:4]]
+        while len(g.relics) < 4:
+            g.relics.append(None)
+        tw = d.get("tower")
+        g.tower = tw if isinstance(tw, dict) and isinstance(tw.get("keys"), (int, float)) \
+            and isinstance(tw.get("max_floor"), (int, float)) else \
+            {"keys": 3, "max_floor": 0, "last_refresh": None}
         g.quests = d.get("quests") or g.quests
         g.quest_daily_count = d.get("quest_daily_count", 0)
         g.quest_daily_date = d.get("quest_daily_date", "")
         g.ema_kill = d.get("ema_kill", 0.0)
         g.recalc_hero()
-        g.hero["hp"] = min(d.get("hero_hp") or g.hero["max_hp"], g.hero["max_hp"])
+        # hero_hp 仅在缺失时回满:0 血存档应保留(与 TS 的 ?? 语义对齐,不再用 or)
+        hp0 = d.get("hero_hp")
+        g.hero["hp"] = min(hp0 if hp0 is not None else g.hero["max_hp"], g.hero["max_hp"])
         g.events.clear()
         g.log("存档已读取: Lv.%d · 第%d区·%d层" % (g.level, g.zone, g.stage), "bright_cyan")
         if g.class_id:
@@ -791,4 +807,16 @@ def migrate_save(d):
         d["relics"] = [None]*4
         d["tower"] = {"keys": 3, "max_floor": 0, "last_refresh": None}
         d["version"] = 5
+        v = 5
+    if v < 6:
+        # v5→v6(relic_bag 为 TS 宿主专属,Python 侧跳过,字段由 from_dict 容错)
+        d["version"] = 6
+        v = 6
+    if v < 7:
+        d["version"] = 7
+    # 装备规则 2.1:按标志位一次性清除旧装备(与 TS 同款幂等兜底,防 HMR 绕过)
+    if not d.get("gear_rules_21"):
+        d["equip"] = {}
+        d["bag"] = []
+        d["gear_rules_21"] = True
     return d

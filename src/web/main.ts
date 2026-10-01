@@ -10,6 +10,7 @@ import * as systems from "../core/systems.ts";
 import { effLv, skillVal } from "../core/skills.ts";
 import { plusBonus, Item, PCT_MAINS } from "../core/items.ts";
 import type { Relic } from "../core/relics.ts";
+import confetti from "canvas-confetti";
 
 const SAVE_KEY = "abyss_save_v2";
 const TICK = 0.1;
@@ -51,6 +52,10 @@ function pctTxt(v: number): string {
 function fmtv(v: number): string {
   return v >= 100 ? v.toFixed(0) : v.toFixed(1).replace(/\.0$/, "");
 }
+/** 定点加成值显示:最多 2 位小数去尾零(词缀求和的浮点残差不上屏,如 1.8532439…→1.85) */
+function numTxt(v: number, digits = 2): string {
+  return String(Math.round(v * 10 ** digits) / 10 ** digits);
+}
 
 const toastEl = $("toast");
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -90,7 +95,7 @@ interface State {
   zone_name: string; zone_boss: string; zone_cycle: number;
   respawn: number; ema_kill: number;
   hero: Record<string, number>;
-  monster: { name: string; art: string[]; hp: number; max_hp: number; tier: number;
+  monster: { id: string; name: string; art: string[]; hp: number; max_hp: number; tier: number;
              boss: boolean; elite: boolean; atk: number; def: number; color: string;
              skill?: string } | null;
   buffs: { key: string; name: string; pct: number; remain: number }[];
@@ -110,11 +115,22 @@ interface State {
   in_tower: boolean;
   tower_floor_sel: number;
   relics: (RelicUI | null)[];
+  relic_bag: RelicUI[];
+  relic_bag_cap: number;
+  relic_bag_cost: number | null;   // 下一级扩容费用;null = 已满级
   stats: Record<string, number>;
   settings: Record<string, unknown>;
   reforge_stones: number; reforge_slots: readonly number[];
   pending_offline: { sec: number; kills: number; deaths: number; gold: number; xp: number;
                      levels: number; zones: number; items: ItemUI[] } | null;
+  pending_swap: {
+    kind: "item" | "relic";
+    slot_name: string;
+    old_item: ItemUI | null;
+    new_item: ItemUI | null;
+    old_relic: RelicUI | null;
+    new_relic: RelicUI | null;
+  } | null;
 }
 
 // ---------------------------------------------------------------- 快照构建
@@ -198,7 +214,7 @@ function buildState(g: Game): State {
                         remain: Math.round(Math.max(0, b.until - g.time) * 10) / 10 }));
 
   const monster = g.monster ? {
-    name: g.monster.name, art: g.monster.art, hp: g.monster.hp,
+    id: g.monster.id, name: g.monster.name, art: g.monster.art, hp: g.monster.hp,
     max_hp: g.monster.maxHp, tier: g.monster.tier, boss: g.monster.boss,
     elite: g.monster.elite, atk: g.monster.atk, def: g.monster.def_,
     color: g.monster.color,
@@ -232,6 +248,20 @@ function buildState(g: Game): State {
     items: g.pendingOffline.items.map((i: Item) => itemUI(i)),
   } : null;
 
+  const psw = g.pendingSwap ? {
+    kind: g.pendingSwap.kind,
+    slot_name: g.pendingSwap.kind === "item"
+      ? (D.SLOT_NAMES[g.pendingSwap.slot ?? ""] ?? g.pendingSwap.slot ?? "")
+      : `遗物${(g.pendingSwap.relicSlot ?? 0) + 1}`,
+    old_item: g.pendingSwap.kind === "item" && g.pendingSwap.slot && g.equip[g.pendingSwap.slot]
+      ? itemUI(g.equip[g.pendingSwap.slot]!) : null,
+    new_item: g.pendingSwap.item ? itemUI(g.pendingSwap.item) : null,
+    old_relic: g.pendingSwap.kind === "relic"
+      ? (g.relics[g.pendingSwap.relicSlot ?? 0] ? relicUI(g.relics[g.pendingSwap.relicSlot ?? 0]!) : null)
+      : null,
+    new_relic: g.pendingSwap.newRelic ? relicUI(g.pendingSwap.newRelic) : null,
+  } : null;
+
   return {
     class_id: g.classId, cls,
     level: g.level, xp: g.xp, xp_req: g.xpReq(),
@@ -258,9 +288,13 @@ function buildState(g: Game): State {
     in_tower: g.inTower,
     tower_floor_sel: g.towerFloorSel,
     relics: g.relics.map(r => r ? relicUI(r) : null),
+    relic_bag: g.relicBag.map(relicUI),
+    relic_bag_cap: g.relicBagCap(),
+    relic_bag_cost: g.relicBagCost(),
     stats: { ...g.stats }, settings: { ...g.settings },
     reforge_stones: D.BAL.reforge_stones, reforge_slots: D.BAL.reforge_slots,
     pending_offline: po,
+    pending_swap: psw,
   };
 }
 
@@ -295,6 +329,8 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
     }
     case "tower_exit": g.towerExit(false); break;   // 撤退:视作战败,仅耗钥匙
     case "unequip_relic": g.unequipRelic(Number(a)); break;
+    case "relic_equip": g.equipRelicFromBag(Number(a)); break;
+    case "relic_bag_up": g.upgradeRelicBag(); break;
     case "auto_equip":
       g.settings.auto_equip = !g.settings.auto_equip;
       g.toast(g.settings.auto_equip ? "自动换装:开" : "自动换装:关");
@@ -302,14 +338,16 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
     case "cycle_sell": {
       const idx = g.settings.auto_sell_idx ?? -1;
       g.settings.auto_sell_idx = (idx + 2) % 6 - 1;
-      g.toast("掉落自动出售:" + AUTO_SELL_NAMES[g.settings.auto_sell_idx + 1]);
+      g.toast("掉落自动出售:" + autoSellStateText(g.settings.auto_sell_idx));
       break;
     }
     case "auto_sell":
       g.settings.auto_sell_idx = Math.max(-1, Math.min(4, Number(a)));
-      g.toast("掉落自动出售已更新");
+      g.toast("掉落自动出售:" + autoSellStateText(g.settings.auto_sell_idx));
       break;
     case "dismiss_offline": g.pendingOffline = null; break;
+    case "swap_take": g.resolveSwap(true); break;
+    case "swap_keep": g.resolveSwap(false); break;
     case "reset":
       localStorage.removeItem(SAVE_KEY);
       g = new Game();
@@ -318,48 +356,86 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
 }
 
 // ---------------------------------------------------------------- 音效
-// 普攻命中音(CC0 复古音效,出处与许可见 public/sfx/README.txt)。
-// WebAudio 解码一次缓存播放;音调微变防重复感,暴击更亮更响;
-// 极高攻速/倍速下按 70ms 节流;开关存 localStorage(客户端偏好,不进核心存档)。
+// 战斗音效(CC0 复古音效,出处与许可见 public/sfx/README.txt):
+// 普攻命中 + 技能按类型分音(伤害按职业、增益/护盾/处决/多段连击各自专属)。
+// WebAudio 解码一次缓存播放;音调微变防重复感;开关存 localStorage(不进核心存档)。
 const BASE_URL = (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL || "/";
 const SFX_KEY = "abyss_sfx";
+const SFX_FILES = ["attack-hit", "skill-heavy", "skill-magic", "skill-arrow",
+                   "skill-burst", "skill-buff", "skill-shield", "skill-execute"] as const;
+type SfxKey = typeof SFX_FILES[number];
+const SFX_STYLE: Record<SfxKey, { gain: number; rateLo: number; rateHi: number; throttleMs: number }> = {
+  "attack-hit":    { gain: 0.5,  rateLo: 0.92, rateHi: 1.08, throttleMs: 70 },
+  "skill-heavy":   { gain: 0.55, rateLo: 0.97, rateHi: 1.03, throttleMs: 90 },
+  "skill-magic":   { gain: 0.5,  rateLo: 0.94, rateHi: 1.06, throttleMs: 90 },
+  "skill-arrow":   { gain: 0.5,  rateLo: 0.94, rateHi: 1.06, throttleMs: 90 },
+  "skill-burst":   { gain: 0.55, rateLo: 0.96, rateHi: 1.04, throttleMs: 90 },
+  "skill-buff":    { gain: 0.55, rateLo: 0.98, rateHi: 1.02, throttleMs: 120 },
+  "skill-shield":  { gain: 0.55, rateLo: 0.98, rateHi: 1.02, throttleMs: 120 },
+  "skill-execute": { gain: 0.6,  rateLo: 1.0,  rateHi: 1.0,  throttleMs: 150 },
+};
 let sfxOn = localStorage.getItem(SFX_KEY) !== "0";
 let sfxCtx: AudioContext | null = null;
-let attackBuf: AudioBuffer | null = null;
-let sfxLastMs = 0;
-let sfxPlays = 0;
+const sfxBufs = new Map<SfxKey, AudioBuffer>();
+const sfxLastMs = new Map<SfxKey, number>();
+const sfxPlays = new Map<SfxKey, number>();
+const SKILL_DEF = new Map(D.ACTIVE_SKILLS.map(s => [s.id, s]));
 
-/** 页面加载即建 context 并预解码(suspended 态可解码),首次交互只需 resume */
+/** 页面加载即建 context 并预解码全部音效(suspended 态可解码),首次交互只需 resume */
 function initSfx(): void {
   if (sfxCtx || !sfxOn) return;
   const AC = window.AudioContext ??
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AC) return;
   sfxCtx = new AC();
-  fetch(BASE_URL + "sfx/attack-hit.wav")
-    .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`sfx ${r.status}`))))
-    .then(b => sfxCtx!.decodeAudioData(b))
-    .then(buf => { attackBuf = buf; })
-    .catch(() => { /* 音效缺失时静默降级,游戏照常 */ });
+  for (const key of SFX_FILES) {
+    fetch(`${BASE_URL}sfx/${key}.wav`)
+      .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`sfx ${r.status}`))))
+      .then(b => sfxCtx!.decodeAudioData(b))
+      .then(buf => sfxBufs.set(key, buf))
+      .catch(() => { /* 单个音效缺失静默降级,游戏照常 */ });
+  }
 }
 function ensureSfx(): void {
   if (sfxOn && sfxCtx?.state === "suspended") void sfxCtx.resume();
 }
-function playAttackHit(crit = false): void {
-  if (!sfxOn || !attackBuf) return;
+function playSfx(key: SfxKey, critBoost = false): void {
+  if (!sfxOn) return;
+  const buf = sfxBufs.get(key);
   const ctx = sfxCtx;
-  if (!ctx || ctx.state !== "running") return;
+  if (!buf || !ctx || ctx.state !== "running") return;
+  const st = SFX_STYLE[key];
   const now = performance.now();
-  if (now - sfxLastMs < 70) return;
-  sfxLastMs = now;
+  if (now - (sfxLastMs.get(key) ?? 0) < st.throttleMs) return;
+  sfxLastMs.set(key, now);
   const src = ctx.createBufferSource();
-  src.buffer = attackBuf;
-  src.playbackRate.value = crit ? 1.12 + Math.random() * 0.1 : 0.92 + Math.random() * 0.16;
+  src.buffer = buf;
+  const boost = critBoost ? 1.12 : 1;
+  src.playbackRate.value = (st.rateLo + Math.random() * (st.rateHi - st.rateLo)) * boost;
   const gain = ctx.createGain();
-  gain.gain.value = crit ? 0.62 : 0.5;
+  gain.gain.value = st.gain * (critBoost ? 1.25 : 1);
   src.connect(gain).connect(ctx.destination);
   src.start();
-  sfxPlays += 1;
+  sfxPlays.set(key, (sfxPlays.get(key) ?? 0) + 1);
+}
+/** 普攻命中(hero_attack);暴击更亮更响 */
+function playAttackHit(crit = false): void {
+  if (crit) { playSfx("attack-hit", true); return; }
+  playSfx("attack-hit");
+}
+/** 技能施放(cast:<id>):伤害按职业,其余按类型 */
+function playSkillCast(skillId: string): void {
+  const def = SKILL_DEF.get(skillId);
+  if (!def) return;
+  let key: SfxKey;
+  if (def.kind === "execute") key = "skill-execute";
+  else if (def.kind === "shield") key = "skill-shield";
+  else if (def.kind === "buff") key = "skill-buff";
+  else if (def.kind === "multi") key = "skill-burst";
+  else if (def.cls === "warrior") key = "skill-heavy";
+  else if (def.cls === "ranger") key = "skill-arrow";
+  else key = "skill-magic";
+  playSfx(key);
 }
 function toggleSfx(): void {
   sfxOn = !sfxOn;
@@ -370,7 +446,9 @@ function toggleSfx(): void {
   renderNow();
 }
 function sfxDebug(): string {
-  return `on=${sfxOn} ready=${attackBuf !== null} ctx=${sfxCtx?.state ?? "none"} plays=${sfxPlays}`;
+  const ready = SFX_FILES.filter(k => sfxBufs.has(k)).length;
+  const plays = [...sfxPlays.entries()].map(([k, n]) => `${k.split("-").pop()}:${n}`).join(" ") || "0";
+  return `on=${sfxOn} ready=${ready}/${SFX_FILES.length} ctx=${sfxCtx?.state ?? "none"} [${plays}]`;
 }
 
 initSfx();
@@ -399,16 +477,24 @@ function drainEvents(): void {
     } else if (kind === "anim") {
       if (text === "mob_flash") flashMon();
       else if (text === "hero_attack") {
+        // 技能伤害命中已改发 skill_hit(核心侧),不再与普攻音/特效重叠
         const crit = nextEvtIsCrit(evs, i);
         playAttackFx(undefined, crit);
         playAttackHit(crit);
+      } else if (text.startsWith("cast:")) {
+        playSkillCast(text.slice(5));
+        playSkillFx(text.slice(5));
       }
+      // skill_hit:技能伤害命中,仅闪白+飘字(mob_flash 已覆盖)
     }
   }
   if (logs.length) {
     const body = $("log-body");
+    // 贴底跟随:用户没上翻(距底 <24px)时自动滚到最新,上翻阅读则不打扰
+    const follow = body.scrollHeight - body.scrollTop - body.clientHeight < 24;
     body.insertAdjacentHTML("beforeend", logs.join(""));
     while (body.children.length > LOG_CAP) body.removeChild(body.firstChild!);
+    if (follow) body.scrollTop = body.scrollHeight;
   }
 }
 function spanColor(text: string, color: string): string {
@@ -495,9 +581,180 @@ function nextEvtIsCrit(evs: [string, string, string][], from: number): boolean {
   return false;
 }
 
+// ---------------------------------------------------------------- 技能特效(canvas-confetti 开源粒子库,ISC/MIT)
+// cast:<技能id> → 技能 icon 做粒子形状 + 技能色系 + SKILL_FX 模式表差异化发射。
+// (技能伤害命中在核心侧发 skill_hit 而非 hero_attack,天然不与普攻特效重叠)
+
+const fxBoom = confetti.create($("fx-canvas") as HTMLCanvasElement,
+  { resize: true, useWorker: false, disableForReducedMotion: true });
+
+const FX_COLORS: Record<string, string[]> = {
+  bright_red: ["#ff6b6b", "#ff9c54", "#ffd9b0"],
+  red: ["#e05a5a", "#c04545", "#f0b0a0"],
+  bright_yellow: ["#ffd94a", "#ffb347", "#fff3c4"],
+  yellow: ["#d9bd45", "#b59a30", "#f5ecc0"],
+  bright_blue: ["#5adfff", "#4f8dff", "#dbeeff"],
+  blue: ["#5a8fe0", "#4068c0", "#c8dcf5"],
+  bright_green: ["#6bff8f", "#3fd66f", "#d2ffdf"],
+  green: ["#55d97e", "#2fa856", "#c8f5d8"],
+  bright_cyan: ["#7ff0ff", "#4fd8f0", "#e0fbff"],
+  cyan: ["#55cce5", "#38a8c0", "#ccf0f8"],
+  bright_magenta: ["#e06bff", "#b45aff", "#f2dcff"],
+  magenta: ["#c050e0", "#9a38b8", "#ecc8f8"],
+  white: ["#f2f2f7", "#c8c8d8", "#ffffff"],
+  bright_black: ["#9a9ab2", "#6a6a84", "#d8d8e8"],
+};
+
+/** 技能 icon → 粒子形状(离屏渲染一次,缓存复用) */
+const iconShapeCache = new Map<string, confetti.Shape[]>();
+function iconShapes(icon: string): confetti.Shape[] {
+  let s = iconShapeCache.get(icon);
+  if (!s) {
+    s = [confetti.shapeFromText({ text: icon, scalar: 2 })];
+    iconShapeCache.set(icon, s);
+  }
+  return s;
+}
+
+type FxMode = "burst" | "ring" | "side" | "zip" | "rain" | "rise" | "multi" | "storm";
+interface SkillFx {
+  mode: FxMode; n?: number; scalar?: number; waves?: number;
+  big?: boolean; frost?: boolean;
+}
+
+/** 30 技能逐一配置。burst=命中爆开 ring=环形冲击 side=左缘斜射 zip=高速直线
+ *  rain=从天而降 rise=增益上升流 multi=连发波 storm=环爆+落雨;
+ *  big=大招震屏,frost=冰冻覆盖。 */
+const SKILL_FX: Record<string, SkillFx> = {
+  // 战士
+  w_strike: { mode: "burst", n: 30 },
+  w_whirl: { mode: "ring", n: 42 },
+  w_warcry: { mode: "rise", n: 34 },
+  w_taunt: { mode: "burst", n: 20 },
+  w_exec: { mode: "ring", n: 70, scalar: 1.5, big: true },
+  w_blood: { mode: "burst", n: 30 },
+  w_wall: { mode: "rise", n: 30 },
+  w_fury: { mode: "rise", n: 26 },
+  w_fatal: { mode: "burst", n: 55, scalar: 1.3, big: true },
+  w_roar: { mode: "ring", n: 80, big: true },
+  // 法师
+  m_missile: { mode: "multi", n: 36, waves: 3 },
+  m_fire: { mode: "burst", n: 40 },
+  m_ice: { mode: "side", n: 30, frost: true },
+  m_surge: { mode: "rise", n: 30 },
+  m_chain: { mode: "zip", n: 20 },
+  m_storm: { mode: "storm", n: 46 },
+  m_nova: { mode: "ring", n: 50, frost: true },
+  m_shield: { mode: "rise", n: 30 },
+  m_meteor: { mode: "burst", n: 80, scalar: 1.8, big: true },
+  m_cata: { mode: "storm", n: 70, scalar: 1.4, big: true },
+  // 射手
+  r_volley: { mode: "multi", n: 30, waves: 3 },
+  r_pierce: { mode: "zip", n: 16 },
+  r_mark: { mode: "burst", n: 14 },
+  r_back: { mode: "burst", n: 18 },
+  r_rain: { mode: "rain", n: 60, waves: 5 },
+  r_hawk: { mode: "rise", n: 24 },
+  r_dash: { mode: "zip", n: 22 },
+  r_deadly: { mode: "multi", n: 40, waves: 3 },
+  r_sky: { mode: "zip", n: 28, scalar: 1.5, big: true },
+  r_god: { mode: "ring", n: 70, big: true },
+};
+
+/** 怪物中心(canvas-confetti 的 origin 相对 #fx-canvas 即舞台,取 0-1) */
+function stageOrigin(): { x: number; y: number } {
+  const stage = document.getElementById("stage");
+  if (!stage) return { x: 0.5, y: 0.42 };
+  const r = stage.getBoundingClientRect();
+  const art = stage.querySelector<HTMLElement>(".mon-art");
+  if (art) {
+    const a = art.getBoundingClientRect();
+    return {
+      x: (a.left + a.width / 2 - r.left) / r.width,
+      y: (a.top + a.height / 2 - r.top) / r.height,
+    };
+  }
+  return { x: 0.5, y: 0.42 };
+}
+
+function playSkillFx(sid: string): void {
+  const def = SKILL_DEF.get(sid);
+  if (!def) return;
+  const fx = SKILL_FX[sid] ?? { mode: "burst" as FxMode };
+  const colors = FX_COLORS[def.color] ?? FX_COLORS.white;
+  const shapes = iconShapes(def.icon);
+  const n = fx.n ?? 26;
+  const scalar = fx.scalar ?? 1;
+  const mon = stageOrigin();
+  const fire = (o: { x: number; y: number }, angle: number, spread: number,
+                v: number, cnt: number, ticks = 230) =>
+    fxBoom({ colors, shapes, scalar, particleCount: cnt, origin: o,
+             angle, spread, startVelocity: v, ticks });
+
+  switch (fx.mode) {
+    case "burst":
+      fire(mon, 90, 110, 55, n);
+      break;
+    case "ring":
+      fire(mon, 90, 360, 42, n + 8);
+      break;
+    case "side":
+      fire({ x: 0.05, y: mon.y }, 25, 26, 85, Math.round(n * 0.8));
+      fire(mon, 90, 70, 40, Math.round(n * 0.4));
+      break;
+    case "zip":
+      fire({ x: 0, y: mon.y }, 12, 14, 110, n);
+      fire(mon, 90, 60, 30, 10);
+      break;
+    case "rain": {
+      const waves = fx.waves ?? 3;
+      const per = Math.max(8, Math.round(n / waves));
+      for (let i = 0; i < waves; i++) {
+        setTimeout(() => fxBoom({ colors, shapes, scalar: scalar * 0.8,
+          particleCount: per,
+          origin: { x: 0.2 + Math.random() * 0.6, y: Math.max(0.05, mon.y - 0.28) },
+          angle: 270, spread: 26, startVelocity: 12, gravity: 1.6, ticks: 170 }), i * 110);
+      }
+      break;
+    }
+    case "rise":   // 增益/护盾:英雄方向(舞台左侧)自下而上飘散
+      fxBoom({ colors, shapes, scalar: scalar * 0.9, particleCount: n,
+        origin: { x: 0.14, y: 0.74 }, angle: 90, spread: 55,
+        startVelocity: 38, gravity: 0.35, drift: 1.2, ticks: 330 });
+      break;
+    case "multi": {
+      const waves = fx.waves ?? 3;
+      for (let i = 0; i < waves; i++) {
+        setTimeout(() => fire(mon, 90, 60, 70, Math.round(n / waves)), i * 95);
+      }
+      break;
+    }
+    case "storm":
+      fire(mon, 90, 360, 55, n);
+      for (let i = 0; i < 4; i++) {
+        setTimeout(() => fxBoom({ colors, shapes, scalar, particleCount: 14,
+          origin: { x: 0.2 + Math.random() * 0.6, y: 0.12 },
+          angle: 270, spread: 20, startVelocity: 10, gravity: 1.4, ticks: 210 }), i * 100);
+      }
+      break;
+  }
+  const st = $("stage");
+  if (fx.big) {
+    st.classList.remove("shake");
+    void st.offsetWidth;   // 重新触发动画
+    st.classList.add("shake");
+    setTimeout(() => st.classList.remove("shake"), 350);
+  }
+  if (fx.frost) {
+    st.classList.add("frost");
+    setTimeout(() => st.classList.remove("frost"), 1250);
+  }
+}
+
 // ---------------------------------------------------------------- 渲染
 let curTab = "battle";
 let offlineShown = false;
+let swapShown = false;
 
 function renderNow(): void {
   const st = buildState(g);
@@ -610,10 +867,17 @@ function renderBattle(st: State): void {
               : mon.elite ? `<span class="tag elite">精英</span>` : "";
     const skTag = mon.skill ? `<span class="tier" style="color:#ff8888">${esc(mon.skill)}</span>` : "";
     const hpPctM = Math.max(0, mon.hp / mon.max_hp * 100);
+    // 立绘:mon/<id>.png(头目用 -boss 变体),加载失败回退 ASCII 小画(CSS 控制)
+    const size = mon.boss ? " boss" : mon.elite ? " elite" : "";
+    const artHtml = mon.id
+      ? `<img src="${BASE_URL}mon/${mon.id}${mon.boss ? "-boss" : ""}.png" alt="${esc(mon.name)}" draggable="false"` +
+        ` onerror="this.closest('.mon-art').classList.add('imgfail')">` +
+        `<pre class="ascii">${esc(mon.art.join("\n"))}</pre>`
+      : `<pre class="ascii">${esc(mon.art.join("\n"))}</pre>`;
     inner =
       `<div class="mon-name c-${mon.color}">${esc(mon.name)}${tag}` +
         `<span class="tier">T${mon.tier}</span>${skTag}</div>` +
-      `<div class="mon-art">${esc(mon.art.join("\n"))}</div>` +
+      `<div class="mon-art${mon.id ? " spr" : ""}${size}">${artHtml}</div>` +
       `<div style="width:min(320px,72vw)"><div class="bar hp lg"><div class="fill" style="width:${hpPctM}%"></div>` +
         `<div class="num">${fmt(Math.max(0, mon.hp))} / ${fmt(mon.max_hp)}</div></div></div>`;
   }
@@ -688,7 +952,7 @@ function renderHeroPage(st: State): void {
       kv("金币加成", pctTxt(h.goldfind)) + kv("闪避", pctTxt(h.dodge ?? 0)) +
       kv("无视防御", pctTxt(h.armor_pierce ?? 0)) + kv("技能伤害", "+" + pctTxt(h.skill_dmg ?? 0)) +
       kv("冷却缩减", pctTxt(h.cd_reduce ?? 0)) + kv("经验加成", "+" + pctTxt(h.xp_pct ?? 0)) +
-      kv("全技能等级", "+" + (h.skill_lv ?? 0)) + kv("理论 DPS", fmt(h.dps)) +
+      kv("全技能等级", "+" + numTxt(h.skill_lv ?? 0)) + kv("理论 DPS", fmt(h.dps)) +
     `</div>` + slots;
 }
 
@@ -769,22 +1033,31 @@ function renderSkills(st: State): void {
     `<div class="lo-col"><div class="t">被动技能</div><div class="lo-slots">${slotHtml("passive")}</div></div>` +
     `</div>`;
 
-  const pool = (list: SkillUI[], which: "active" | "passive"): string => list.map(s =>
-    `<div class="sk-card${s.unlocked ? "" : " locked"}">` +
+  const pool = (list: SkillUI[], which: "active" | "passive"): string => list.map(s => {
+    // 装备/遗物等级加成叠在基础等级上生效(有效等级可超上限,数值行按有效等级计算);
+    // 金币升级上限(skill_lv_max)只看基础等级。主标签展示基础等级,装备加成作后缀。
+    const maxed = s.lv >= D.BAL.skill_lv_max;
+    const lvTxt = `Lv.${s.lv}${maxed ? " 满" : ""}` +
+      (s.eff > s.lv ? `(装+${s.eff - s.lv})` : "");
+    return `<div class="sk-card${s.unlocked ? "" : " locked"}">` +
     `<div class="sk-ic">${s.icon}</div>` +
     `<div class="sk-body"><div class="nm">${esc(s.name)}` +
-      `<span class="lv">Lv.${s.eff}${s.eff > s.lv ? `(含装备+${s.eff - s.lv})` : ""}</span>` +
+      `<span class="lv">${lvTxt}</span>` +
       (s.equipped ? `<span class="eq">✓已装配</span>` : "") + `</div>` +
       `<div class="ds">${esc(s.desc)}</div>` +
       `<div class="cd">解锁 Lv.${s.unlock}${s.cd ? ` · 冷却 ${s.cd}s` : ""}${s.unlocked ? "" : "(未解锁)"}</div></div>` +
     (s.unlocked
-      ? `<div class="sk-ops"><div class="cost">升级 ◈${fmt(s.cost)}</div>` +
-        `<button class="btn mini" data-cmd="skill_up" data-a="${s.id}">升级</button>` +
+      ? `<div class="sk-ops">` +
+        (maxed
+          ? `<div class="cost" style="color:var(--dim)">基础已满 Lv.${D.BAL.skill_lv_max}·装备加成仍生效</div>`
+          : `<div class="cost">升级 ◈${fmt(s.cost)}</div>` +
+            `<button class="btn mini" data-cmd="skill_up" data-a="${s.id}">升级</button>`) +
         (s.equipped
           ? `<button class="btn mini" data-cmd="unequip_skill" data-a="${s.id}">卸下</button>`
           : `<button class="btn mini" data-cmd="equip_skill" data-a="${s.id}" data-b="${which}">装配</button>`) +
         `</div>`
-      : "") + `</div>`).join("");
+      : "") + `</div>`;
+  }).join("");
   $("skill-pools").innerHTML =
     `<div class="skill-pools"><div class="pool"><h4>✦ 主动技能池</h4>${pool(st.skills.active, "active")}</div>` +
     `<div class="pool"><h4>◈ 被动技能池</h4>${pool(st.skills.passive, "passive")}</div></div>`;
@@ -821,6 +1094,12 @@ function renderQuest(st: State): void {
 
 const AUTO_SELL_NAMES = ["关闭", "出售「普通」及以下", "出售「精良」及以下",
                          "出售「稀有」及以下", "出售「史诗」及以下", "出售「传说」及以下"];
+const AUTO_SELL_TIERS = ["普通", "精良", "稀有", "史诗", "传说"];
+// 状态文案明确带 开/关 前缀,避免用户误读档位名"关闭"为操作按钮
+function autoSellStateText(idx: number | null | undefined): string {
+  const i = Number(idx ?? -1);
+  return i < 0 ? "关(掉落保留)" : `开 · ${AUTO_SELL_NAMES[i + 1]}`;
+}
 function renderTower(st: State): void {
   const panel = $("tower-panel");
   if (!st.class_id) { panel.innerHTML = ""; return; }
@@ -848,7 +1127,7 @@ function renderTower(st: State): void {
     `</span></div>` +
     `<div class="bar q lg"><div class="fill" style="width:${p}%"></div>` +
       `<div class="num">第1层 → 第${reach}层 · 选中 第${sel}层</div></div>` +
-    `<h3 style="margin-top:16px"><span class="dot"></span>遗物 · ${nRelics}/4 槽(通关必得,自动装入空槽)</h3>`;
+    `<h3 style="margin-top:16px"><span class="dot"></span>遗物 · ${nRelics}/4 槽(通关必得,空槽优先装满)</h3>`;
 
   st.relics.forEach((r, i) => {
     if (!r) {
@@ -865,6 +1144,35 @@ function renderTower(st: State): void {
       `<div class="slot-m"><div class="af">${effs}</div></div>` +
       `<div class="slot-r"><button class="btn mini" data-cmd="unequip_relic" data-a="${i}">卸下</button></div></div>`;
   });
+
+  // ---- 遗物背包(满槽收纳 + 容量升级) ----
+  const nBag = st.relic_bag.length;
+  const bagFull = nBag >= st.relic_bag_cap;
+  const slotsFull = st.relics.every(Boolean);
+  const upCost = st.relic_bag_cost;
+  const nextCap = Math.min(st.relic_bag_cap * 2, D.BAL.relic_bag_cap);
+  html += `<h3 style="margin-top:16px"><span class="dot"></span>遗物背包 · ${nBag}/${st.relic_bag_cap} 格` +
+    `<span class="rt">${upCost !== null
+      ? `<button class="btn mini" data-cmd="relic_bag_up" style="${st.gold < upCost ? "opacity:.55" : "border-color:#3a6a4a;color:#6bff8f"}">` +
+        `扩容 ${nextCap} 格 · ◈${fmt(upCost)}${st.gold < upCost ? "(金币不足)" : ""}</button>`
+      : `<span style="color:var(--dim)">已满级 ${st.relic_bag_cap} 格</span>`}</span></h3>`;
+  if (!nBag) {
+    html += `<div class="slot-card"><div class="slot-m" style="color:var(--dim)">` +
+      (bagFull ? "背包已满:再掉落的遗物将自动替换装备中效果最少的一件"
+               : "遗物槽满时,新掉落的遗物会存入背包;卸下的遗物也保存在这里") +
+      `</div></div>`;
+  } else {
+    st.relic_bag.forEach((r, i) => {
+      const effs = r.effects
+        .map(e => `◈ ${e.name} +${e.unit === "级" ? Math.round(e.val) : pctTxt(e.val)}${e.unit}`)
+        .join(" &nbsp; ");
+      html += `<div class="slot-card"><div class="slot-l"><div class="sl">背包${i + 1} · ${r.rname} T${r.tier}</div>` +
+        `<div class="nm c-${r.rcolor}">${esc(r.name)}</div></div>` +
+        `<div class="slot-m"><div class="af">${effs}</div></div>` +
+        `<div class="slot-r"><button class="btn mini" data-cmd="relic_equip" data-a="${i}"` +
+        `${slotsFull ? ` disabled title="遗物槽已满,请先卸下"` : ""}>装备</button></div></div>`;
+    });
+  }
   panel.innerHTML = html;
 }
 
@@ -876,8 +1184,10 @@ function renderSettings(st: State): void {
     `<h3><span class="dot"></span>设置</h3>` +
     `<div class="set-row"><div class="lbl">自动换装<div class="d">新掉落评分高于当前 5% 时自动穿上</div></div>` +
       `<div class="toggle${st.settings.auto_equip ? " on" : ""}" data-cmd="auto_equip"></div></div>` +
-    `<div class="set-row"><div class="lbl">掉落自动出售<div class="d">低稀有度装备掉落即折现</div></div>` +
-      `<button class="btn" data-cmd="cycle_sell" style="min-width:130px;text-align:center">${AUTO_SELL_NAMES[autoSellIdx + 1]}</button></div>` +
+    `<div class="set-row"><div class="lbl">掉落自动出售<div class="d">低稀有度装备掉落即折现;点击循环切换档位</div></div>` +
+      (autoSellIdx < 0
+        ? `<button class="btn sell-off" data-cmd="cycle_sell" style="min-width:130px;text-align:center">已关闭</button>`
+        : `<button class="btn sell-on" data-cmd="cycle_sell" style="min-width:130px;text-align:center">开 · 出售 ≤${AUTO_SELL_TIERS[autoSellIdx]}</button>`) + `</div>` +
     `<div class="set-row"><div class="lbl">战斗模式<div class="d">推进:击败敌人深入;挂机:停留指定层</div></div>` +
       `<button class="btn" data-cmd="mode">${st.mode === "push" ? "切换为挂机" : "切换为推进"}</button></div>` +
     (st.mode === "farm"
@@ -940,6 +1250,63 @@ function renderOverlays(st: State): void {
     om.classList.remove("show");
     offlineShown = false;
   }
+
+  const sm = $("swap-modal");
+  if (st.pending_swap && !swapShown) {
+    renderSwapModal(st.pending_swap);
+    sm.classList.add("show");
+    swapShown = true;
+  } else if (!st.pending_swap && sm.classList.contains("show")) {
+    sm.classList.remove("show");
+    swapShown = false;
+  }
+}
+
+/** 换装对比弹窗:左边当前件,右边新掉落;装备按评分、遗物按效果条数供玩家判断 */
+function renderSwapModal(p: NonNullable<State["pending_swap"]>): void {
+  const isItem = p.kind === "item";
+  $("swap-title").textContent = isItem ? "⚔ 发现更强的装备" : "◆ 获得更强的遗物";
+  $("swap-sub").textContent = isItem
+    ? `自动换装已关闭 — 「${p.slot_name}」的新掉落更强,用哪个?`
+    : `遗物槽已满 — 新遗物效果更多,要替换「${p.slot_name}」吗?`;
+
+  let cols: string;
+  if (isItem) {
+    const o = p.old_item, n = p.new_item;
+    const itemCol = (it: ItemUI | null, tag: string, isNew: boolean) => {
+      if (!it) {
+        return `<div class="swap-col"><div class="sw-tag">${tag}</div>` +
+          `<div class="nm eq-empty">— 空 —</div>` +
+          `<div class="af" style="color:var(--dim)">当前部位没有装备</div></div>`;
+      }
+      const affixes = it.affixes.map(a =>
+        `<div>◈ ${a.name} +${a.val}${a.pct ? "%" : ""}</div>`).join("");
+      const innate = it.innate ? `<div>✦ ${it.innate.name} +${it.innate.val}</div>` : "";
+      const delta = isNew && o ? Math.trunc(it.score - o.score) : 0;
+      return `<div class="swap-col${isNew ? " new" : ""}"><div class="sw-tag">${tag}</div>` +
+        `<div class="nm c-${it.rcolor}">${esc(it.name)}${it.plus ? ` +${it.plus}` : ""}</div>` +
+        `<div class="sw-line">${it.slot_name} · ${it.rname} · Lv.${it.tier}</div>` +
+        `<div class="af"><div>主属性 ${it.main.name} +${it.main.val}${it.main.pct ? "%" : ""}</div>${innate}${affixes}</div>` +
+        `<div class="sw-score">评分 ${fmt(it.score)}` +
+        (isNew && o ? ` <span class="sw-up">(新 ${delta >= 0 ? "+" : ""}${fmt(delta)})</span>` : "") +
+        `</div></div>`;
+    };
+    cols = itemCol(o, "当前装备", false) + itemCol(n, "新掉落", true);
+  } else {
+    const o = p.old_relic, n = p.new_relic;
+    const relicCol = (r: RelicUI | null, tag: string, isNew: boolean) => {
+      if (!r) return `<div class="swap-col"><div class="sw-tag">${tag}</div>` +
+        `<div class="nm eq-empty">— 空 —</div></div>`;
+      const effs = r.effects
+        .map(e => `<div>◈ ${e.name} +${e.unit === "级" ? Math.round(e.val) : pctTxt(e.val)}${e.unit}</div>`).join("");
+      return `<div class="swap-col${isNew ? " new" : ""}"><div class="sw-tag">${tag}</div>` +
+        `<div class="nm c-${r.rcolor}">${esc(r.name)}</div>` +
+        `<div class="sw-line">${r.rname} · T${r.tier} · ${r.effects.length} 条效果</div>` +
+        `<div class="af">${effs}</div></div>`;
+    };
+    cols = relicCol(o, "当前遗物", false) + relicCol(n, "新掉落", true);
+  }
+  $("swap-body").innerHTML = `<div class="swap-grid">${cols}</div>`;
 }
 
 // ---------------------------------------------------------------- 交互
@@ -1049,28 +1416,6 @@ function boot(): void {
   $("loading").classList.add("hide");
   renderNow();
 
-  // 手机端底栏高度校准:--nav-h 只用于内容留白/toast 定位。
-  // 测条目的固有内容高(icon+文字+内距),不能测条目盒高——
-  // nav 是 row 容器,子项会被 stretch 拉到容器高,测盒高会形成"写大→撑高→测更大"的自激。
-  const navEl = document.getElementById("nav");
-  if (navEl) {
-    const calibrateNav = (): void => {
-      const item = navEl.querySelector<HTMLElement>(".nav-item");
-      const ic = item?.querySelector<HTMLElement>(".ic");
-      const tx = item?.querySelector<HTMLElement>(".tx");
-      if (!item || !ic || !tx) return;
-      const cs = getComputedStyle(item);
-      const h = ic.offsetHeight + tx.offsetHeight
-        + (parseFloat(cs.rowGap) || 0) + (parseFloat(cs.paddingTop) || 0)
-        + (parseFloat(cs.paddingBottom) || 0) + 8;   // nav 上下 padding
-      if (h >= 44 && h <= 72)
-        document.documentElement.style.setProperty("--nav-h", Math.ceil(h) + "px");
-    };
-    calibrateNav();
-    if (typeof ResizeObserver !== "undefined")
-      new ResizeObserver(calibrateNav).observe(navEl);
-  }
-
   // 主循环:setInterval 驱动 0.1s 固定步进(与 CLI 一致)。
   // 页面隐藏时不步进(定时器被节流),回切时用 resolve() 懒结算补算。
   let last = performance.now();
@@ -1110,17 +1455,27 @@ function boot(): void {
   });
   window.addEventListener("pagehide", () => g.save());
 
-  // 调试钩子:控制台 __abyss.state() 验证游戏推进;__abyss.fx("warrior") 演示普攻特效与音效
-  (window as unknown as { __abyss?: { state(): string; fx(cls?: string, crit?: boolean): void; sfx(): string } }).__abyss = {
+  // 调试钩子:__abyss.state() 验证推进;fx("warrior") 演示普攻特效与音效;
+  // skillfx("m_meteor") 演示任意技能的粒子特效;sfxcast("w_exec") 演示技能音效;sfx() 查看音效状态
+  (window as unknown as { __abyss?: { state(): string; fx(cls?: string, crit?: boolean): void;
+                                         sfx(): string; skillfx(sid: string): void;
+                                         sfxcast(sid: string): void;
+                                         dbg(): string } }).__abyss = {
     state: () => `t=${g.time | 0}s Lv${g.level} ${g.zone}区 kills=${g.stats.kills}`,
     fx: (cls, crit) => { playAttackFx(cls, crit); playAttackHit(crit ?? false); },
     sfx: () => sfxDebug(),
+    skillfx: (sid) => playSkillFx(sid),
+    sfxcast: (sid) => playSkillCast(sid),
+    dbg: () => JSON.stringify({ auto_equip: g.settings.auto_equip,
+      swap: g.pendingSwap ? `${g.pendingSwap.kind}:${g.pendingSwap.slot ?? g.pendingSwap.relicSlot}` : null,
+      bagN: g.bag.length, equip: Object.keys(g.equip) }),
   };
 
   // PWA:注册 Service Worker(离线可玩/可安装)。
-  // 路径跟随 vite base(本地 / 或 GitHub Pages 子路径);dev(8614)跳过,
-  // 避免缓存 vite 开发资产导致改动不生效。
-  if (location.port !== "8614" && "serviceWorker" in navigator) {
+  // 路径跟随 vite base(本地 / 或 GitHub Pages 子路径);localhost 任意端口跳过
+  // (vite dev 起在 8614 之外的端口也会命中,缓存优先会吞掉最新改动)。
+  const isLocal = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+  if (!isLocal && "serviceWorker" in navigator) {
     navigator.serviceWorker.register(BASE_URL + "sw.js")
       .catch(() => { /* 离线壳降级:在线玩 */ });
   }

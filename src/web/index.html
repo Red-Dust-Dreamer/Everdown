@@ -65,6 +65,7 @@
             <div class="aura"></div>
             <div id="stage-inner"></div>
             <div id="fx-layer"></div>
+            <canvas id="fx-canvas"></canvas>
             <div id="floaters"></div>
           </div>
           <div class="card" id="skillbar-card"></div>
@@ -109,6 +110,19 @@
     <h2>🌙 离线收益</h2>
     <div id="offline-body"></div>
     <button class="btn big" data-cmd="dismiss_offline">收下,继续冒险</button>
+  </div>
+</div>
+
+<!-- 手动模式换装对比(自动换装关闭时,更强掉落弹此框) -->
+<div class="overlay" id="swap-modal">
+  <div class="modal wide">
+    <h2 id="swap-title">⚔ 发现更强的装备</h2>
+    <p class="dim" id="swap-sub">自动换装已关闭 — 要换上新的吗?</p>
+    <div id="swap-body"></div>
+    <div class="swap-ops">
+      <button class="btn big sell-on" data-cmd="swap_take">✦ 换上新的</button>
+      <button class="btn big" data-cmd="swap_keep">保留旧的</button>
+    </div>
   </div>
 </div>
 

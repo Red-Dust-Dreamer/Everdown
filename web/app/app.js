@@ -39,6 +39,11 @@ function pctTxt(v) {
   v = Number(v) || 0;
   return (v >= 100 ? v.toFixed(0) : v.toFixed(1).replace(/\.0$/, "")) + "%";
 }
+/** 定点加成值显示:最多 2 位小数去尾零(词缀求和的浮点残差不上屏) */
+function numTxt(v, digits) {
+  digits = digits || 2;
+  return String(Math.round(v * Math.pow(10, digits)) / Math.pow(10, digits));
+}
 function toast(text) {
   const el = $("toast");
   el.textContent = text;
@@ -141,40 +146,78 @@ async function main() {
 }
 
 // ---------------------------------------------------------------- 音效
-// 普攻命中音(CC0,出处见 sfx/README.txt);与 src/web 宿主同款行为:
-// 解码一次缓存播放,音调微变,70ms 节流,开关存 localStorage(abyss_sfx)。
+// 战斗音效(CC0,出处见 sfx/README.txt):普攻命中 + 技能按类型分音。
+// WebAudio 解码一次缓存播放,音调微变防重复感,按 key 节流;
+// 开关存 localStorage(abyss_sfx),与 src/web 宿主行为一致。
 const SFX_KEY = "abyss_sfx";
+const SFX_STYLE = {
+  "attack-hit":    { gain: 0.5,  lo: 0.92, hi: 1.08, ms: 70 },
+  "skill-heavy":   { gain: 0.55, lo: 0.97, hi: 1.03, ms: 90 },
+  "skill-magic":   { gain: 0.5,  lo: 0.94, hi: 1.06, ms: 90 },
+  "skill-arrow":   { gain: 0.5,  lo: 0.94, hi: 1.06, ms: 90 },
+  "skill-burst":   { gain: 0.55, lo: 0.96, hi: 1.04, ms: 90 },
+  "skill-buff":    { gain: 0.55, lo: 0.98, hi: 1.02, ms: 120 },
+  "skill-shield":  { gain: 0.55, lo: 0.98, hi: 1.02, ms: 120 },
+  "skill-execute": { gain: 0.6,  lo: 1.0,  hi: 1.0,  ms: 150 },
+};
 let sfxOn = localStorage.getItem(SFX_KEY) !== "0";
-let sfxCtx = null, attackBuf = null, sfxLastMs = 0;
+let sfxCtx = null;
+const sfxBufs = {}, sfxLastMs = {}, sfxPlays = {};
+// 技能 id → 类型(app.js 无核心数据表,用例外表;伤害类按职业前缀)
+const SKILL_KIND = {
+  w_warcry: "buff", w_fury: "buff", w_roar: "buff",
+  m_surge: "buff", r_hawk: "buff", r_dash: "buff", r_god: "buff",
+  w_wall: "shield", m_shield: "shield",
+  w_exec: "execute",
+  r_volley: "multi", r_rain: "multi", r_deadly: "multi",
+};
+function skillSfxKey(id) {
+  const k = SKILL_KIND[id];
+  if (k === "buff") return "skill-buff";
+  if (k === "shield") return "skill-shield";
+  if (k === "execute") return "skill-execute";
+  if (k === "multi") return "skill-burst";
+  if (id[0] === "w") return "skill-heavy";
+  if (id[0] === "r") return "skill-arrow";
+  return "skill-magic";
+}
 
-/** 页面加载即建 context 并预解码(suspended 态可解码),首次交互只需 resume */
+/** 页面加载即建 context 并预解码全部音效(suspended 态可解码),首次交互只需 resume */
 function initSfx() {
   if (sfxCtx || !sfxOn) return;
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) return;
   sfxCtx = new AC();
-  fetch("sfx/attack-hit.wav")
-    .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error("sfx " + r.status))))
-    .then(b => sfxCtx.decodeAudioData(b))
-    .then(buf => { attackBuf = buf; })
-    .catch(() => {});   // 音效缺失静默降级
+  for (const key of Object.keys(SFX_STYLE)) {
+    fetch("sfx/" + key + ".wav")
+      .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error("sfx " + r.status))))
+      .then(b => sfxCtx.decodeAudioData(b))
+      .then(buf => { sfxBufs[key] = buf; })
+      .catch(() => {});   // 单个音效缺失静默降级
+  }
 }
 function ensureSfx() {
   if (sfxOn && sfxCtx && sfxCtx.state === "suspended") sfxCtx.resume();
 }
-function playAttackHit() {
-  if (!sfxOn || !attackBuf || !sfxCtx || sfxCtx.state !== "running") return;
+function playSfx(key) {
+  if (!sfxOn) return;
+  const buf = sfxBufs[key];
+  if (!buf || !sfxCtx || sfxCtx.state !== "running") return;
+  const st = SFX_STYLE[key];
   const now = performance.now();
-  if (now - sfxLastMs < 70) return;
-  sfxLastMs = now;
+  if (now - (sfxLastMs[key] || 0) < st.ms) return;
+  sfxLastMs[key] = now;
   const src = sfxCtx.createBufferSource();
-  src.buffer = attackBuf;
-  src.playbackRate.value = 0.92 + Math.random() * 0.16;
+  src.buffer = buf;
+  src.playbackRate.value = st.lo + Math.random() * (st.hi - st.lo);
   const gain = sfxCtx.createGain();
-  gain.gain.value = 0.5;
+  gain.gain.value = st.gain;
   src.connect(gain).connect(sfxCtx.destination);
   src.start();
+  sfxPlays[key] = (sfxPlays[key] || 0) + 1;
 }
+function playAttackHit() { playSfx("attack-hit"); }
+function playSkillCast(id) { playSfx(skillSfxKey(id)); }
 initSfx();
 // 自动播放策略:首次交互解锁(选职业点击必先于战斗)
 ["pointerdown", "keydown"].forEach(ev =>
@@ -199,6 +242,8 @@ function drainEvents() {
     } else if (ev.kind === "anim") {
       if (ev.text === "mob_flash") flashMon();
       else if (ev.text === "hero_attack") { bumpHero(); playAttackHit(); }
+      else if (ev.text.slice(0, 5) === "cast:") playSkillCast(ev.text.slice(5));
+      // skill_hit:技能伤害命中,普攻音不叠放(mob_flash 已覆盖闪白)
     }
   }
   if (logs.length) {
@@ -327,10 +372,17 @@ function renderBattle(st) {
     const tag = mon.boss ? '<span class="tag boss">头目</span>'
               : mon.elite ? '<span class="tag elite">精英</span>' : "";
     const hpPctM = Math.max(0, mon.hp / mon.max_hp * 100);
+    // 立绘:mon/<id>.png(头目用 -boss 变体),加载失败回退 ASCII 小画(CSS 控制)
+    const size = mon.boss ? " boss" : mon.elite ? " elite" : "";
+    const artHtml = mon.id
+      ? '<img src="mon/' + mon.id + (mon.boss ? "-boss" : "") + '.png" alt="' +
+        esc(mon.name) + '" draggable="false" onerror="this.closest(\'.mon-art\').classList.add(\'imgfail\')">' +
+        '<pre class="ascii">' + esc(mon.art.join("\n")) + "</pre>"
+      : '<pre class="ascii">' + esc(mon.art.join("\n")) + "</pre>";
     inner =
       '<div class="mon-name c-' + mon.color + '">' + esc(mon.name) +
         tag + '<span class="tier">T' + mon.tier + "</span></div>" +
-      '<div class="mon-art">' + esc(mon.art.join("\n")) + "</div>" +
+      '<div class="mon-art' + (mon.id ? " spr" : "") + size + '">' + artHtml + "</div>" +
       '<div style="width:320px"><div class="bar hp lg"><div class="fill" style="width:' +
         hpPctM + '%"></div><div class="num">' + fmt(Math.max(0, mon.hp)) + " / " +
         fmt(mon.max_hp) + "</div></div></div>";
@@ -416,7 +468,7 @@ function renderHeroPage(st) {
       kv("金币加成", pctTxt(h.goldfind)) + kv("闪避", pctTxt(h.dodge)) +
       kv("无视防御", pctTxt(h.armor_pierce)) + kv("技能伤害", "+" + pctTxt(h.skill_dmg)) +
       kv("冷却缩减", pctTxt(h.cd_reduce)) + kv("经验加成", "+" + pctTxt(h.xp_pct)) +
-      kv("全技能等级", "+" + h.skill_lv) + kv("理论 DPS", fmt(h.dps)) +
+      kv("全技能等级", "+" + numTxt(h.skill_lv)) + kv("理论 DPS", fmt(h.dps)) +
     "</div>" + slots;
 }
 
@@ -512,24 +564,33 @@ function renderSkills(st) {
     '<div class="lo-col"><div class="t">被动技能</div><div class="lo-slots">' + loPas +
     "</div></div></div>";
 
-  const pool = (list, which) => list.map(s =>
-    '<div class="sk-card' + (s.unlocked ? "" : " locked") + '">' +
+  // 装备/遗物等级加成叠在基础等级上生效(有效等级可超上限);金币升级上限只看基础等级。
+  // 主标签展示基础等级,装备加成作后缀。桥不透出 BAL,常量与核心 skill_lv_max 一致。
+  const SKILL_LV_MAX = 10;
+  const pool = (list, which) => list.map(s => {
+    const maxed = s.lv >= SKILL_LV_MAX;
+    const lvTxt = "Lv." + s.lv + (maxed ? " 满" : "") +
+      (s.eff > s.lv ? "(装+" + (s.eff - s.lv) + ")" : "");
+    return '<div class="sk-card' + (s.unlocked ? "" : " locked") + '">' +
     '<div class="sk-ic">' + s.icon + "</div>" +
     '<div class="sk-body"><div class="nm">' + esc(s.name) +
-      '<span class="lv">Lv.' + s.eff + (s.eff > s.lv ? "(含装备+" + (s.eff - s.lv) + ")" : "") +
-      "</span>" + (s.equipped ? '<span class="eq">✓已装配</span>' : "") + "</div>" +
+      '<span class="lv">' + lvTxt + "</span>" +
+      (s.equipped ? '<span class="eq">✓已装配</span>' : "") + "</div>" +
       '<div class="ds">' + esc(s.desc) + "</div>" +
       '<div class="cd">解锁 Lv.' + s.unlock + (s.cd ? " · 冷却 " + s.cd + "s" : "") +
       (s.unlocked ? "" : "(未解锁)") + "</div></div>" +
     (s.unlocked
-      ? '<div class="sk-ops"><div class="cost">升级 ◈' + fmt(s.cost) + "</div>" +
-        '<button class="btn mini" data-cmd="skill_up" data-a="' + s.id + '">升级</button>' +
+      ? '<div class="sk-ops">' +
+        (maxed
+          ? '<div class="cost" style="color:var(--dim)">基础已满 Lv.' + SKILL_LV_MAX + "·装备加成仍生效</div>"
+          : '<div class="cost">升级 ◈' + fmt(s.cost) + "</div>" +
+            '<button class="btn mini" data-cmd="skill_up" data-a="' + s.id + '">升级</button>') +
         (s.equipped
           ? '<button class="btn mini" data-cmd="unequip_skill" data-a="' + s.id + '">卸下</button>'
           : '<button class="btn mini" data-cmd="equip_skill" data-a="' + s.id +
             '" data-b="' + which + '">装配</button>') + "</div>"
-      : "") + "</div>"
-  ).join("");
+      : "") + "</div>";
+  }).join("");
   $("skill-pools").innerHTML =
     '<div class="skill-pools"><div class="pool"><h4>✦ 主动技能池</h4>' +
     pool(st.skills.active, "active") + "</div>" +

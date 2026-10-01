@@ -36,7 +36,7 @@ export function towerMonster(floor: number, rng: PyRandom): Monster {
     color = "bright_yellow";
     name = `塔·${name}`;
   }
-  return new Monster(name, ART[key], color, hp, atk, dfn, interval, boss, false, floor, null);
+  return new Monster(name, ART[key], color, hp, atk, dfn, interval, boss, false, floor, null, key);
 }
 
 /** 1-10关 → tier 10, 11-20关 → tier 20 ... */
@@ -50,12 +50,12 @@ export function towerGold(floor: number): number {
   return mobGold(t) * TOWER.drop_gold_mult;
 }
 
-/** 塔掉落:必掉 1 件遗物,头目层保底稀有;loadout 用于 skill_lv_r 绑定 */
-export function rollTowerDrop(floor: number, rng: PyRandom, _luck = 0, loadout?: string[]): Relic {
+/** 塔掉落:必掉 1 件遗物,头目层保底稀有;luck 影响稀有度,loadout 用于 skill_lv_r 绑定 */
+export function rollTowerDrop(floor: number, rng: PyRandom, luck = 0, loadout?: string[]): Relic {
   const boss = floor % TOWER.boss_every === 0;
   const minIdx = boss ? 2 : 0;
   const tier = towerRelicTier(floor);
-  return rollRelic(tier, rng, minIdx, loadout);
+  return rollRelic(tier, rng, minIdx, loadout, luck);
 }
 
 /** 本地日期串(与 Python datetime.fromtimestamp().date() 同口径) */

@@ -148,6 +148,7 @@ def atk_now(g):
 # ---------------------------------------------------------------- 主动施放
 def cast_active(g, sdef, mon):
     """施放主动技能(mon 为 None 时仅执行增益/回复类)。"""
+    g.emit("anim", "cast:" + sdef["id"])
     lv = eff_lv(g, sdef["id"])
     kind = sdef["kind"]
     if kind in ("damage", "multi"):
@@ -168,7 +169,6 @@ def cast_active(g, sdef, mon):
             mon.marked_until = g.time + sdef["mark_dur"]
     elif kind == "buff":
         add_buff(g, sdef["stat"], skill_val(sdef, lv), sdef["dur"])
-        g.emit("anim", "hero_attack")
         g.log("%s %s!" % (sdef["icon"], sdef["name"]), sdef["color"])
     elif kind == "heal":
         heal = g.hero["max_hp"] * skill_val(sdef, lv) / 100.0
@@ -204,7 +204,7 @@ def _skill_hit(g, mon, sdef, pct):
         g.stats["crit_hits"] = g.stats.get("crit_hits", 0) + 1
         _on_crit(g)
     mon.hp -= raw
-    g.emit("anim", "hero_attack")
+    g.emit("anim", "skill_hit")  # 与普攻 hero_attack 区分:宿主可分别配特效/音效
     g.emit("anim", "mob_flash")
     if crit:
         g.add_floater("%s 暴击 -%s" % (sdef["icon"], fmt(raw)), "bright_yellow")

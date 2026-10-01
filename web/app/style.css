@@ -120,6 +120,18 @@ body{
   transition:transform .08s}
 .mon-art.flash{filter:brightness(2.2)}
 #stage.bump-mon .mon-art{transform:translateX(-6px)}
+/* 怪物立绘(CC0 像素图,mon/<id>.png):默认显示图,失败回退 ASCII 小画 */
+.mon-art.spr{white-space:normal;font-size:0}
+.mon-art.spr img{image-rendering:pixelated;width:112px;filter:drop-shadow(0 6px 10px rgba(0,0,0,.55))}
+.mon-art.spr.elite img{width:132px}
+.mon-art.spr.boss img{width:160px;filter:drop-shadow(0 0 18px rgba(255,190,60,.35)) drop-shadow(0 6px 10px rgba(0,0,0,.55))}
+.mon-art.spr .ascii{display:none;margin:0;white-space:pre}
+.mon-art.spr.imgfail img{display:none}
+.mon-art.spr.imgfail .ascii{display:block}
+@media (prefers-reduced-motion:no-preference){
+  .mon-art.spr img{animation:mon-idle 2.4s ease-in-out infinite}
+  @keyframes mon-idle{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+}
 .respawn{color:var(--dim);font-size:14px;font-weight:700;padding:30px 0}
 .bar{height:16px;border-radius:8px;background:#191926;border:1px solid var(--line2);
   overflow:hidden;position:relative;min-width:120px}
@@ -345,4 +357,51 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
   #col-hero{width:220px} #col-right{width:230px}
   #nav{width:64px} .nav-item span:not(.ic){display:none}
   .nav-item{justify-content:center} .nav-item .kbd{display:none}
+}
+
+/* ================================================= 手机端(≤768px)流内底部导航
+   导航在文档流底部(非 fixed),滚动发生在 #content 内部——导航天然占位,
+   物理上不可能遮挡内容;不依赖留白校准/safe-area 估算。与 src/web 同方案。 */
+@media (max-width:768px){
+  @supports (height:100dvh){ html,body{height:100dvh} }
+  #main{flex-direction:column}
+  #nav{order:2;width:auto;flex:none;flex-direction:row;gap:0;
+    padding:4px 4px calc(4px + env(safe-area-inset-bottom));
+    border-right:none;border-top:1px solid var(--line);overflow-x:auto;
+    overscroll-behavior:contain}
+  .nav-item{flex:1 1 0;min-width:46px;flex-direction:column;flex-wrap:nowrap;
+    gap:2px;padding:5px 2px;font-size:10px;line-height:1.2;justify-content:center}
+  .nav-item .ic{width:auto;font-size:18px;line-height:1.1}
+  .nav-item .kbd{display:none}
+  .nav-item.on{box-shadow:inset 0 3px 0 var(--red)}
+  #content{order:1;flex:1;min-height:0;overflow-y:auto;
+    -webkit-overflow-scrolling:touch;padding:10px 10px 16px}
+  .page{min-height:0}
+  .card.grow{overflow:visible;flex:none}
+  #topbar{gap:8px;padding:6px 10px;flex-wrap:nowrap;overflow:hidden;
+    padding-top:max(6px, env(safe-area-inset-top))}
+  .logo{display:none}
+  .zone-chip{font-size:12px;padding:3px 9px;flex:1 1 auto;min-width:0;overflow:hidden}
+  .res{font-size:12.5px;flex:none}
+  .res-time{display:none}
+  #battle-top{flex-direction:column}
+  #stage-wrap{order:1}
+  #col-hero{order:2;width:auto}
+  #col-right{order:3;width:auto}
+  #stage{min-height:34vh}
+  #log-body{max-height:170px;overflow-y:auto}
+  .bag-grid{grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:7px}
+  .skill-pools{grid-template-columns:1fr}
+  .pool{overflow:visible}
+  .stat-grid.wide{grid-template-columns:repeat(auto-fill,minmax(126px,1fr))}
+  .slot-card{flex-direction:column;gap:8px}
+  .slot-l{width:auto;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+  .slot-r{flex-direction:row;flex-wrap:wrap}
+  .slot-r .btn{flex:1;min-height:42px}
+  .sk-ops{flex-direction:row;align-items:center}
+  .item .ops .btn{min-height:40px}
+  .cls-grid{grid-template-columns:1fr}
+  .cls-card{flex-direction:row;text-align:left;justify-content:flex-start;gap:14px;padding:14px}
+  .cls-card .ds{text-align:left}
+  #toast{bottom:calc(64px + env(safe-area-inset-bottom))}
 }

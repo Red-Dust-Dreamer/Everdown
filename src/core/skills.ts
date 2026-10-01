@@ -142,6 +142,7 @@ export function castActive(g: Game, sdef: ActiveSkill, mon: MonLike & {
   def_: number; atkDownPct: number; atkDownUntil: number;
   defDownPct: number; defDownUntil: number; stunUntil: number;
 }): void {
+  g.emit("anim", "cast:" + sdef.id);
   const lv = effLv(g, sdef.id);
   const kind = sdef.kind;
   if (kind === "damage" || kind === "multi") {
@@ -165,7 +166,6 @@ export function castActive(g: Game, sdef: ActiveSkill, mon: MonLike & {
     }
   } else if (kind === "buff") {
     addBuff(g, sdef.stat!, skillVal(sdef, lv), sdef.dur!);
-    g.emit("anim", "hero_attack");
     g.log(`${sdef.icon} ${sdef.name}!`, sdef.color);
   } else if (kind === "heal") {
     const heal = g.hero.max_hp * skillVal(sdef, lv) / 100;
@@ -200,7 +200,7 @@ function skillHit(g: Game, mon: any, sdef: ActiveSkill, pct: number): number {
     onCrit(g);
   }
   mon.hp -= raw;
-  g.emit("anim", "hero_attack");
+  g.emit("anim", "skill_hit");   // 与普攻 hero_attack 区分:宿主可分别配特效/音效
   g.emit("anim", "mob_flash");
   if (crit) {
     g.addFloater(`${sdef.icon} 暴击 -${fmt(raw)}`, "bright_yellow");

@@ -19,8 +19,17 @@ import { PyRandom } from "./rng.ts";
 import * as systems from "./systems.ts";
 import * as S from "./skills.ts";
 
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 7;
 export const EVENT_CAP = 2000;
+
+/** 手动模式待确认换装:自动换装关闭时,更强掉落弹新旧对比由玩家定夺 */
+export interface PendingSwap {
+  kind: "item" | "relic";
+  slot?: string;         // item:装备部位键
+  item?: Item;           // item:新装备(已入背包,确认时按引用查找)
+  relicSlot?: number;    // relic:建议对比/替换的遗物槽
+  newRelic?: Relic;      // relic:新遗物(暂存,确认后入槽或入包)
+}
 const VIRTUAL_STATS = ["skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct",
   "crit_extra", "kill_heal", "deathward",
   "boss_dmg_r", "kill_haste"];
@@ -82,6 +91,8 @@ export class Game {
   view: any = null;          // 宿主挂载呈现层,核心不读写
   // ---- 遗物 & 塔 ----
   relics: (Relic | null)[] = [null, null, null, null];   // 4 槽
+  relicBag: Relic[] = [];    // 遗物背包(4 槽满时收纳,可扩容)
+  relicBagLv = 1;            // 背包容量等级(容量翻倍,封顶 BAL.relic_bag_cap)
   tower: TowerState = { keys: 3, max_floor: 0, last_refresh: null };
   towerFloorSel = 1;         // UI:当前选中要打的层
   inTower = false;           // 当前在塔战斗中
@@ -91,6 +102,7 @@ export class Game {
   emaKill = 0;
   lastDeathTime = -999;
   pendingOffline: systems.ResolveReport | null = null;
+  pendingSwap: PendingSwap | null = null;   // 手动模式换装对比(不序列化,存档时遗物兜底入包)
   autosaveAcc = 0;
   hero!: HeroStats;
 
@@ -282,7 +294,15 @@ export class Game {
       this.log(`背包已满,${item.display()} 自动出售 (+${fmt(price)})`, "bright_black");
       return;
     }
-    systems.autoEquipCheck(this, item);
+    if (this.settings.auto_equip) {
+      systems.autoEquipCheck(this, item);
+    } else if (!this.pendingSwap) {
+      // 手动模式:更强掉落弹新旧对比(已有待确认时不重复弹)
+      const cur = this.equip[item.slot];
+      if (!cur || item.score() > cur.score()) {
+        this.pendingSwap = { kind: "item", slot: item.slot, item };
+      }
+    }
     if (!Object.values(this.equip).includes(item)) {
       this.bag.unshift(item);
       this.log(`掉落 ${item.display()}${c(` Lv.${item.tier}`, "bright_black")}`,
@@ -567,7 +587,8 @@ export class Game {
     }
   }
 
-  /** 遗物:优先装空槽,满了自动替换效果最少的 */
+  /** 遗物:优先装空槽;满槽时若强于效果最少的一件,弹新旧对比由玩家定夺;
+   *  否则存入背包(有空位时);背包也满才替换效果最少的 */
   addRelic(relic: Relic): void {
     for (let i = 0; i < this.relics.length; i++) {
       if (this.relics[i] === null) {
@@ -577,7 +598,7 @@ export class Game {
         return;
       }
     }
-    // 满槽:自动替换效果最少的
+    // 满槽:找效果最少的一件(对比与兜底替换共用)
     let worstI = 0;
     let worstN = 99;
     for (let i = 0; i < this.relics.length; i++) {
@@ -587,17 +608,118 @@ export class Game {
         worstI = i;
       }
     }
+    if (!this.pendingSwap && relic.effects.length > worstN) {
+      this.pendingSwap = { kind: "relic", relicSlot: worstI, newRelic: relic };
+      return;
+    }
+    if (this.relicBag.length < this.relicBagCap()) {
+      this.relicBag.push(relic);
+      this.log(`获得遗物 ${relic.display()}(存入背包 ${this.relicBag.length}/${this.relicBagCap()})`,
+        "bright_magenta");
+      return;
+    }
+    // 背包也满:自动替换效果最少的(兜底,不丢新遗物)
     const old = this.relics[worstI]!;
     this.relics[worstI] = relic;
     this.recalcHero();
     this.log(`遗物 ${relic.display()} 替换 ${old.display()}`, "bright_magenta");
   }
 
+  /** 处理换装对比弹窗的选择(take=true 换上新的,false 保留旧的) */
+  resolveSwap(take: boolean): void {
+    const p = this.pendingSwap;
+    if (!p) return;
+    this.pendingSwap = null;
+    if (p.kind === "item") {
+      if (take) {
+        if (!this.bag.includes(p.item!)) { this.toast("新装备已不在背包"); return; }
+        this.equipItem(p.item!);
+      }
+      return;   // 保留:新装备留在背包
+    }
+    if (take) {
+      if (this.relicBag.length >= this.relicBagCap()) {
+        this.toast("遗物背包已满,无法替换(可先扩容)");
+        return;
+      }
+      const old = this.relics[p.relicSlot!];
+      this.relics[p.relicSlot!] = p.newRelic!;
+      if (old) this.relicBag.push(old);
+      this.recalcHero();
+      this.log(old
+        ? `遗物 ${p.newRelic!.display()} 替换 ${old.display()}(旧件存入背包)`
+        : `遗物 ${p.newRelic!.display()} 装入槽${(p.relicSlot ?? 0) + 1}`, "bright_magenta");
+    } else if (this.relicBag.length < this.relicBagCap()) {
+      this.relicBag.push(p.newRelic!);
+      this.log(`遗物 ${p.newRelic!.display()} 存入背包 ${this.relicBag.length}/${this.relicBagCap()}`,
+        "bright_magenta");
+    } else {
+      // 保留但背包满:兜底替换效果最少的一件
+      let worstI = 0;
+      let worstN = 99;
+      for (let i = 0; i < this.relics.length; i++) {
+        const r = this.relics[i];
+        if (r && r.effects.length < worstN) { worstN = r.effects.length; worstI = i; }
+      }
+      const old = this.relics[worstI]!;
+      this.relics[worstI] = p.newRelic!;
+      this.recalcHero();
+      this.log(`遗物背包已满:${p.newRelic!.display()} 替换 ${old.display()}`, "bright_magenta");
+    }
+  }
+
+  /** 遗物背包容量(等级翻倍,封顶 relic_bag_cap):Lv1=40 → 80 → 160 → 200 */
+  relicBagCap(): number {
+    return Math.min(BAL.relic_bag_base * 2 ** (this.relicBagLv - 1), BAL.relic_bag_cap);
+  }
+
+  /** 下一级扩容费用;已满级返回 null(1w/5w/25w,每级 ×5) */
+  relicBagCost(): number | null {
+    if (this.relicBagCap() >= BAL.relic_bag_cap) return null;
+    return Math.trunc(BAL.relic_bag_cost0 * BAL.relic_bag_cost_k ** (this.relicBagLv - 1));
+  }
+
+  upgradeRelicBag(): void {
+    const cost = this.relicBagCost();
+    if (cost === null) {
+      this.toast(`遗物背包已满级(${BAL.relic_bag_cap} 格)`);
+      return;
+    }
+    if (this.gold < cost) {
+      this.toast(`金币不足:扩容需 ${fmt(cost)}`);
+      return;
+    }
+    this.gold -= cost;
+    this.relicBagLv++;
+    this.log(`🎒 遗物背包扩容:${this.relicBagCap()} 格( Lv.${this.relicBagLv})`, "bright_cyan");
+  }
+
+  /** 从背包装备遗物到空槽 */
+  equipRelicFromBag(idx: number): void {
+    const r = this.relicBag[idx];
+    if (!r) return;
+    const i = this.relics.indexOf(null);
+    if (i < 0) {
+      this.toast("遗物槽已满,请先卸下");
+      return;
+    }
+    this.relicBag.splice(idx, 1);
+    this.relics[i] = r;
+    this.recalcHero();
+    this.log(`遗物 ${r.display()} 从背包装入槽${i + 1}`, "bright_magenta");
+  }
+
   unequipRelic(idx: number): void {
     if (idx >= 0 && idx < 4 && this.relics[idx]) {
+      if (this.relicBag.length >= this.relicBagCap()) {
+        this.toast("遗物背包已满,无法卸下(可先扩容)");
+        return;
+      }
+      const r = this.relics[idx]!;
       this.relics[idx] = null;
+      this.relicBag.push(r);
       this.recalcHero();
-      this.toast(`卸下遗物${idx + 1}`);
+      this.toast(`已卸下并存入背包(${this.relicBag.length}/${this.relicBagCap()})`);
     }
   }
 
@@ -685,7 +807,7 @@ export class Game {
   // ================================================================ 存档
   toDict(): Record<string, any> {
     return {
-      version: SAVE_VERSION,
+      version: SAVE_VERSION, gear_rules_21: true,
       seed: this.seed,
       time: this.time, playtime: this.playtime,
       gold: this.gold, stones: this.stones,
@@ -705,6 +827,16 @@ export class Game {
       quest_daily_count: this.questDailyCount,
       quest_daily_date: this.questDailyDate,
       relics: this.relics.map(r => r ? r.toDict() : null),
+      // pendingSwap 不序列化;待确认的新遗物并入存档背包,避免关页丢失
+      relic_bag: (() => {
+        const list = [...this.relicBag];
+        const p = this.pendingSwap;
+        if (p?.kind === "relic" && p.newRelic && list.length < this.relicBagCap()) {
+          list.push(p.newRelic);
+        }
+        return list.map(r => r.toDict());
+      })(),
+      relic_bag_lv: this.relicBagLv,
       tower: this.tower,
       hero_hp: this.hero.hp,
       ema_kill: this.emaKill,
@@ -742,9 +874,23 @@ export class Game {
     Object.assign(g.stats, d.stats ?? {});
     Object.assign(g.settings, d.settings ?? {});
     g.statMods = d.stat_mods ?? [];
-    g.relics = (d.relics ?? [null, null, null, null])
-      .map((r: any) => r ? Relic.fromDict(r) : null);
-    g.tower = d.tower ?? { keys: 3, max_floor: 0, last_refresh: null };
+    // 防御:损坏的遗物条目跳过(槽位置空),坏 tower 字段回默认 — 与 Python 侧同口径,
+    // 结构性损坏不再让 fromDict 在深处抛 TypeError
+    const relicOrNull = (r: any): Relic | null => {
+      if (!r || typeof r !== "object" || !Array.isArray(r.effects)) return null;
+      try { return Relic.fromDict(r); } catch { return null; }
+    };
+    g.relics = (Array.isArray(d.relics) ? d.relics : [null, null, null, null])
+      .slice(0, 4).map(relicOrNull);
+    while (g.relics.length < 4) g.relics.push(null);
+    g.relicBag = (Array.isArray(d.relic_bag) ? d.relic_bag : [])
+      .map(relicOrNull).filter((r): r is Relic => r !== null);
+    g.relicBagLv = d.relic_bag_lv ?? 1;
+    const tw = d.tower;
+    g.tower = (tw && typeof tw === "object" && typeof tw.keys === "number"
+      && typeof tw.max_floor === "number")
+      ? { keys: tw.keys, max_floor: tw.max_floor, last_refresh: tw.last_refresh ?? null }
+      : { keys: 3, max_floor: 0, last_refresh: null };
     g.quests = d.quests ?? g.quests;
     g.questDailyCount = d.quest_daily_count ?? 0;
     g.questDailyDate = d.quest_daily_date ?? "";
@@ -811,6 +957,23 @@ export function migrateSave(d: Record<string, any>): Record<string, any> {
     d.relics = [null, null, null, null];
     d.tower = { keys: 3, max_floor: 0, last_refresh: null };
     d.version = 5;
+  }
+  if (v < 6) {
+    // v5 → v6:遗物背包(收纳满槽掉落,容量可升级)
+    d.relic_bag = [];
+    d.relic_bag_lv = 1;
+    d.version = 6;
+    v = 6;
+  }
+  if (v < 7) {
+    d.version = 7;
+  }
+  // 装备规则 2.1(主属性候选表+词条数缩减):按标志位一次性清除旧装备,不保留。
+  // 不用版本号判断——HMR 热更的旧页面会以新版本号续存旧装备,标志位幂等兜底。
+  if (!d.gear_rules_21) {
+    d.equip = {};
+    d.bag = [];
+    d.gear_rules_21 = true;
   }
   return d;
 }

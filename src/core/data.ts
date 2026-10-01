@@ -8,10 +8,10 @@ export interface RarityDef {
 export const RARITIES: RarityDef[] = [
   { key: "common", name: "普通", color: "bright_black", affixes: 1, mainMul: 1.0, weight: 55.0 },
   { key: "fine", name: "精良", color: "green", affixes: 2, mainMul: 1.12, weight: 25.0 },
-  { key: "rare", name: "稀有", color: "bright_blue", affixes: 3, mainMul: 1.28, weight: 12.0 },
-  { key: "epic", name: "史诗", color: "bright_magenta", affixes: 4, mainMul: 1.48, weight: 5.5 },
-  { key: "legendary", name: "传说", color: "bright_yellow", affixes: 5, mainMul: 1.75, weight: 2.0 },
-  { key: "mythic", name: "神话", color: "bright_red", affixes: 6, mainMul: 2.1, weight: 0.5 },
+  { key: "rare", name: "稀有", color: "bright_blue", affixes: 2, mainMul: 1.28, weight: 12.0 },
+  { key: "epic", name: "史诗", color: "bright_magenta", affixes: 3, mainMul: 1.48, weight: 5.5 },
+  { key: "legendary", name: "传说", color: "bright_yellow", affixes: 3, mainMul: 1.75, weight: 2.0 },
+  { key: "mythic", name: "神话", color: "bright_red", affixes: 4, mainMul: 2.1, weight: 0.5 },
 ];
 export const RARITY_IDX: Record<string, number> =
   Object.fromEntries(RARITIES.map((r, i) => [r.key, i]));
@@ -31,19 +31,31 @@ export const STAT_NAMES: Record<string, string> = {
 
 // ---------------------------------------------------------------- 装备槽
 export interface SlotDef {
-  id: string; name: string; main: StatKey; mainBase: number; names: string[];
+  id: string; name: string; names: string[];
 }
 export const SLOTS: SlotDef[] = [
-  { id: "weapon", name: "武器", main: "atk", mainBase: 4.0, names: ["利刃", "战刃", "重锤", "长枪", "巨剑"] },
-  { id: "helmet", name: "头盔", main: "hp", mainBase: 30.0, names: ["头盔", "面甲", "兜帽", "战冠"] },
-  { id: "armor", name: "护甲", main: "def", mainBase: 3.0, names: ["胸甲", "鳞铠", "法袍", "重铠"] },
-  { id: "boots", name: "鞋子", main: "atk", mainBase: 2.5, names: ["战靴", "疾行鞋", "踏云靴", "铁蹄"] },
-  { id: "amulet", name: "项链", main: "crit_dmg", mainBase: 14.0, names: ["坠饰", "项链", "符珠", "龙牙链"] },
-  { id: "ring", name: "戒指", main: "crit", mainBase: 3.4, names: ["戒指", "指环", "印记", "魔戒"] },
+  { id: "weapon", name: "武器", names: ["利刃", "战刃", "重锤", "长枪", "巨剑"] },
+  { id: "helmet", name: "头盔", names: ["头盔", "面甲", "兜帽", "战冠"] },
+  { id: "armor", name: "护甲", names: ["胸甲", "鳞铠", "法袍", "重铠"] },
+  { id: "boots", name: "鞋子", names: ["战靴", "疾行鞋", "踏云靴", "铁蹄"] },
+  { id: "amulet", name: "项链", names: ["坠饰", "项链", "符珠", "龙牙链"] },
+  { id: "ring", name: "戒指", names: ["戒指", "指环", "印记", "魔戒"] },
 ];
 export const SLOT_NAMES: Record<string, string> = Object.fromEntries(SLOTS.map(s => [s.id, s.name]));
-export const SLOT_MAIN_K: Record<string, number> = {
-  weapon: 2.2, helmet: 14.0, armor: 1.4, boots: 1.4,
+/**
+ * 主属性候选表(数值体系 2.1):
+ * 武器/项链/戒指 = 攻击力(饰品约为武器的 55%);
+ * 头盔/护甲/鞋子 = 生命 或 防御 二选一(roll 时等概率)。
+ * 数值型主属性 = base + k × tier^item_main_p
+ */
+export interface MainRoll { stat: StatKey; base: number; k: number }
+export const MAIN_ROLLS: Record<string, MainRoll[]> = {
+  weapon: [{ stat: "atk", base: 4.0, k: 2.2 }],
+  helmet: [{ stat: "hp", base: 30.0, k: 14.0 }, { stat: "def", base: 3.0, k: 1.4 }],
+  armor: [{ stat: "hp", base: 30.0, k: 14.0 }, { stat: "def", base: 3.0, k: 1.4 }],
+  boots: [{ stat: "hp", base: 30.0, k: 14.0 }, { stat: "def", base: 3.0, k: 1.4 }],
+  amulet: [{ stat: "atk", base: 2.2, k: 1.8 }],
+  ring: [{ stat: "atk", base: 2.2, k: 1.8 }],
 };
 export const SLOT_INNATE: Record<string, [StatKey, number]> = {
   boots: ["haste", 2.5], amulet: ["crit_dmg", 6], ring: ["crit", 1.4],
@@ -309,6 +321,12 @@ export const BAL = {
   reforge_slots: [1, 1, 1, 2, 2, 3],
   luck_reforge_k: 300,
   bag_size: 40,
+  // 遗物背包:基础 40 格,升级容量翻倍(40→80→160→200 封顶);
+  // 费用 1w 升 2 级、5w 升 3 级,此后每级 ×5
+  relic_bag_base: 40,
+  relic_bag_cap: 200,
+  relic_bag_cost0: 10000,
+  relic_bag_cost_k: 5.0,
   quest_daily_limit: 10,      // 每日完成悬赏上限(本地 0 点重置)
 
   skill_cost0: 60.0, skill_cost_lv: 35.0, skill_cost_lv2: 6.0,

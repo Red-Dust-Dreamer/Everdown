@@ -4,7 +4,7 @@
  * 或自定义域名根路径),SHELL 相对路径按 SW 脚本所在 URL 解析。
  * 改动任何资源后 sw.js 字节变化即触发更新(bump VERSION 强制全刷)。
  */
-const VERSION = "v6";
+const VERSION = "v10";
 const CACHE = `abyss-idle-${VERSION}`;
 const SHELL = [
   "./",
@@ -14,6 +14,22 @@ const SHELL = [
   "./icons/apple-touch-icon.png",
   "./fonts/abyss-mono.woff2",
   "./sfx/attack-hit.wav",
+  "./sfx/skill-heavy.wav",
+  "./sfx/skill-magic.wav",
+  "./sfx/skill-arrow.wav",
+  "./sfx/skill-burst.wav",
+  "./sfx/skill-buff.wav",
+  "./sfx/skill-shield.wav",
+  "./sfx/skill-execute.wav",
+  "./mon/slime.png", "./mon/slime-boss.png",
+  "./mon/wolf.png", "./mon/wolf-boss.png",
+  "./mon/goblin.png", "./mon/goblin-boss.png",
+  "./mon/bat.png", "./mon/bat-boss.png",
+  "./mon/skeleton.png", "./mon/skeleton-boss.png",
+  "./mon/golem.png", "./mon/golem-boss.png",
+  "./mon/imp.png", "./mon/imp-boss.png",
+  "./mon/hound.png", "./mon/hound-boss.png",
+  "./mon/elemental.png", "./mon/elemental-boss.png",
 ];
 
 self.addEventListener("install", (e) => {

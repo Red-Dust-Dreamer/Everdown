@@ -89,17 +89,24 @@ export class Relic {
   }
 }
 
-/** 按塔层档位生成遗物(随机全部走传入 rng;loadout=当前装配主动技能列表,用于 skill_lv_r 绑定) */
-export function rollRelic(tier: number, rng: PyRandom, minIdx = 0, loadout?: string[]): Relic {
-  const rid = rollRarity(rng, 0, minIdx, 0);
+/** 按塔层档位生成遗物(随机全部走传入 rng;loadout=当前装配主动技能列表,用于 skill_lv_r 绑定;
+ *  luck 影响稀有度权重,与主线掉落同口径) */
+export function rollRelic(tier: number, rng: PyRandom, minIdx = 0, loadout?: string[], luck = 0): Relic {
+  const rid = rollRarity(rng, luck, minIdx, 0);
   const rar = RARITIES[rid];
   const nEff = RELIC_EFF_COUNT[rid];
   const pool = [...RELIC_EFFECTS];
   rng.shuffle(pool);
   const effects = pool.slice(0, nEff).map(e => ({ id: e.id, val: rng.uniform(e.lo, e.hi) }));
+  const slr = effects.findIndex(e => e.id === "skill_lv_r");
   let skillId: string | null = null;
-  if (effects.some(e => e.id === "skill_lv_r") && loadout && loadout.length) {
+  if (slr >= 0 && loadout && loadout.length) {
     skillId = rng.choice(loadout);
+  } else if (slr >= 0) {
+    // 主动装配为空:skill_lv_r 无技能可绑,换成洗牌后紧随的未用词条(池 9 条 > 最多 3 效果,必存在),
+    // 避免生成无声废词条
+    const alt = pool[nEff];
+    effects[slr] = { id: alt.id, val: rng.uniform(alt.lo, alt.hi) };
   }
   return new Relic(rar.key, tier, effects, null, rng, skillId);
 }

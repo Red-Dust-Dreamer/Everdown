@@ -66,6 +66,25 @@ body{
 .btn.mini{padding:3px 9px;font-size:12px}
 .btn.danger{color:#ff8a8a;border-color:#5c2a2a}
 .btn:disabled{opacity:.4;cursor:default}
+/* 掉落自动出售档位按钮:开=绿色高亮(与 .toggle.on 同色系),关=暗淡,状态一眼可辨 */
+.btn.sell-on{background:#1d3325;color:#6bff8f;border-color:#3a6a4a;font-weight:700}
+.btn.sell-on:hover{background:#25452f}
+.btn.sell-off{color:var(--dim);font-weight:700}
+
+/* 手动模式换装对比弹窗:左当前右新掉落,新列绿色描边 */
+.swap-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:14px 0 4px}
+.swap-col{background:#15152299;border:1px solid var(--line2);border-radius:10px;
+  padding:12px;text-align:left}
+.swap-col.new{border-color:#3a6a4a}
+.swap-col .sw-tag{font-size:11px;color:var(--dim);letter-spacing:3px;margin-bottom:6px}
+.swap-col.new .sw-tag{color:#6bff8f}
+.swap-col .nm{font-size:15px;font-weight:800;margin-bottom:4px}
+.sw-line{font-size:12px;color:var(--dim);margin-bottom:6px}
+.swap-col .af{font-size:12px;line-height:1.8}
+.sw-score{margin-top:8px;font-size:13px;color:var(--gold);font-weight:700}
+.sw-up{color:#6bff8f;font-weight:700}
+.swap-ops{display:flex;gap:10px;justify-content:center;margin-top:12px}
+@media (max-width:560px){.swap-grid{grid-template-columns:1fr}}
 
 /* ---------------- 主体 ---------------- */
 #main{flex:1;display:flex;min-height:0}
@@ -131,6 +150,18 @@ body{
   transition:transform .08s}
 .mon-art.flash{filter:brightness(2.2)}
 #stage.bump-mon .mon-art{transform:translateX(-6px)}
+/* 怪物立绘(CC0 像素图,mon/<id>.png):默认显示图,失败回退 ASCII 小画 */
+.mon-art.spr{white-space:normal;font-size:0}
+.mon-art.spr img{image-rendering:pixelated;width:112px;filter:drop-shadow(0 6px 10px rgba(0,0,0,.55))}
+.mon-art.spr.elite img{width:132px}
+.mon-art.spr.boss img{width:160px;filter:drop-shadow(0 0 18px rgba(255,190,60,.35)) drop-shadow(0 6px 10px rgba(0,0,0,.55))}
+.mon-art.spr .ascii{display:none;margin:0;white-space:pre}
+.mon-art.spr.imgfail img{display:none}
+.mon-art.spr.imgfail .ascii{display:block}
+@media (prefers-reduced-motion:no-preference){
+  .mon-art.spr img{animation:mon-idle 2.4s ease-in-out infinite}
+  @keyframes mon-idle{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
+}
 .respawn{color:var(--dim);font-size:14px;font-weight:700;padding:30px 0}
 .bar{height:16px;border-radius:8px;background:#191926;border:1px solid var(--line2);
   overflow:hidden;position:relative;min-width:120px}
@@ -234,6 +265,21 @@ body{
 @media (max-width:760px){.fx-slash{width:112px;height:112px}}
 @media (prefers-reduced-motion:reduce){#fx-layer{display:none}}
 
+/* ---------------- 技能特效(canvas-confetti 粒子层 + 氛围层) ---------------- */
+#fx-canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:2}
+/* 大招震屏 */
+#stage.shake{animation:stageShake .32s}
+@keyframes stageShake{0%,100%{transform:translate(0,0)}
+  20%{transform:translate(-5px,2px)}40%{transform:translate(4px,-2px)}
+  60%{transform:translate(-3px,1px)}80%{transform:translate(2px,-1px)}}
+/* 冰冻覆盖(寒冰箭/冰霜新星) */
+#stage.frost::after{content:"";position:absolute;inset:0;z-index:4;pointer-events:none;
+  border-radius:inherit;
+  background:radial-gradient(circle at 50% 40%,rgba(140,220,255,.20) 0%,rgba(90,170,255,.34) 75%);
+  animation:frostFade 1.25s ease-out forwards}
+@keyframes frostFade{0%{opacity:0}18%{opacity:1}100%{opacity:0}}
+@media (prefers-reduced-motion:reduce){#stage.shake{animation:none}}
+
 /* 英雄卡 */
 .hero-head{display:flex;align-items:center;gap:8px;margin-bottom:9px;font-weight:800}
 .hero-head .cls-ic{font-size:17px}
@@ -268,11 +314,12 @@ body{
   font-variant-numeric:tabular-nums;text-shadow:0 1px 3px #000}
 .skill .cdfill{position:absolute;left:0;right:0;bottom:0;background:rgba(90,223,255,.14)}
 
-/* 日志 */
+/* 日志:新条目追加在末尾,由 JS 贴底跟随(不用 flex-end,避免溢出滚动盲区) */
 #log-card{display:flex;flex-direction:column}
 #log-body{flex:1;min-height:0;overflow:hidden;font-size:12.5px;line-height:1.8;
-  font-variant-numeric:tabular-nums;display:flex;flex-direction:column;justify-content:flex-end}
-#log-body div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  font-variant-numeric:tabular-nums;display:flex;flex-direction:column}
+/* flex:none 防压缩:行数多时整列被 flex 收缩挤成细条(每行 ~3px),日志"卡死" */
+#log-body div{flex:none;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* 悬赏条(战斗页右栏) */
 .q-row{display:flex;flex-direction:column;gap:6px;padding:8px 10px;border-radius:8px;
@@ -445,10 +492,10 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
 /* ================================================= 手机端(≤768px) */
 @media (max-width:768px){
   body{font-size:14px}
-  /* 布局骨架:导航沉底(紧凑单行),内容区滚动 */
+  /* 布局骨架:导航在文档流底部(非 fixed)——滚动发生在 #content 内部,
+     导航天然占位,物理上不可能遮挡内容;不依赖留白校准/safe-area 估算 */
   #main{flex-direction:column}
-  #nav{position:fixed;left:0;right:0;bottom:0;z-index:30;width:auto;
-    flex-direction:row;gap:0;
+  #nav{order:2;width:auto;flex:none;flex-direction:row;gap:0;
     padding:4px 4px calc(4px + env(safe-area-inset-bottom));
     border-right:none;border-top:1px solid var(--line);
     background:linear-gradient(180deg,#12121e,#0e0e17);
@@ -459,8 +506,8 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
   .nav-item .tx{display:block;font-size:10px;line-height:1.2;white-space:nowrap}
   .nav-item .kbd{display:none}
   .nav-item.on{box-shadow:inset 0 3px 0 var(--red)}   /* 高亮条移到底部 */
-  #content{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;
-    padding:10px 10px calc(var(--nav-h) + env(safe-area-inset-bottom) + 18px)}
+  #content{order:1;flex:1;min-height:0;overflow-y:auto;
+    -webkit-overflow-scrolling:touch;padding:10px 10px 16px}
   .page{min-height:0}
   .card.grow{overflow:visible;flex:none}   /* 整页滚动,卡片不再内滚 */
 
@@ -485,8 +532,11 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
   #stage{min-height:34vh}
   #stage-track{order:0}
   .mon-art{font-size:17px}
+  .mon-art.spr img{width:88px}
+  .mon-art.spr.elite img{width:104px}
+  .mon-art.spr.boss img{width:128px}
   #log-card{order:3}
-  #log-body{max-height:170px;overflow-y:auto;justify-content:flex-start}
+  #log-body{max-height:170px;overflow-y:auto}
 
   /* 网格全部单列/双列化 */
   .bag-grid{grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:7px}
@@ -507,7 +557,7 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
   .modal{padding:18px 16px}
   .ach-row{flex-wrap:wrap}
   .set-row .lbl{min-width:100%}
-  #toast{bottom:calc(var(--nav-h) + env(safe-area-inset-bottom) + 14px)}
+  #toast{bottom:calc(64px + env(safe-area-inset-bottom))}
 }
 
 /* ================================================= 小屏(≤420px)微调 */

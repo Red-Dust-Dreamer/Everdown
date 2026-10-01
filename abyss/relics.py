@@ -73,19 +73,26 @@ class Relic:
                    skill_id=d.get("skill_id"))
 
 
-def roll_relic(tier, rng=None, min_idx=0, loadout=None):
-    """按塔层档位生成遗物;loadout=当前装配主动技能列表(用于 skill_lv_r 绑定)"""
+def roll_relic(tier, rng=None, min_idx=0, loadout=None, luck=0.0):
+    """按塔层档位生成遗物;loadout=当前装配主动技能列表(用于 skill_lv_r 绑定);
+    luck 影响稀有度权重(与主线掉落同口径)"""
     from .items import roll_rarity
     rng = rng or random
-    rid = roll_rarity(rng, 0, min_idx, 0)
+    rid = roll_rarity(rng, luck, min_idx, 0)
     rar = RARITIES[rid]
     n_eff = RELIC_EFF_COUNT[rid]
     pool = [e for e in RELIC_EFFECTS]
     rng.shuffle(pool)
     effects = [(e[0], rng.uniform(e[2], e[3])) for e in pool[:n_eff]]
     skill_id = None
-    if any(e[0] == "skill_lv_r" for e in effects) and loadout:
+    slr = next((i for i, e in enumerate(effects) if e[0] == "skill_lv_r"), -1)
+    if slr >= 0 and loadout:
         skill_id = rng.choice(loadout)
+    elif slr >= 0:
+        # 主动装配为空:skill_lv_r 无技能可绑,换成洗牌后紧随的未用词条(池 9 条 > 最多 3 效果,必存在),
+        # 避免生成无声废词条
+        alt = pool[n_eff]
+        effects[slr] = (alt[0], rng.uniform(alt[2], alt[3]))
     return Relic(rar[0], tier, effects, rng=rng, skill_id=skill_id)
 
 

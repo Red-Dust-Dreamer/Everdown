@@ -30,16 +30,18 @@ export class Monster implements S.MonLike {
   defDownUntil = 0;
   skill: MobSkill | null;
   skillTimer: number;
+  id: string;   // 怪物图鉴 id(供 Web 宿主映射立绘;不参与任何计算)
 
   constructor(name: string, art: string[], color: Color, hp: number, atk: number,
               def_: number, interval: number, boss: boolean, elite: boolean, tier: number,
-              skill: MobSkill | null) {
+              skill: MobSkill | null, id = "") {
     this.name = name; this.art = art; this.color = color;
     this.hp = this.maxHp = hp;
     this.atk = atk; this.def_ = def_; this.interval = interval;
     this.boss = boss; this.elite = elite; this.tier = tier;
     this.skill = skill;
     this.skillTimer = skill ? skill.cd * 0.5 : 0;  // 半 CD 后首放
+    this.id = id;
   }
   hpPct(): number { return this.maxHp ? this.hp / this.maxHp : 0; }
 }
@@ -97,7 +99,7 @@ export function spawnMonster(zone: number, stage: number, rng: PyRandom,
     atk *= BAL.elite_atk;
     color = "bright_green";
   }
-  return new Monster(name, ART[key], color, hp, atk, dfn, interval, boss, elite, tier, skill);
+  return new Monster(name, ART[key], color, hp, atk, dfn, interval, boss, elite, tier, skill, key);
 }
 
 /** 平滑减伤:atk²/(atk+def) */

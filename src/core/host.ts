@@ -25,6 +25,12 @@ export function handleKey(g: Game, key: string): KeyResult {
     g.pendingOffline = null;
     return true;
   }
+  if (g.pendingSwap) {
+    // 换装对比弹窗:E/Enter 换新,X 保留;其他键不穿透
+    if (key === "e" || key === "enter") g.resolveSwap(true);
+    else if (key === "x") g.resolveSwap(false);
+    return true;
+  }
   if (ui.help) {
     ui.help = false;
     return true;
@@ -136,21 +142,26 @@ export function handleKey(g: Game, key: string): KeyResult {
     else if (key === "n") ui.confirm_reset = false;
     else if (key === "y" && ui.confirm_reset) return "reset";
   } else if (tab === 7) {
-    // 塔:←→ 选层 / Enter 进塔 / ↑↓ 选遗物槽 / E 卸遗物
+    // 塔:←→ 选层 / Enter 进塔 / ↑↓ 选遗物槽或背包 / E 卸下·装备 / U 扩容背包
     const reach = g.tower.max_floor + 1;
+    const selTotal = 4 + Math.min(g.relicBag.length, 4);   // 可选:4 槽 + 背包前 4 件(与渲染一致)
     if (key === "left") {
       g.towerFloorSel = Math.max(1, g.towerFloorSel - 1);
     } else if (key === "right") {
       g.towerFloorSel = Math.min(reach, g.towerFloorSel + 1);
     } else if (key === "up") {
-      ui.tower_sel = ((ui.tower_sel ?? 0) + 3) % 4;
+      ui.tower_sel = ((ui.tower_sel ?? 0) - 1 + selTotal) % selTotal;
     } else if (key === "down") {
-      ui.tower_sel = ((ui.tower_sel ?? 0) + 1) % 4;
+      ui.tower_sel = ((ui.tower_sel ?? 0) + 1) % selTotal;
     } else if (key === "enter") {
       g.towerEnter(g.towerFloorSel);
       if (g.inTower) ui.tab = 0;   // 进塔成功:切回战斗页看战斗
     } else if (key === "e") {
-      g.unequipRelic(ui.tower_sel ?? 0);
+      const sel = ui.tower_sel ?? 0;
+      if (sel < 4) g.unequipRelic(sel);
+      else g.equipRelicFromBag(sel - 4);
+    } else if (key === "u") {
+      g.upgradeRelicBag();
     }
   }
   return true;
