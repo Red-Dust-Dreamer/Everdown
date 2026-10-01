@@ -124,7 +124,7 @@ export function handleKey(g: Game, key: string): KeyResult {
       g.toast(g.settings.auto_equip ? "自动换装:开" : "自动换装:关");
     } else if (key === "j") {
       const idx = g.settings.auto_sell_idx ?? -1;
-      g.settings.auto_sell_idx = (idx + 1) % 6 - 1;
+      g.settings.auto_sell_idx = (idx + 2) % 6 - 1;
       const names = ["关闭", "出售「普通」及以下", "出售「精良」及以下", "出售「稀有」及以下",
         "出售「史诗」及以下", "出售「传说」及以下"];
       g.toast("掉落自动出售:" + names[g.settings.auto_sell_idx + 1]);

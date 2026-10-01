@@ -235,7 +235,7 @@ def handle_key(g, key):
             g.toast("自动换装:开" if g.settings["auto_equip"] else "自动换装:关")
         elif key == "j":
             idx = g.settings.get("auto_sell_idx", -1)
-            g.settings["auto_sell_idx"] = (idx + 1) % 6 - 1
+            g.settings["auto_sell_idx"] = (idx + 2) % 6 - 1
             names = ["关闭", "出售「普通」及以下", "出售「精良」及以下", "出售「稀有」及以下",
                      "出售「史诗」及以下", "出售「传说」及以下"]
             g.toast("掉落自动出售:" + names[g.settings["auto_sell_idx"] + 1])

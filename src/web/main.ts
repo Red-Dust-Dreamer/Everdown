@@ -257,6 +257,12 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
       g.settings.auto_equip = !g.settings.auto_equip;
       g.toast(g.settings.auto_equip ? "自动换装:开" : "自动换装:关");
       break;
+    case "cycle_sell": {
+      const idx = g.settings.auto_sell_idx ?? -1;
+      g.settings.auto_sell_idx = (idx + 2) % 6 - 1;
+      g.toast("掉落自动出售:" + AUTO_SELL_NAMES[g.settings.auto_sell_idx + 1]);
+      break;
+    }
     case "auto_sell":
       g.settings.auto_sell_idx = Math.max(-1, Math.min(4, Number(a)));
       g.toast("掉落自动出售已更新");
@@ -638,16 +644,13 @@ const AUTO_SELL_NAMES = ["关闭", "出售「普通」及以下", "出售「精�
 function renderSettings(st: State): void {
   if (!st.class_id) { $("settings-panel").innerHTML = ""; return; }
   const autoSellIdx = Number(st.settings.auto_sell_idx ?? -1);
-  let opts = "";
-  for (let i = -1; i <= 4; i++)
-    opts += `<option value="${i}"${autoSellIdx === i ? " selected" : ""}>${AUTO_SELL_NAMES[i + 1]}</option>`;
   const s = st.stats;
   $("settings-panel").innerHTML =
     `<h3><span class="dot"></span>设置</h3>` +
     `<div class="set-row"><div class="lbl">自动换装<div class="d">新掉落评分高于当前 5% 时自动穿上</div></div>` +
       `<div class="toggle${st.settings.auto_equip ? " on" : ""}" data-cmd="auto_equip"></div></div>` +
     `<div class="set-row"><div class="lbl">掉落自动出售<div class="d">低稀有度装备掉落即折现</div></div>` +
-      `<select class="sel" data-sel="auto_sell">${opts}</select></div>` +
+      `<button class="btn" data-cmd="cycle_sell" style="min-width:130px;text-align:center">${AUTO_SELL_NAMES[autoSellIdx + 1]}</button></div>` +
     `<div class="set-row"><div class="lbl">战斗模式<div class="d">推进:击败敌人深入;挂机:停留指定层</div></div>` +
       `<button class="btn" data-cmd="mode">${st.mode === "push" ? "切换为挂机" : "切换为推进"}</button></div>` +
     (st.mode === "farm"
@@ -762,10 +765,7 @@ $("file-input").addEventListener("change", (e: Event) => {
   });
   input.value = "";
 });
-document.addEventListener("change", (e: Event) => {
-  const sel = (e.target as HTMLElement).closest<HTMLSelectElement>("[data-sel]");
-  if (sel) { doCmd("auto_sell", sel.value); renderNow(); }
-});
+
 function togglePause(): void {
   paused = !paused;
   document.body.classList.toggle("paused", paused);
@@ -781,6 +781,7 @@ document.addEventListener("keydown", (e: KeyboardEvent) => {
     if (item) item.click();
   } else if (e.key === "f" || e.key === "F") { doCmd("mode"); renderNow(); }
   else if (e.key === "b" || e.key === "B") { doCmd("speed"); renderNow(); }
+  else if (e.key === "j" || e.key === "J") { doCmd("cycle_sell"); renderNow(); }
   else if (e.key === "p" || e.key === "P") togglePause();
   else if (e.key === "s" || e.key === "S") localCmd("save");
 });
