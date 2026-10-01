@@ -26,8 +26,8 @@ def equip_skill_lv(g):
 
 
 def eff_lv(g, sid):
-    """技能有效等级 = 自身等级(默认1) + 装备加成"""
-    return max(1, g.skill_lv.get(sid, 1)) + equip_skill_lv(g)
+    """技能有效等级 = 自身等级(默认1) + 装备加成 + 遗物全技能等级"""
+    return max(1, g.skill_lv.get(sid, 1)) + equip_skill_lv(g)         + int(g.hero.get("all_skill_lv", 0))
 
 
 def skill_val(defn, lv):
@@ -124,6 +124,9 @@ def dmg_multipliers(g, mon):
         d = hook_def(g, "low_target_dmg")
         if d and mon.hp_pct() < 0.40:
             mult *= 1 + hook_val(g, "low_target_dmg") / 100.0
+    # 遗物:猎首(对头目/精英额外伤害)
+    if mon is not None and (mon.boss or mon.elite):
+        mult *= 1 + (g.hero.get("boss_dmg_r", 0)) / 100.0
     if g.hero.get("next_hit_bonus", 0) > 0:            # 连锁反应
         mult *= 1 + g.hero["next_hit_bonus"] / 100.0
         g.hero["next_hit_bonus"] = 0.0

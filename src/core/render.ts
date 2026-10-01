@@ -1,20 +1,21 @@
-/** 渲染层:100×30 固定画布,7 个标签页 + 弹窗(与 abyss/render.py 逐行对齐) */
+/** 渲染层:100×30 固定画布,8 个标签页 + 弹窗(与 abyss/render.py 逐行对齐) */
 import { c, pad, trunc, bar, fmt, fmtTime, dwidth } from "./ansi.ts";
 import type { Color } from "./ansi.ts";
 import { zoneTheme, tierOf, mobGold } from "./combat.ts";
 import {
   ACHIEVEMENTS, AFFIX_DEF, RARITIES, RARITY_IDX, SLOTS, SLOT_NAMES,
-  STAT_NAMES, BAL, CLASSES, ACTIVE_SKILLS, PASSIVE_SKILLS, ACTIVE_DEF, PASSIVE_DEF,
+  STAT_NAMES, BAL, CLASSES, ACTIVE_SKILLS, PASSIVE_SKILLS, ACTIVE_DEF, PASSIVE_DEF, TOWER,
 } from "./data.ts";
 import { achievementTiers, questDesc } from "./systems.ts";
 import { plusBonus } from "./items.ts";
 import * as S from "./skills.ts";
 import type { Game } from "./game.ts";
+import type { Relic } from "./relics.ts";
 
 export const W = 100, H = 30;
 const BODY_ROWS = H - 4;
 const CARD_W = 46;
-const TABS = ["战斗", "角色", "背包", "锻造", "技能", "悬赏·成就", "设置"];
+const TABS = ["战斗", "角色", "背包", "锻造", "技能", "悬赏·成就", "设置", "塔"];
 
 function hpCol(pct: number): Color {
   return pct > 0.5 ? "green" : pct > 0.25 ? "yellow" : "red";
@@ -70,13 +71,14 @@ function footer(g: Game): string {
 }
 
 const HINTS: Record<number, string> = {
-  0: "1-7 切页 │ F 模式 │ B 倍速 │ P 暂停 │ S 存档 │ H 帮助 │ Q 退出",
+  0: "1-8 切页 │ F 模式 │ B 倍速 │ P 暂停 │ S 存档 │ H 帮助 │ Q 退出",
   1: "↑↓ 选择部位 │ U 强化 │ R 重铸 │ E 卸下 │ H 帮助",
   2: "↑↓ 选择 │ E 装备 │ D 分解 │ X 出售 │ A 一键出售普通/精良 │ H 帮助",
   3: "↑↓ 选择 │ U 强化(+8%全属性) │ R 重铸(3石) │ H 帮助",
   4: "↑↓ 选择 │ ←→ 装配区/主动池/被动池 │ E 装配/卸下 │ U 升级 │ H 帮助",
   5: "↑↓ 查看 │ 悬赏完成自动领取并刷新 │ H 帮助",
   6: "T 自动换装 │ J 自动出售档次 │ F 推进/挂机 │ ←→ 挂机层位 │ S 存档 │ R 重置 │ Q 退出",
+  7: "←→ 选层 │ Enter 进塔 │ ↑↓ 选槽 │ E 卸遗物 │ H 帮助",
 };
 const hintsRow = (g: Game) => pad(" " + c(HINTS[g.view.ui.tab] ?? "", "bright_black"), W);
 
@@ -129,9 +131,11 @@ function card(g: Game, heroSide: boolean): string[] {
   const off = bumpOff(v.mobBump);
   const flash = v.mobFlash > 0;
   let tag = "";
-  if (m.boss) tag = c(" ♛ 头目", "bright_yellow", "", true);
+  if (m.boss) tag = c(g.inTower ? " ♛ 塔主" : " ♛ 头目", "bright_yellow", "", true);
   else if (m.elite) tag = c(" ★ 精英", "bright_green", "", true);
-  const name = c(` ${m.name} `, m.color, "", m.boss || flash) + tag;
+  let mname = m.name;
+  if (g.inTower && !mname.startsWith("塔·")) mname = "塔·" + mname;
+  const name = c(` ${mname} `, m.color, "", m.boss || flash) + tag;
   lines.push(" ".repeat(off) + pad(name, CARD_W - off, "center"));
   for (const artLine of m.art) {
     lines.push(" ".repeat(off) + pad(c(artLine, m.color, "", flash), CARD_W - off, "center"));
@@ -149,10 +153,17 @@ function card(g: Game, heroSide: boolean): string[] {
 function tabBattle(g: Game): string[] {
   const rows: string[] = [];
   const v = g.view;
-  const [theme, , , tcolor] = zoneTheme(g.zone);
-  const banner = c("═", tcolor).repeat(3)
-    + c(` 第 ${g.zone} 区 · 第 ${g.stage} 层 · ${theme} `, tcolor, "", true)
-    + c("═", tcolor).repeat(3);
+  let banner: string;
+  if (g.inTower) {
+    banner = c("═", "bright_magenta").repeat(3)
+      + c(` 深渊塔 · 第 ${g.towerFloorSel} 层 `, "bright_magenta", "", true)
+      + c("═", "bright_magenta").repeat(3);
+  } else {
+    const [theme, , , tcolor] = zoneTheme(g.zone);
+    banner = c("═", tcolor).repeat(3)
+      + c(` 第 ${g.zone} 区 · 第 ${g.stage} 层 · ${theme} `, tcolor, "", true)
+      + c("═", tcolor).repeat(3);
+  }
   rows.push(center(banner, W - 14) + spinner(g));
 
   const heroLines = card(g, true);
@@ -244,6 +255,16 @@ function tabChar(g: Game): string[] {
     const body = it ? it.display(36) : c("(空)", "bright_black");
     const line = ` ${marker} ${c(slotName, "bright_white")} ${body}`;
     left.push(pad(trunc(line, leftW), leftW));
+  }
+  left.push(" " + c("▌遗物", "bright_white", "", true)
+    + c(" 深渊塔掉落 · 自动装入空槽", "bright_black"));
+  for (let i = 0; i < 4; i++) {
+    const r: Relic | null = g.relics[i] ?? null;
+    const label = c(`遗物${i + 1}:`, "bright_black");
+    const body = r
+      ? r.display() + c(` · ${r.effects.length}效果`, "bright_black")
+      : c("(空)", "bright_black");
+    left.push(pad(trunc(`  ${label} ${body}`, leftW), leftW));
   }
   const h = g.hero;
   left.push(" " + c("▌属性总览", "bright_white", "", true));
@@ -588,6 +609,63 @@ function tabSettings(g: Game): string[] {
   return padRows(rows);
 }
 
+// ================================================================ 塔页
+function tabTower(g: Game): string[] {
+  const ui = g.view.ui;
+  const rows: string[] = [];
+  const reach = g.tower.max_floor + 1;          // 最高可挑战层
+  const selFloor = Math.max(1, Math.min(g.towerFloorSel, reach));
+  const slotSel = (ui.tower_sel ?? 0) % 4;
+
+  rows.push(" " + c("▌深渊塔", "bright_white", "", true)
+    + c(" │ ", "bright_black")
+    + c(`钥匙 ×${g.tower.keys}`, "bright_yellow", "", true)
+    + c(" │ ", "bright_black")
+    + c(`最高第${g.tower.max_floor}层`, "bright_cyan", "", true)
+    + c(" │ ", "bright_black")
+    + c("←→ 选层 Enter 进塔", "bright_black")
+    + (g.inTower ? c(` │ 挑战中·第${g.towerFloorSel}层`, "bright_magenta", "", true) : ""));
+  rows.push(" " + c("─".repeat(64), "bright_black"));
+  rows.push("");
+
+  const boss = selFloor % TOWER.boss_every === 0;
+  rows.push(" " + c("[←→] ", "bright_black")
+    + c(`第 ${selFloor} 层`, "bright_white", "", true)
+    + (boss ? c(" 头目!", "bright_yellow", "", true) : "")
+    + c(` (每${TOWER.boss_every}层一个头目)`, "bright_black")
+    + c("  │  ", "bright_black")
+    + c(`最高可达: 第${reach}层`, "bright_cyan", "", true));
+  rows.push(" " + c("第1层 ", "bright_black")
+    + bar(selFloor, reach, 44, "cyan")
+    + c(` 第${reach}层`, "bright_black")
+    + c(`  ▸ 选中 第${selFloor}层`, "bright_cyan", "", true));
+  rows.push("");
+
+  rows.push(" " + c("▌遗物", "bright_white", "", true)
+    + c(" 通关必得 · 自动装入空槽", "bright_black")
+    + c("  │  ↑↓ 选槽 E 卸下", "bright_black"));
+  for (let i = 0; i < 4; i++) {
+    const r: Relic | null = g.relics[i] ?? null;
+    const marker = i === slotSel ? c("▸", "bright_yellow") : " ";
+    const label = c(`遗物${i + 1}:`, "bright_black");
+    const body = r
+      ? r.display() + "  " + c(r.effectLines().map(ln => ln.trim()).join("  "), "white")
+      : c("(空)", "bright_black");
+    const line = ` ${marker} ${label} ${body}`;
+    rows.push(pad(trunc(line, W - 2), W - 2));
+  }
+
+  rows.push("");
+  rows.push(" " + c("▌规则", "bright_white", "", true));
+  rows.push("  " + c(`· 每日 0 点刷新钥匙(每天 ${TOWER.keys_per_day} 把,可囤积,上限 ${TOWER.keys_cap})`,
+    "bright_black"));
+  rows.push("  " + c("· 进塔消耗 1 把钥匙:胜利必得遗物与金币,战败仅耗钥匙", "bright_black"));
+  rows.push("  " + c(`· 首次到达新高度 +${TOWER.new_height_stones} 重铸石;头目层遗物保底稀有`,
+    "bright_black"));
+  while (rows.length < BODY_ROWS) rows.push(" ".repeat(W));
+  return padRows(rows);
+}
+
 // ================================================================ 弹窗
 function modalClass(): string[] {
   const rows: string[] = [];
@@ -628,11 +706,15 @@ function modalBox(title: string, lines: string[]): string[] {
 function modalHelp(): string[] {
   const lines = [
     c("全局按键", "bright_cyan"),
-    "  1-7  切换页面      P 暂停/继续      S 立即存档",
+    "  1-8  切换页面      P 暂停/继续      S 立即存档",
     "  H    帮助(本页)   Q 退出并自动存档",
     "",
     c("战斗页", "bright_cyan"),
     "  F    推进/挂机模式切换(挂机=停在当前层反复刷)",
+    "",
+    c("塔页(8)", "bright_cyan"),
+    "  ←→ 选层  Enter 进塔(消耗1把钥匙,每日0点刷新3把)",
+    "  ↑↓ 选遗物槽  E 卸下 · 通关必得遗物,战败仅耗钥匙",
     "",
     c("背包页", "bright_cyan"),
     "  E 装备选中物品   D 分解(金币,史诗+额外重铸石)",
@@ -697,6 +779,7 @@ export function renderFrame(g: Game, termW: number, termH: number): string {
   else if (tab === 3) body = tabForge(g);
   else if (tab === 4) body = tabSkills(g);
   else if (tab === 5) body = tabQuests(g);
+  else if (tab === 7) body = tabTower(g);
   else body = tabSettings(g);
 
   while (body.length < BODY_ROWS) body.push(" ".repeat(W));

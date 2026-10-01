@@ -8,16 +8,22 @@ import { battleTick, spawnMonster, tierOf } from "./combat.ts";
 import type { Monster } from "./combat.ts";
 import {
   ACTIVE_DEF, ACTIVE_SKILLS, BAL, CAPS, CLASSES, PASSIVE_DEF, PASSIVE_SKILLS,
-  RARITY_IDX,
+  RARITY_IDX, TOWER,
 } from "./data.ts";
 import { Item, rollItem } from "./items.ts";
+import * as RL from "./relics.ts";
+import { Relic } from "./relics.ts";
+import * as TW from "./tower.ts";
+import type { TowerState } from "./tower.ts";
 import { PyRandom } from "./rng.ts";
 import * as systems from "./systems.ts";
 import * as S from "./skills.ts";
 
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 export const EVENT_CAP = 2000;
-const VIRTUAL_STATS = ["skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct"];
+const VIRTUAL_STATS = ["skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct",
+  "all_skill_lv", "crit_extra", "kill_heal", "deathward",
+  "boss_dmg_r", "kill_haste"];
 
 export type Loadout = { active: string[]; passive: string[] };
 
@@ -34,6 +40,8 @@ export interface HeroStats {
   lifesteal: number; goldfind: number;
   skill_lv: number; skill_dmg: number; cd_reduce: number; dodge: number;
   armor_pierce: number; xp_pct: number;
+  all_skill_lv: number; crit_extra: number; kill_heal: number;
+  deathward: number; boss_dmg_r: number; kill_haste: number;
   interval: number; atk_timer: number; max_hp: number;
   shield: number; undying_at: number; next_hit_bonus: number;
   [k: string]: number;
@@ -72,6 +80,11 @@ export class Game {
   events: [string, string, string][] = [];
   statMods: { src: string; stat: string; op: "add" | "pct"; v: number }[] = [];
   view: any = null;          // 宿主挂载呈现层,核心不读写
+  // ---- 遗物 & 塔 ----
+  relics: (Relic | null)[] = [null, null, null, null];   // 4 槽
+  tower: TowerState = { keys: 3, max_floor: 0, last_refresh: null };
+  towerFloorSel = 1;         // UI:当前选中要打的层
+  inTower = false;           // 当前在塔战斗中
   monster: Monster | null = null;
   respawnTimer = 0;
   lastSpawnTime: number | null = null;
@@ -186,9 +199,11 @@ export class Game {
         agg[k] = (agg[k] ?? 0) + v;
       }
     }
+    // 统一修饰管道:成就 + 被动技能 + 遗物 + 外部挂口;先加后乘,再截断
     const mods = [
       ...systems.achievementMods(this.stats),
       ...(this.classId ? S.passiveMods(this) : []),
+      ...RL.relicMods(this.relics),
       ...this.statMods,
     ];
     for (const m of mods) if (m.op === "add") agg[m.stat] = (agg[m.stat] ?? 0) + m.v;
@@ -494,6 +509,101 @@ export class Game {
     this.toast(`挂机层位:${this.farmStage}层`);
   }
 
+  // ================================================================ 塔 & 遗物
+  /** 进入塔层:消耗 1 把钥匙,切换到塔战斗 */
+  towerEnter(floor: number): void {
+    if (this.inTower) {
+      this.toast("正在塔中");
+      return;
+    }
+    if (floor < 1) return;
+    if (this.tower.keys < 1) {
+      this.toast("钥匙不足(每天送3把)");
+      return;
+    }
+    // 新高才限层?不限,可选任意 ≤ max_floor+1 的层
+    if (floor > this.tower.max_floor + 1) {
+      this.toast(`需先通过第 ${this.tower.max_floor} 层`);
+      return;
+    }
+    this.tower.keys -= 1;
+    this.inTower = true;
+    this.towerFloorSel = floor;
+    const mon = TW.towerMonster(floor, this.rng);
+    this.monster = mon;
+    this.lastSpawnTime = this.time;
+    this.log(`🔑 进入深渊塔·第${floor}层${mon.boss ? "(头目!)" : ""}`, "bright_cyan");
+  }
+
+  /** 离开塔(胜利结算或战败退出) */
+  towerExit(won = false): void {
+    if (!this.inTower) return;
+    this.inTower = false;
+    if (won) {
+      const floor = this.towerFloorSel;
+      // 金币
+      const gold = TW.towerGold(floor) * (1 + this.hero.goldfind / 100);
+      this.gold += Math.trunc(gold);
+      this.stats.gold_earned += Math.trunc(gold);
+      // 掉落遗物(必掉)
+      const relic = TW.rollTowerDrop(floor, this.rng, this.hero.luck ?? 0);
+      this.addRelic(relic);
+      // 新高奖励
+      if (floor > this.tower.max_floor) {
+        this.tower.max_floor = floor;
+        this.stones += TOWER.new_height_stones;
+        this.log(`★ 新高度!第${floor}层 +${TOWER.new_height_stones}重铸石`, "bright_yellow");
+      }
+      this.log(`✔ 塔第${floor}层通关!获得 ${relic.display()}`, "bright_cyan");
+      this.monster = null;
+    } else {
+      this.log(`✘ 塔第${this.towerFloorSel}层失败…钥匙已消耗`, "bright_red");
+      this.monster = null;
+      this.respawnTimer = BAL.respawn_sec;
+    }
+  }
+
+  /** 遗物:优先装空槽,满了自动替换效果最少的 */
+  addRelic(relic: Relic): void {
+    for (let i = 0; i < this.relics.length; i++) {
+      if (this.relics[i] === null) {
+        this.relics[i] = relic;
+        this.recalcHero();
+        this.log(`获得遗物 ${relic.display()}(装入槽${i + 1})`, "bright_magenta");
+        return;
+      }
+    }
+    // 满槽:自动替换效果最少的
+    let worstI = 0;
+    let worstN = 99;
+    for (let i = 0; i < this.relics.length; i++) {
+      const r = this.relics[i];
+      if (r && r.effects.length < worstN) {
+        worstN = r.effects.length;
+        worstI = i;
+      }
+    }
+    const old = this.relics[worstI]!;
+    this.relics[worstI] = relic;
+    this.recalcHero();
+    this.log(`遗物 ${relic.display()} 替换 ${old.display()}`, "bright_magenta");
+  }
+
+  unequipRelic(idx: number): void {
+    if (idx >= 0 && idx < 4 && this.relics[idx]) {
+      this.relics[idx] = null;
+      this.recalcHero();
+      this.toast(`卸下遗物${idx + 1}`);
+    }
+  }
+
+  towerRefreshKeys(): void {
+    const gained = TW.refreshKeys(this.tower, Date.now() / 1000);
+    if (gained > 0) {
+      this.log(`🔑 每日钥匙 +${gained}(现有 ${this.tower.keys})`, "bright_cyan");
+    }
+  }
+
   // ================================================================ 悬赏
   /** 每日悬赏:本地日期跨日重置计数;达 BAL.quest_daily_limit 后冻结进度(在途任务明日恢复)。 */
   rollDaily(): void {
@@ -586,10 +696,12 @@ export class Game {
       bag: this.bag.map(i => i.toDict()),
       stats: this.stats,
       settings: this.settings,
-      quest_daily_count: this.questDailyCount,
-      quest_daily_date: this.questDailyDate,
       stat_mods: this.statMods,
       quests: this.quests,
+      quest_daily_count: this.questDailyCount,
+      quest_daily_date: this.questDailyDate,
+      relics: this.relics.map(r => r ? r.toDict() : null),
+      tower: this.tower,
       hero_hp: this.hero.hp,
       ema_kill: this.emaKill,
       last_saved: Date.now() / 1000,
@@ -626,6 +738,9 @@ export class Game {
     Object.assign(g.stats, d.stats ?? {});
     Object.assign(g.settings, d.settings ?? {});
     g.statMods = d.stat_mods ?? [];
+    g.relics = (d.relics ?? [null, null, null, null])
+      .map((r: any) => r ? Relic.fromDict(r) : null);
+    g.tower = d.tower ?? { keys: 3, max_floor: 0, last_refresh: null };
     g.quests = d.quests ?? g.quests;
     g.questDailyCount = d.quest_daily_count ?? 0;
     g.questDailyDate = d.quest_daily_date ?? "";
@@ -685,6 +800,13 @@ export function migrateSave(d: Record<string, any>): Record<string, any> {
     }
     d.skill_lv = skillLv;
     d.version = 4;
+    v = 4;
+  }
+  if (v < 5) {
+    // v4 → v5:遗物与爬塔系统
+    d.relics = [null, null, null, null];
+    d.tower = { keys: 3, max_floor: 0, last_refresh: null };
+    d.version = 5;
   }
   return d;
 }

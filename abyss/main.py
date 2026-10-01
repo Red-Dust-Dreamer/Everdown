@@ -128,7 +128,7 @@ def handle_key(g, key):
         return True
     if key == "q":
         return False
-    if key in ("1", "2", "3", "4", "5", "6", "7"):
+    if key in ("1", "2", "3", "4", "5", "6", "7", "8"):
         ui["tab"] = int(key) - 1
         return True
     if key == "f" and ui["tab"] != 6:
@@ -251,6 +251,22 @@ def handle_key(g, key):
             ui["confirm_reset"] = False
         elif key == "y" and ui["confirm_reset"]:
             return "reset"
+    elif tab == 7:  # 塔:←→ 选层 / Enter 进塔 / ↑↓ 选遗物槽 / E 卸遗物
+        reach = g.tower["max_floor"] + 1
+        if key == "left":
+            g.tower_floor_sel = max(1, g.tower_floor_sel - 1)
+        elif key == "right":
+            g.tower_floor_sel = min(reach, g.tower_floor_sel + 1)
+        elif key == "up":
+            ui["tower_sel"] = (ui.get("tower_sel", 0) - 1) % 4
+        elif key == "down":
+            ui["tower_sel"] = (ui.get("tower_sel", 0) + 1) % 4
+        elif key == "enter":
+            g.tower_enter(g.tower_floor_sel)
+            if g.in_tower:           # 进塔成功:切回战斗页看战斗
+                ui["tab"] = 0
+        elif key == "e":
+            g.unequip_relic(ui.get("tower_sel", 0))
     return True
 
 
@@ -262,6 +278,7 @@ def run_interactive():
     atexit.register(lambda: out.write(SHOW_CURSOR + ENABLE_WRAP + RESET))
 
     g = Game.load()
+    g.tower_refresh_keys()   # 每日钥匙刷新(登录时一次)
     view = View()
     g.view = view
     reader = KeyReader()
@@ -333,13 +350,13 @@ def run_demo(seconds=30.0, seed=DEFAULT_SEED):
         view.drain(g)
         view.tick(TICK)
         if i % 20 == 0:  # 每2秒换一个页签,全部渲染一遍
-            view.ui["tab"] = tab % 7
+            view.ui["tab"] = tab % 8
             tab += 1
         _autopilot(g)
         if i % 100 == 99:  # 每10秒渲染一帧,捕获渲染异常
             render_frame(g, 100, 30)
     render_frame(g, 100, 30)
-    for t in range(7):
+    for t in range(8):
         view.ui["tab"] = t
         render_frame(g, 100, 30)
     view.ui["help"] = True

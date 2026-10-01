@@ -76,6 +76,7 @@ function runInteractive(): void {
   out.write(HIDE_CURSOR + DISABLE_WRAP + CLEAR_SCREEN);
 
   let g = Game.load();
+  g.towerRefreshKeys();   // 每日钥匙刷新(登录时一次,对齐 abyss/main.py)
   const view = new View();
   g.view = view;
 
@@ -145,17 +146,25 @@ function runInteractive(): void {
 }
 
 // ================================================================ 测试钩子
-/** ABYSS_TEST_TICKS=N:新档选职业(按键 1)、跑 N 个 tick、输出一帧后退出;不读写存档。 */
+/** ABYSS_TEST_TICKS=N:新档选职业(按键 1)、跑 N 个 tick、输出一帧后退出;不读写存档。
+ *  ABYSS_TEST_KEYS=1:另走一次塔页按键流(8 切塔页 → enter 进塔),末帧切回塔页渲染,
+ *  覆盖 tab=7 的键位分发与塔页/塔内战斗页渲染。 */
 function runTestTicks(ticks: number): void {
   const g = new Game(20260930);
   const view = new View();
   g.view = view;
   handleKey(g, "1"); // 新档按键 1/2/3 选职业,这里走战士
+  const towerTest = Number.parseInt(process.env.ABYSS_TEST_KEYS ?? "", 10) > 0;
+  if (towerTest) {
+    handleKey(g, "8");     // 切到塔页(tab=7)
+    handleKey(g, "enter"); // 进塔:消耗 1 把钥匙,成功后自动切回战斗页
+  }
   for (let i = 0; i < ticks; i++) {
     g.tick(TICK);
     view.drain(g);
     view.tick(TICK);
   }
+  if (towerTest) handleKey(g, "8"); // 末帧渲染塔页(钥匙/选层/遗物区)
   out.write(renderFrame(g, 100, 30) + "\n");
 }
 

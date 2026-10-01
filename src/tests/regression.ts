@@ -243,7 +243,7 @@ function testSaveRoundtrip(): void {
     equip: {}, bag: [], stats: {}, settings: {},
   };
   const m = migrateSave(JSON.parse(JSON.stringify(v3)));
-  eq(m.version, 4, "v3 迁移后版本应为 4");
+  eq(m.version, 5, "v3 迁移后版本应为 5(v4→v5 塔系统)");
   eq(m.class_id, "warrior", "v3 迁移后应为 warrior");
   eq(m.skill_lv["w_strike"], 12, "v3 迁移 strike:12 → w_strike=12");
   eq(m.skill_lv["w_warcry"], 5, "v3 迁移 warcry:5 → w_warcry=5");

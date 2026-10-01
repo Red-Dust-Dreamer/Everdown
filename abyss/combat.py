@@ -178,6 +178,12 @@ def _hero_attack(game, mon):
     if crit:
         game.add_floater("暴击 -" + fmt(dmg), "bright_yellow")
         S._on_crit(game)
+        # 遗物:暴击追击
+        ce = h.get("crit_extra", 0)
+        if ce > 0 and game.rng.random() * 100 < ce:
+            extra = _dmg(atk, mon.def_ * (1 - pierce))
+            mon.hp -= extra
+            game.add_floater("⚡追击 -" + fmt(extra), "bright_cyan")
     else:
         game.add_floater("-" + fmt(dmg), "white")
     if h["lifesteal"] > 0 and h["hp"] < h["max_hp"]:
@@ -222,6 +228,14 @@ def _cast_monster_skill(game, mon):
         h["stun_until"] = game.time + sk["stun"]
         game.add_floater("⛔ 眩晕", "bright_red")
     # 不屈判定
+    # 遗物:不死(独立判定,60s CD)
+    if h["hp"] <= 0 and h.get("deathward", 0) > 0:
+        dw_ready = h.get("deathward_at", -999.0)
+        if game.time - dw_ready >= 60.0                 and game.rng.random() * 100 < h["deathward"]:
+            h["hp"] = 1.0
+            h["deathward_at"] = game.time
+            game.add_floater("🛡不死!", "bright_cyan")
+            game.log("遗物·不死!致命一击被挡下。", "bright_cyan")
     if h["hp"] <= 0 and S.hook_def(game, "undying"):
         ready = h.get("undying_at", -999.0)
         if game.time - ready >= BAL["undying_cd"]                 and game.rng.random() * 100 < S.hook_val(game, "undying"):
@@ -276,6 +290,14 @@ def _monster_attack(game, mon):
     game.add_floater("-" + fmt(raw), "red")
     game.emit("anim", "mob_attack")
     # 不屈:致命伤概率保留1血(内置CD)
+    # 遗物:不死(独立判定,60s CD)
+    if h["hp"] <= 0 and h.get("deathward", 0) > 0:
+        dw_ready = h.get("deathward_at", -999.0)
+        if game.time - dw_ready >= 60.0                 and game.rng.random() * 100 < h["deathward"]:
+            h["hp"] = 1.0
+            h["deathward_at"] = game.time
+            game.add_floater("🛡不死!", "bright_cyan")
+            game.log("遗物·不死!致命一击被挡下。", "bright_cyan")
     if h["hp"] <= 0 and S.hook_def(game, "undying"):
         ready = h.get("undying_at", -999.0)
         if game.time - ready >= BAL["undying_cd"] \
@@ -319,10 +341,18 @@ def _on_monster_killed(game, mon):
     if mon.boss:
         game.quest_progress("boss", 1)
 
-    # 杀戮盛宴:击杀后增益
+    # 杀戮盛宴:击杀后增益(被动技能)
     d = S.hook_def(game, "on_kill_buff")
     if d:
         S.add_buff(game, d["stat"], S.hook_val(game, "on_kill_buff"), d.get("dur", 4))
+    # 遗物:击杀回血 + 杀意攻速
+    kh = h.get("kill_heal", 0)
+    if kh > 0:
+        game.hero["hp"] = min(game.hero["max_hp"],
+                              game.hero["hp"] + game.hero["max_hp"] * kh / 100.0)
+    ks = h.get("kill_haste", 0)
+    if ks > 0:
+        S.add_buff(game, "haste", ks, 4)
 
     # 掉落
     drop_chance = BAL["drop_chance"]
@@ -340,6 +370,10 @@ def _on_monster_killed(game, mon):
         if RARITY_IDX[item.rarity] >= 2:
             game.quest_progress("loot", 1)
 
+    if game.in_tower:
+        game.monster = mon  # 保留引用给 tower_exit 用
+        game.tower_exit(won=True)
+        return
     if mon.boss:
         game.log("♛ 击败头目 %s!前进到新区域!" % mon.name, "bright_yellow")
     game.monster = None
@@ -350,6 +384,9 @@ def _on_hero_death(game):
     game.hero["hp"] = 0
     game.hero["shield"] = 0.0
     game.respawn_timer = BAL["respawn_sec"]
+    if game.in_tower:
+        game.tower_exit(won=False)
+        return
     game.log("☠ 你被击败了…%d 秒后复活" % int(BAL["respawn_sec"]), "bright_red")
     game.retreat_stage()
     game.monster = None

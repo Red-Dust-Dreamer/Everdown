@@ -38,7 +38,7 @@ export function handleKey(g: Game, key: string): KeyResult {
   if (key === "h") { ui.help = true; return true; }
   if (key === "s") { g.save(); g.toast("已存档"); return true; }
   if (key === "q") return false;
-  if (key >= "1" && key <= "7") {
+  if (key >= "1" && key <= "8") {
     ui.tab = parseInt(key) - 1;
     return true;
   }
@@ -135,6 +135,23 @@ export function handleKey(g: Game, key: string): KeyResult {
     else if (key === "r") ui.confirm_reset = true;
     else if (key === "n") ui.confirm_reset = false;
     else if (key === "y" && ui.confirm_reset) return "reset";
+  } else if (tab === 7) {
+    // 塔:←→ 选层 / Enter 进塔 / ↑↓ 选遗物槽 / E 卸遗物
+    const reach = g.tower.max_floor + 1;
+    if (key === "left") {
+      g.towerFloorSel = Math.max(1, g.towerFloorSel - 1);
+    } else if (key === "right") {
+      g.towerFloorSel = Math.min(reach, g.towerFloorSel + 1);
+    } else if (key === "up") {
+      ui.tower_sel = ((ui.tower_sel ?? 0) + 3) % 4;
+    } else if (key === "down") {
+      ui.tower_sel = ((ui.tower_sel ?? 0) + 1) % 4;
+    } else if (key === "enter") {
+      g.towerEnter(g.towerFloorSel);
+      if (g.inTower) ui.tab = 0;   // 进塔成功:切回战斗页看战斗
+    } else if (key === "e") {
+      g.unequipRelic(ui.tower_sel ?? 0);
+    }
   }
   return true;
 }

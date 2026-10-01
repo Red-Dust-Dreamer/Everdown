@@ -105,11 +105,12 @@ export function heroDps(g: Game, mobDef: number, mobHp: number, bossOrElite: boo
 function effLvOf(g: Game, sid: string): number {
   // 与 skills.effLv 相同(避免运行时循环依赖的本地副本语义)
   const equipBonus = Math.trunc(g.hero.skill_lv ?? 0);
-  return Math.max(1, g.skillLv[sid] ?? 1) + equipBonus;
+  return Math.max(1, g.skillLv[sid] ?? 1) + equipBonus
+    + Math.trunc(g.hero.all_skill_lv ?? 0);
 }
 
 function netIncoming(g: Game, mobAtk: number, mobInterval: number, _dps: number,
-                    skill?: { mult: number; hits?: number; cd: number }): number {
+                    skill?: { mult: number; hits?: number; cd: number } | null): number {
   const h = g.hero;
   let hit = mobAtk * mobAtk / (mobAtk + Math.max(0, h.def));
   let inc = hit / mobInterval;

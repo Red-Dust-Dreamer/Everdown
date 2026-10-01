@@ -14,16 +14,20 @@ from pathlib import Path
 
 from .ansi import c, fmt
 from .combat import battle_tick, spawn_monster, tier_of
-from .data import (ACTIVE_DEF, ACTIVE_SKILLS, BAL, CAPS, CLASSES, PASSIVE_DEF,
+from .data import (ACTIVE_DEF, ACTIVE_SKILLS, BAL, CAPS, CLASSES, PASSIVE_DEF, TOWER,
                    PASSIVE_SKILLS, RARITY_IDX, SLOTS)
 from .items import Item, roll_item
 from . import systems
 from . import skills as S
+from . import relics as RL
+from . import tower as TW
 
 SAVE_PATH = Path(__file__).resolve().parent.parent / "save.json"
-SAVE_VERSION = 4
+SAVE_VERSION = 5
 EVENT_CAP = 2000
-VIRTUAL_STATS = ("skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct")
+VIRTUAL_STATS = ("skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct",
+                 "all_skill_lv", "crit_extra", "kill_heal", "deathward",
+                 "boss_dmg_r", "kill_haste")
 
 
 class Game:
@@ -65,6 +69,11 @@ class Game:
         # 被动技能走 skills.passive_mods 派生,不占此列表;
         # 未来属性丹/悬赏奖励/公会buff等外部来源用这里。
         self.stat_mods = []        # [{src, stat, op('add'|'pct'), v}]
+        # ---- 遗物 & 塔 ----
+        self.relics = [None, None, None, None]   # 4 槽
+        self.tower = {"keys": 3, "max_floor": 0, "last_refresh": None}
+        self.tower_floor_sel = 1                  # UI:当前选中要打的层
+        self.in_tower = False                     # 当前在塔战斗中
         self.monster = None        # 瞬态:不存档,加载后重生
         self.respawn_timer = 0.0
         self.last_spawn_time = None
@@ -195,9 +204,10 @@ class Game:
         for it in self.equip.values():
             for k, v in it.stats().items():
                 agg[k] = agg.get(k, 0) + v
-        # 统一修饰管道:成就 + 被动技能 + 外部挂口(stat_mods);先加后乘,再截断
+        # 统一修饰管道:成就 + 被动技能 + 遗物 + 外部挂口;先加后乘,再截断
         mods = (systems.achievement_mods(self.stats)
                 + (S.passive_mods(self) if self.class_id else [])
+                + RL.relic_mods(self.relics)
                 + self.stat_mods)
         for m in mods:
             if m["op"] == "add":
@@ -491,6 +501,89 @@ class Game:
             self.spawn()
         self.toast("挂机层位:%d层" % self.farm_stage)
 
+    # ================================================================ 塔 & 遗物
+    def tower_enter(self, floor):
+        """进入塔层:消耗 1 把钥匙,切换到塔战斗"""
+        if self.in_tower:
+            self.toast("正在塔中")
+            return
+        if floor < 1:
+            return
+        if self.tower["keys"] < 1:
+            self.toast("钥匙不足(每天送3把)")
+            return
+        # 新高才限层?不限,可选任意 ≤ max_floor+1 的层
+        if floor > self.tower["max_floor"] + 1:
+            self.toast("需先通过第 %d 层" % self.tower["max_floor"])
+            return
+        self.tower["keys"] -= 1
+        self.in_tower = True
+        self.tower_floor_sel = floor
+        self.monster = TW.tower_monster(floor, self.rng)
+        self.last_spawn_time = self.time
+        self.log("🔑 进入深渊塔·第%d层%s" % (floor, "(头目!)" if self.monster.boss else ""),
+                 "bright_cyan")
+
+    def tower_exit(self, won=False):
+        """离开塔(胜利结算或战败退出)"""
+        if not self.in_tower:
+            return
+        self.in_tower = False
+        if won:
+            floor = self.tower_floor_sel
+            mon = self.monster
+            # 金币
+            gold = TW.tower_gold(floor) * (1 + self.hero["goldfind"] / 100.0)
+            self.gold += int(gold)
+            self.stats["gold_earned"] += int(gold)
+            # 掉落遗物(必掉)
+            relic = TW.roll_tower_drop(floor, self.rng, luck=self.hero.get("luck", 0))
+            self.add_relic(relic)
+            # 新高奖励
+            if floor > self.tower["max_floor"]:
+                self.tower["max_floor"] = floor
+                self.stones += TOWER["new_height_stones"]
+                self.log("★ 新高度!第%d层 +%d重铸石" % (floor, TOWER["new_height_stones"]),
+                         "bright_yellow")
+            self.log("✔ 塔第%d层通关!获得 %s" % (floor, relic.display()), "bright_cyan")
+            self.monster = None
+        else:
+            self.log("✘ 塔第%d层失败…钥匙已消耗" % self.tower_floor_sel, "bright_red")
+            self.monster = None
+            self.respawn_timer = BAL["respawn_sec"]
+
+    def add_relic(self, relic):
+        """遗物:优先装空槽,满了自动替换最差(或进背包式列表?)——简化:优先装空槽,满则提示"""
+        for i, r in enumerate(self.relics):
+            if r is None:
+                self.relics[i] = relic
+                self.recalc_hero()
+                self.log("获得遗物 %s(装入槽%d)" % (relic.display(), i + 1),
+                         relic.rarity_color() if hasattr(relic, 'rarity_color') else "bright_magenta")
+                return
+        # 满槽:自动替换效果最少的
+        worst_i = 0
+        worst_n = 99
+        for i, r in enumerate(self.relics):
+            if r and len(r.effects) < worst_n:
+                worst_n = len(r.effects)
+                worst_i = i
+        old = self.relics[worst_i]
+        self.relics[worst_i] = relic
+        self.recalc_hero()
+        self.log("遗物 %s 替换 %s" % (relic.display(), old.display()), "bright_magenta")
+
+    def unequip_relic(self, idx):
+        if 0 <= idx < 4 and self.relics[idx]:
+            self.relics[idx] = None
+            self.recalc_hero()
+            self.toast("卸下遗物%d" % (idx + 1))
+
+    def tower_refresh_keys(self):
+        gained = TW.refresh_keys(self.tower, __import__('time').time())
+        if gained > 0:
+            self.log("🔑 每日钥匙 +%d(现有 %d)" % (gained, self.tower["keys"]), "bright_cyan")
+
     # ================================================================ 悬赏
     def roll_daily(self):
         """每日悬赏:本地日期跨日重置计数(与 TS 主实现同构,保持对拍)。"""
@@ -585,6 +678,8 @@ class Game:
             "quests": self.quests,
             "quest_daily_count": self.quest_daily_count,
             "quest_daily_date": self.quest_daily_date,
+            "relics": [r.to_dict() if r else None for r in self.relics],
+            "tower": self.tower,
             "hero_hp": self.hero.get("hp"),
             "ema_kill": self.ema_kill,
             "last_saved": time.time(),
@@ -623,6 +718,8 @@ class Game:
         g.stats.update(d.get("stats", {}))
         g.settings.update(d.get("settings", {}))
         g.stat_mods = d.get("stat_mods") or []
+        g.relics = [RL.Relic.from_dict(r) if r else None for r in d.get("relics", [None]*4)]
+        g.tower = d.get("tower") or {"keys": 3, "max_floor": 0, "last_refresh": None}
         g.quests = d.get("quests") or g.quests
         g.quest_daily_count = d.get("quest_daily_count", 0)
         g.quest_daily_date = d.get("quest_daily_date", "")
@@ -686,4 +783,8 @@ def migrate_save(d):
         d["skill_lv"] = skill_lv
         d["version"] = 4
         v = 4
+    if v < 5:
+        d["relics"] = [None]*4
+        d["tower"] = {"keys": 3, "max_floor": 0, "last_refresh": None}
+        d["version"] = 5
     return d

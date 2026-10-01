@@ -327,3 +327,38 @@ export const BAL = {
 } as const;
 
 export const VIRTUAL_STATS = ["skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct"] as const;
+
+// ---------------------------------------------------------------- 遗物系统(爬塔副本)
+export interface TowerDef {
+  keys_per_day: number; keys_cap: number; relic_slots: number;
+  th0: number; thk: number; thp: number;
+  ta0: number; tak: number; tap: number;
+  td0: number; tdk: number; tdp: number;
+  boss_every: number;
+  drop_gold_mult: number; new_height_stones: number;
+}
+export const TOWER: TowerDef = {
+  keys_per_day: 3, keys_cap: 99, relic_slots: 4,
+  th0: 80.0, thk: 45.0, thp: 1.18,
+  ta0: 10.0, tak: 3.5, tap: 1.02,
+  td0: 5.0, tdk: 2.0, tdp: 1.0,
+  boss_every: 5,
+  drop_gold_mult: 2.0, new_height_stones: 2,
+};
+/** 遗物效果池:(id, 名, lo, hi, 单位) */
+export interface RelicEffDef { id: string; name: string; lo: number; hi: number; unit: string }
+export const RELIC_EFFECTS: RelicEffDef[] = [
+  { id: "all_skill_lv", name: "全技能等级", lo: 1.0, hi: 3.0, unit: "级" },
+  { id: "cd_reduce", name: "冷却缩减", lo: 3.0, hi: 8.0, unit: "%" },
+  { id: "skill_dmg", name: "技能伤害", lo: 5.0, hi: 15.0, unit: "%" },
+  { id: "crit_extra", name: "暴击追击", lo: 5.0, hi: 15.0, unit: "%" },
+  { id: "kill_heal", name: "击杀回血", lo: 2.0, hi: 6.0, unit: "%" },
+  { id: "deathward", name: "不死", lo: 5.0, hi: 15.0, unit: "%" },
+  { id: "boss_dmg_r", name: "猎首", lo: 5.0, hi: 15.0, unit: "%" },
+  { id: "kill_haste", name: "杀意", lo: 5.0, hi: 15.0, unit: "%" },
+  { id: "goldfind", name: "聚宝", lo: 5.0, hi: 15.0, unit: "%" },
+];
+export const RELIC_EFF_DEF: Record<string, RelicEffDef> =
+  Object.fromEntries(RELIC_EFFECTS.map(e => [e.id, e]));
+/** 各稀有度的遗物效果条数 */
+export const RELIC_EFF_COUNT: number[] = [1, 1, 2, 2, 3, 3];

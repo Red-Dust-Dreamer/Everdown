@@ -495,3 +495,26 @@ BAL = {
 
 # 数值型主属性的每槽斜率(t^item_main_p 的系数);百分比主属性无斜率
 SLOT_MAIN_K = {"weapon": 2.2, "helmet": 14.0, "armor": 1.4, "boots": 1.4}
+
+# ---------------------------------------------------------------- 遗物系统(爬塔副本)
+TOWER = {
+    "keys_per_day": 3, "keys_cap": 99, "relic_slots": 4,
+    "th0": 80.0, "thk": 45.0, "thp": 1.18,
+    "ta0": 10.0, "tak": 3.5, "tap": 1.02,
+    "td0": 5.0, "tdk": 2.0, "tdp": 1.0,
+    "boss_every": 5,
+    "drop_gold_mult": 2.0, "new_height_stones": 2,
+}
+RELIC_EFFECTS = [
+    ("all_skill_lv", "全技能等级", 1.0, 3.0, "级"),
+    ("cd_reduce",    "冷却缩减",  3.0, 8.0, "%"),
+    ("skill_dmg",    "技能伤害",  5.0, 15.0, "%"),
+    ("crit_extra",   "暴击追击",  5.0, 15.0, "%"),
+    ("kill_heal",    "击杀回血",  2.0, 6.0, "%"),
+    ("deathward",    "不死",      5.0, 15.0, "%"),
+    ("boss_dmg_r",   "猎首",      5.0, 15.0, "%"),
+    ("kill_haste",   "杀意",      5.0, 15.0, "%"),
+    ("goldfind",     "聚宝",      5.0, 15.0, "%"),
+]
+RELIC_EFF_DEF = {e[0]: e for e in RELIC_EFFECTS}
+RELIC_EFF_COUNT = [1, 1, 2, 2, 3, 3]

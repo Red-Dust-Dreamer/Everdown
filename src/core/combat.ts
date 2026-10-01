@@ -28,18 +28,18 @@ export class Monster implements S.MonLike {
   atkDownUntil = 0;
   defDownPct = 0;
   defDownUntil = 0;
-  skill: MobSkill;
+  skill: MobSkill | null;
   skillTimer: number;
 
   constructor(name: string, art: string[], color: Color, hp: number, atk: number,
               def_: number, interval: number, boss: boolean, elite: boolean, tier: number,
-              skill: MobSkill) {
+              skill: MobSkill | null) {
     this.name = name; this.art = art; this.color = color;
     this.hp = this.maxHp = hp;
     this.atk = atk; this.def_ = def_; this.interval = interval;
     this.boss = boss; this.elite = elite; this.tier = tier;
     this.skill = skill;
-    this.skillTimer = skill.cd * 0.5;  // 半 CD 后首放
+    this.skillTimer = skill ? skill.cd * 0.5 : 0;  // 半 CD 后首放
   }
   hpPct(): number { return this.maxHp ? this.hp / this.maxHp : 0; }
 }
@@ -164,7 +164,7 @@ export function battleTick(g: Game, dt: number): void {
 
 function castMonsterSkill(g: Game, mon: Monster): void {
   const h = g.hero;
-  const sk = mon.skill;
+  const sk = mon.skill!;
   let total = 0;
   let defv = h.def;
   if ((h.defdown_until ?? 0) > g.time) defv *= 1 - (h.defdown_pct ?? 0) / 100;
@@ -195,6 +195,18 @@ function castMonsterSkill(g: Game, mon: Monster): void {
   if (sk.stun) {
     h.stun_until = g.time + sk.stun;
     g.addFloater("⛔ 眩晕", "bright_red");
+  }
+  // 不屈判定
+  // 遗物:不死(独立判定,60s CD)
+  if (h.hp <= 0 && (h.deathward ?? 0) > 0) {
+    const dwReady = h.deathward_at ?? -999;
+    if (g.time - dwReady >= 60
+        && g.rng.random() * 100 < h.deathward) {
+      h.hp = 1;
+      h.deathward_at = g.time;
+      g.addFloater("🛡不死!", "bright_cyan");
+      g.log("遗物·不死!致命一击被挡下。", "bright_cyan");
+    }
   }
   if (h.hp <= 0 && S.hookDef(g, "undying")) {
     const ready = h.undying_at ?? -999;
@@ -228,6 +240,13 @@ function heroAttack(g: Game, mon: Monster): void {
   if (crit) {
     g.addFloater("暴击 -" + fmt(dmg), "bright_yellow");
     S.onCrit(g);
+    // 遗物:暴击追击
+    const ce = h.crit_extra ?? 0;
+    if (ce > 0 && g.rng.random() * 100 < ce) {
+      const extra = _dmg(atk, mon.def_ * (1 - pierce));
+      mon.hp -= extra;
+      g.addFloater("⚡追击 -" + fmt(extra), "bright_cyan");
+    }
   } else {
     g.addFloater("-" + fmt(dmg), "white");
   }
@@ -276,6 +295,18 @@ function monsterAttack(g: Game, mon: Monster): void {
   h.hp -= raw;
   g.addFloater("-" + fmt(raw), "red");
   g.emit("anim", "mob_attack");
+  // 不屈:致命伤概率保留1血(内置CD)
+  // 遗物:不死(独立判定,60s CD)
+  if (h.hp <= 0 && (h.deathward ?? 0) > 0) {
+    const dwReady = h.deathward_at ?? -999;
+    if (g.time - dwReady >= 60
+        && g.rng.random() * 100 < h.deathward) {
+      h.hp = 1;
+      h.deathward_at = g.time;
+      g.addFloater("🛡不死!", "bright_cyan");
+      g.log("遗物·不死!致命一击被挡下。", "bright_cyan");
+    }
+  }
   if (h.hp <= 0 && S.hookDef(g, "undying")) {
     const ready = h.undying_at ?? -999;
     if (g.time - ready >= BAL.undying_cd
@@ -314,6 +345,13 @@ function onMonsterKilled(g: Game, mon: Monster): void {
 
   const d = S.hookDef(g, "on_kill_buff");
   if (d) S.addBuff(g, d.stat!, S.hookVal(g, "on_kill_buff"), d.dur ?? 4);
+  // 遗物:击杀回血 + 杀意攻速
+  const kh = h.kill_heal ?? 0;
+  if (kh > 0) {
+    g.hero.hp = Math.min(g.hero.max_hp, g.hero.hp + g.hero.max_hp * kh / 100);
+  }
+  const ks = h.kill_haste ?? 0;
+  if (ks > 0) S.addBuff(g, "haste", ks, 4);
 
   let dropChance: number = BAL.drop_chance;
   if (mon.elite) dropChance = BAL.elite_drop;
@@ -326,6 +364,11 @@ function onMonsterKilled(g: Game, mon: Monster): void {
     if (RARITY_IDX[item.rarity] >= 2) g.questProgress("loot", 1);
   }
 
+  if (g.inTower) {
+    g.monster = mon;  // 保留引用给 towerExit 用
+    g.towerExit(true);
+    return;
+  }
   if (mon.boss) g.log(`♛ 击败头目 ${mon.name}!前进到新区域!`, "bright_yellow");
   g.monster = null;
   g.advanceStage();
@@ -335,6 +378,10 @@ function onHeroDeath(g: Game): void {
   g.hero.hp = 0;
   g.hero.shield = 0;
   g.respawnTimer = BAL.respawn_sec;
+  if (g.inTower) {
+    g.towerExit(false);
+    return;
+  }
   g.log(`☠ 你被击败了…${Math.trunc(BAL.respawn_sec)} 秒后复活`, "bright_red");
   g.retreatStage();
   g.monster = null;

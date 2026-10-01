@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-"""渲染层:100x30 固定画布,7 个标签页 + 弹窗"""
+"""渲染层:100x30 固定画布,8 个标签页 + 弹窗"""
 from .ansi import (RESET, c, pad, trunc, bar, fmt, fmt_time, dwidth)
 from .combat import zone_theme, tier_of, mob_gold
 from .data import (ACHIEVEMENTS, AFFIX_DEF, RARITIES, RARITY_IDX,
-                   SLOTS, SLOT_NAMES, STAT_NAMES, BAL)
+                   SLOTS, SLOT_NAMES, STAT_NAMES, BAL, TOWER)
 from .systems import achievement_tiers, quest_desc
 
 W, H = 100, 30
 BODY_ROWS = H - 4          # 26
 CARD_W = 46
 
-TABS = ["战斗", "角色", "背包", "锻造", "技能", "悬赏·成就", "设置"]
+TABS = ["战斗", "角色", "背包", "锻造", "技能", "悬赏·成就", "设置", "塔"]
 
 
 # ================================================================ 通用小件
@@ -76,13 +76,14 @@ def _footer(g):
 
 
 _HINTS = {
-    0: "1-7 切页 │ F 模式 │ B 倍速 │ P 暂停 │ S 存档 │ H 帮助 │ Q 退出",
+    0: "1-8 切页 │ F 模式 │ B 倍速 │ P 暂停 │ S 存档 │ H 帮助 │ Q 退出",
     1: "↑↓ 选择部位 │ U 强化 │ R 重铸 │ E 卸下 │ H 帮助",
     2: "↑↓ 选择 │ E 装备 │ D 分解 │ X 出售 │ A 一键出售普通/精良 │ H 帮助",
     3: "↑↓ 选择 │ U 强化(+8%全属性) │ R 重铸(3石) │ H 帮助",
     4: "↑↓ 选择 │ ←→ 装配区/主动池/被动池 │ E 装配/卸下 │ U 升级 │ H 帮助",
     5: "↑↓ 查看 │ 悬赏完成自动领取并刷新 │ H 帮助",
     6: "T 自动换装 │ J 自动出售档次 │ F 推进/挂机 │ ←→ 挂机层位 │ S 存档 │ R 重置 │ Q 退出",
+    7: "←→ 选层 │ Enter 进塔 │ ↑↓ 选槽 │ E 卸遗物 │ H 帮助",
 }
 
 
@@ -145,10 +146,13 @@ def _card(g, hero_side):
     flash = v.mob_flash > 0
     tag = ""
     if m.boss:
-        tag = c(" ♛ 头目", "bright_yellow", bold=True)
+        tag = c(" ♛ 塔主" if g.in_tower else " ♛ 头目", "bright_yellow", bold=True)
     elif m.elite:
         tag = c(" ★ 精英", "bright_green", bold=True)
-    name = c(" %s " % m.name, m.color, bold=(m.boss or flash)) + tag
+    mname = m.name
+    if g.in_tower and not mname.startswith("塔·"):
+        mname = "塔·" + mname
+    name = c(" %s " % mname, m.color, bold=(m.boss or flash)) + tag
     lines.append(" " * off + pad(name, CARD_W - off, "center"))
     for art_line in m.art:
         colored = c(art_line, m.color, bold=flash)
@@ -166,9 +170,14 @@ def _card(g, hero_side):
 def _tab_battle(g):
     rows = []
     v = g.view
-    theme, mobs, boss, tcolor = zone_theme(g.zone)
-    banner = c("═", tcolor) * 3 + c(" 第 %d 区 · 第 %d 层 · %s " % (g.zone, g.stage, theme),
-                                    tcolor, bold=True) + c("═", tcolor) * 3
+    if g.in_tower:
+        banner = (c("═", "bright_magenta") * 3
+                  + c(" 深渊塔 · 第 %d 层 " % g.tower_floor_sel, "bright_magenta", bold=True)
+                  + c("═", "bright_magenta") * 3)
+    else:
+        theme, mobs, boss, tcolor = zone_theme(g.zone)
+        banner = c("═", tcolor) * 3 + c(" 第 %d 区 · 第 %d 层 · %s " % (g.zone, g.stage, theme),
+                                        tcolor, bold=True) + c("═", tcolor) * 3
     rows.append(_center(banner, W - 14) + _spinner(g))
 
     hero_lines = _card(g, True)
@@ -271,6 +280,16 @@ def _tab_char_layout(g):
             body = c("(空)", "bright_black")
         line = " %s %s %s" % (marker, c(slot_name, "bright_white"), body)
         left.append(pad(trunc(line, left_w), left_w))
+    left.append(" " + c("▌遗物", "bright_white", bold=True)
+                + c(" 深渊塔掉落 · 自动装入空槽", "bright_black"))
+    for i in range(4):
+        r = g.relics[i] if i < len(g.relics) else None
+        label = c("遗物%d:" % (i + 1), "bright_black")
+        if r is None:
+            body = c("(空)", "bright_black")
+        else:
+            body = r.display() + c(" · %d效果" % len(r.effects), "bright_black")
+        left.append(pad(trunc("  %s %s" % (label, body), left_w), left_w))
     h = g.hero
     left.append(" " + c("▌属性总览", "bright_white", bold=True))
     left.append(pad("  " + "  ".join([_kv("攻击", fmt(h["atk"]), 4),
@@ -629,6 +648,67 @@ def _tab_settings(g):
     return pad_rows(rows)
 
 
+# ================================================================ 塔页
+def _tab_tower(g):
+    """塔页:钥匙/最高层 / ←→ 选层 / 进塔 / 遗物4槽"""
+    ui = g.view.ui
+    rows = []
+    reach = g.tower["max_floor"] + 1           # 最高可挑战层
+    sel_floor = max(1, min(g.tower_floor_sel, reach))
+    slot_sel = ui.get("tower_sel", 0) % 4
+
+    rows.append(" " + c("▌深渊塔", "bright_white", bold=True)
+                + c(" │ ", "bright_black")
+                + c("钥匙 ×%d" % g.tower["keys"], "bright_yellow", bold=True)
+                + c(" │ ", "bright_black")
+                + c("最高第%d层" % g.tower["max_floor"], "bright_cyan", bold=True)
+                + c(" │ ", "bright_black")
+                + c("←→ 选层 Enter 进塔", "bright_black")
+                + (c(" │ 挑战中·第%d层" % g.tower_floor_sel, "bright_magenta", bold=True)
+                   if g.in_tower else ""))
+    rows.append(" " + c("─" * 64, "bright_black"))
+    rows.append("")
+
+    boss = sel_floor % TOWER["boss_every"] == 0
+    rows.append(" " + c("[←→] ", "bright_black")
+                + c("第 %d 层" % sel_floor, "bright_white", bold=True)
+                + (c(" 头目!", "bright_yellow", bold=True) if boss else "")
+                + c(" (每%d层一个头目)" % TOWER["boss_every"], "bright_black")
+                + c("  │  ", "bright_black")
+                + c("最高可达: 第%d层" % reach, "bright_cyan", bold=True))
+    rows.append(" " + c("第1层 ", "bright_black")
+                + bar(sel_floor, reach, 44, "cyan")
+                + c(" 第%d层" % reach, "bright_black")
+                + c("  ▸ 选中 第%d层" % sel_floor, "bright_cyan", bold=True))
+    rows.append("")
+
+    rows.append(" " + c("▌遗物", "bright_white", bold=True)
+                + c(" 通关必得 · 自动装入空槽", "bright_black")
+                + c("  │  ↑↓ 选槽 E 卸下", "bright_black"))
+    for i in range(4):
+        r = g.relics[i] if i < len(g.relics) else None
+        marker = c("▸", "bright_yellow") if i == slot_sel else " "
+        label = c("遗物%d:" % (i + 1), "bright_black")
+        if r is None:
+            body = c("(空)", "bright_black")
+        else:
+            effs = "  ".join(ln.strip() for ln in r.effect_lines())
+            body = r.display() + "  " + c(effs, "white")
+        line = " %s %s %s" % (marker, label, body)
+        rows.append(pad(trunc(line, W - 2), W - 2))
+
+    rows.append("")
+    rows.append(" " + c("▌规则", "bright_white", bold=True))
+    rows.append("  " + c("· 每日 0 点刷新钥匙(每天 %d 把,可囤积,上限 %d)" % (
+        TOWER["keys_per_day"], TOWER["keys_cap"]), "bright_black"))
+    rows.append("  " + c("· 进塔消耗 1 把钥匙:胜利必得遗物与金币,战败仅耗钥匙", "bright_black"))
+    rows.append("  " + c("· 首次到达新高度 +%d 重铸石;头目层遗物保底稀有" % TOWER["new_height_stones"],
+                 "bright_black"))
+    while len(rows) < BODY_ROWS:
+        rows.append(" " * W)
+    return pad_rows(rows)
+
+
 # ================================================================ 弹窗
 def _modal_class(g):
     """新档职业选择:三选一"""
@@ -674,11 +754,15 @@ def _modal_box(title, lines):
 def _modal_help(g):
     lines = [
         c("全局按键", "bright_cyan"),
-        "  1-7  切换页面      P 暂停/继续      S 立即存档",
+        "  1-8  切换页面      P 暂停/继续      S 立即存档",
         "  H    帮助(本页)   Q 退出并自动存档",
         "",
         c("战斗页", "bright_cyan"),
         "  F    推进/挂机模式切换(挂机=停在当前层反复刷)",
+        "",
+        c("塔页(8)", "bright_cyan"),
+        "  ←→ 选层  Enter 进塔(消耗1把钥匙,每日0点刷新3把)",
+        "  ↑↓ 选遗物槽  E 卸下 · 通关必得遗物,战败仅耗钥匙",
         "",
         c("背包页", "bright_cyan"),
         "  E 装备选中物品   D 分解(金币,史诗+额外重铸石)",
@@ -753,6 +837,8 @@ def render_frame(g, term_w, term_h):
         body = _tab_skills(g)
     elif tab == 5:
         body = _tab_quests(g)
+    elif tab == 7:
+        body = _tab_tower(g)
     else:
         body = _tab_settings(g)
 

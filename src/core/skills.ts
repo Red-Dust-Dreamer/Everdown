@@ -16,7 +16,9 @@ export function equipSkillLv(g: Game): number {
 }
 
 export function effLv(g: Game, sid: string): number {
-  return Math.max(1, g.skillLv[sid] ?? 1) + equipSkillLv(g);
+  // 技能有效等级 = 自身等级(默认1) + 装备加成 + 遗物全技能等级
+  return Math.max(1, g.skillLv[sid] ?? 1) + equipSkillLv(g)
+    + Math.trunc(g.hero.all_skill_lv ?? 0);
 }
 
 export function skillVal(def: { base: number; per?: number }, lv: number): number {
@@ -110,6 +112,10 @@ export function dmgMultipliers(g: Game, mon: MonLike | null): number {
     if (hookDef(g, "low_target_dmg") && mon.hpPct() < 0.4) {
       mult *= 1 + hookVal(g, "low_target_dmg") / 100;
     }
+  }
+  // 遗物:猎首(对头目/精英额外伤害)
+  if (mon && (mon.boss || mon.elite)) {
+    mult *= 1 + (g.hero.boss_dmg_r ?? 0) / 100;
   }
   if ((g.hero.next_hit_bonus ?? 0) > 0) {
     mult *= 1 + g.hero.next_hit_bonus / 100;
