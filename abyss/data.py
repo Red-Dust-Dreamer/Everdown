@@ -413,7 +413,7 @@ BAL = {
     "hero_hp0": 120.0, "hero_atk0": 15.0, "hero_def0": 3.0,
     "hero_interval": 1.1, "hero_crit0": 5.0, "hero_critdmg0": 50.0,
     "hp_per_lv": 6.0, "atk_per_lv": 1.2, "def_per_lv": 0.5,
-    "xp_req0": 60.0, "xp_req_p": 1.65,     # 升级需求 = 60 × lv^1.65(成型慢)
+    "xp_req0": 60.0, "xp_req_p": 1.90,     # 升级需求 = 60 × lv^1.90(成型以十小时计)
 
     # 推进
     "kills_per_stage": 3,     # 每层击杀数(第10层为头目,1只)
@@ -429,7 +429,7 @@ BAL = {
 
     # 奖励(近线性)
     "gold0": 6.0, "gold_k": 3.0, "gold_p": 0.85,
-    "xp0": 9.0, "xp_k": 5.0, "xp_p": 0.9,
+    "xp0": 9.0, "xp_k": 3.5, "xp_p": 0.75,   # 推进层经验收入下调(低基数+平幂)
     "drop_chance": 0.16, "elite_drop": 0.35,
     "boss_drop": 1.0, "boss_stone_chance": 0.6, "boss_stone_amt": 2,
 
