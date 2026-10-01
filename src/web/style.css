@@ -375,7 +375,7 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
   .nav-item{flex:1;flex-direction:column;gap:3px;min-width:48px;padding:7px 2px;
     border-radius:10px}
   .nav-item .ic{font-size:19px}
-  .nav-item .tx{font-size:10.5px}
+  .nav-item .tx{display:block;font-size:10.5px}
   .nav-item .kbd{display:none}
   .nav-item.on{box-shadow:inset 0 3px 0 var(--red)}   /* 高亮条移到底部 */
   #content{flex:1;overflow-y:auto;padding:10px 10px calc(var(--nav-h) + env(safe-area-inset-bottom) + 14px)}
