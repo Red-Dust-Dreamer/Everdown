@@ -85,13 +85,13 @@ CLASSES = {
     "mage": {
         "name": "法师", "icon": "✦", "color": "bright_blue",
         "desc": "元素与毁灭:普攻平庸,技能伤害爆炸",
-        "base": {"hp": 0.85, "atk": 0.95, "def": 0.80},
-        "interval": 1.3, "crit0": 0.0,
+        "base": {"hp": 1.05, "atk": 1.10, "def": 1.00},
+        "interval": 1.2, "crit0": 0.0,
     },
     "ranger": {
         "name": "射手", "icon": "➤", "color": "bright_green",
         "desc": "风与箭雨:攻速快、暴击高,连击风筝",
-        "base": {"hp": 0.95, "atk": 1.00, "def": 0.90},
+        "base": {"hp": 0.95, "atk": 0.95, "def": 0.90},
         "interval": 0.8, "crit0": 5.0,
     },
 }
@@ -146,7 +146,7 @@ ACTIVE_SKILLS = [
          desc="投掷火球,造成 {v}% 攻击力伤害"),
     dict(id="m_ice", cls="mage", name="寒冰箭", icon="❄", unlock=8, cd=12,
          color="bright_cyan", kind="damage", base=180, per=45,
-         atk_down=18, atk_down_dur=5,
+         atk_down=25, atk_down_dur=5,
          desc="{v}% 伤害并降低敌人攻击 18%,持续5秒"),
     dict(id="m_surge", cls="mage", name="奥术涌动", icon="✦", unlock=12, cd=25,
          color="bright_blue", kind="buff", stat="dmg", base=50, per=5, dur=8,
@@ -154,7 +154,7 @@ ACTIVE_SKILLS = [
     dict(id="m_chain", cls="mage", name="闪电链", icon="⚡", unlock=16, cd=12,
          color="bright_yellow", kind="damage", base=240, per=60, vs_elite=1.5,
          desc="{v}% 伤害,对精英与头目 ×1.5"),
-    dict(id="m_storm", cls="mage", name="烈焰风暴", icon="🌀", unlock=20, cd=18,
+    dict(id="m_storm", cls="mage", name="烈焰风暴", icon="🌀", unlock=20, cd=15,
          color="bright_red", kind="damage", base=420, per=95,
          desc="烈焰席卷,造成 {v}% 攻击力伤害"),
     dict(id="m_nova", cls="mage", name="冰霜新星", icon="❄", unlock=26, cd=35,
@@ -163,7 +163,7 @@ ACTIVE_SKILLS = [
     dict(id="m_shield", cls="mage", name="法力护盾", icon="🛡", unlock=32, cd=22,
          color="bright_blue", kind="shield", base=30, per=2.5,
          desc="获得 {v}% 最大生命的护盾"),
-    dict(id="m_meteor", cls="mage", name="陨石术", icon="☄", unlock=40, cd=30,
+    dict(id="m_meteor", cls="mage", name="陨石术", icon="☄", unlock=40, cd=26,
          color="bright_red", kind="damage", base=700, per=130,
          desc="召唤陨石,造成 {v}% 攻击力伤害"),
     dict(id="m_cata", cls="mage", name="元素灾变", icon="💥", unlock=50, cd=45,
@@ -238,7 +238,7 @@ PASSIVE_SKILLS = [
          stat="all", op="pct", base=10, per=1, desc="全属性 +{v}%"),
     # ---- 法师 ----
     dict(id="pm_affin", cls="mage", name="奥术亲和", unlock=1, kind="stat",
-         stat="skill_dmg", op="add", base=10, per=1, desc="主动技能伤害 +{v}%"),
+         stat="skill_dmg", op="add", base=25, per=1, desc="主动技能伤害 +{v}%"),
     dict(id="pm_prec", cls="mage", name="元素精准", unlock=5, kind="stat",
          stat="crit", op="add", base=3, per=0.3, desc="暴击率 +{v} 点"),
     dict(id="pm_frost", cls="mage", name="冰霜之体", unlock=10, kind="stat",
@@ -437,8 +437,6 @@ BAL = {
     # 装备幂(1.12)刻意低于怪物HP幂(1.28):纵向差随深度缓慢拉开,
     # 推进越来越慢、由质量(稀有度/强化/成就)补差 → 有节奏的墙,成型以小时计
     "item_main_p": 1.12,
-    # 数值型词缀 = 固定区间 + 线性小步长
-    "affix_atk_k": 0.05, "affix_def_k": 0.06, "affix_hp_k": 0.35,
 
     # 强化收益分段递减(每级全属性加成):0-10级 / 11-20级 / 21级起
     # 递减让质量乘数自然饱和,进度墙回归;费用多项式继续上涨即软上限

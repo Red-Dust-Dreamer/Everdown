@@ -363,17 +363,37 @@ def _autopilot(g, sim=False):
         return
     if int(g.time * 10) % 50 != 0:
         return
-    # 自动装配:新解锁的技能补进空槽(主动优先伤害/增益,被动优先数值)
+    # 自动装配:优先伤害/数值类(接近真实玩家的选择)
     from .data import ACTIVE_SKILLS, PASSIVE_SKILLS
-    for which, pool in (("active", ACTIVE_SKILLS), ("passive", PASSIVE_SKILLS)):
-        for s in pool:
-            if s["cls"] != g.class_id or g.level < s["unlock"]:
-                continue
-            if s["id"] in g.loadout[which]:
-                continue
-            if len(g.loadout[which]) < g.loadout_slots():
-                g.equip_skill(s["id"], which)
-                break
+    for which, pool, kinds in (("active", ACTIVE_SKILLS, ("damage", "multi", "execute")),
+                               ("passive", PASSIVE_SKILLS, ("stat", "hook"))):
+        if len(g.loadout[which]) >= g.loadout_slots():
+            continue
+        unlocked = [s for s in pool
+                    if s["cls"] == g.class_id and g.level >= s["unlock"]]
+        if which == "active":
+            # 合理配装:伤害 Top3(按 威力×连击/冷却)+ 生存 Top1。
+            # 第4槽被伤害占用而生存已解锁时,替换为生存技能。
+            from .data import ACTIVE_DEF
+            lo = g.loadout["active"]
+            dmg = sorted([s for s in unlocked if s.get("kind") in kinds],
+                         key=lambda s: -(s["base"] * s.get("hits", 1) / s["cd"]))
+            surv = [s for s in unlocked if s.get("kind") in ("shield", "heal", "buff")]
+            if surv and surv[0]["id"] not in lo:
+                if len(lo) >= g.loadout_slots() and lo:
+                    if ACTIVE_DEF.get(lo[-1], {}).get("kind") in kinds:
+                        g.unequip_skill(lo[-1])
+                if len(lo) < g.loadout_slots():
+                    g.equip_skill(surv[0]["id"], which)
+            elif len(lo) < g.loadout_slots():
+                cands = [s for s in dmg[:4] if s["id"] not in lo]
+                if cands:
+                    g.equip_skill(cands[0]["id"], which)
+        else:
+            cands = [s for s in unlocked
+                     if s.get("kind") in kinds and s["id"] not in g.loadout[which]]
+            if cands and len(g.loadout[which]) < g.loadout_slots():
+                g.equip_skill(cands[0]["id"], which)
     # 装备强化
     if g.equip:
         slot_item = min(g.equip.values(), key=lambda it: it.plus)

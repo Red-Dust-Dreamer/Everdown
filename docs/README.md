@@ -13,6 +13,7 @@
 | [04-security-anticheat.md](04-security-anticheat.md) | 防作弊、速率限制、异常检测 | 规划 |
 | [05-roadmap.md](05-roadmap.md) | 分阶段路线图 + 实施状态 | P0/P1 已完成 |
 | [06-multiplayer-team.md](06-multiplayer-team.md) | **多人团队作战**:异步聚合形态、Hero/World 拆分、resolve_raid、副本数值 | 规划(核心输入) |
+| [07-typescript-port.md](07-typescript-port.md) | **TS 全量同构迁移(B 方案)**:架构、RNG 对拍工程、双实现纪律 | ✅ 已实施(2026-10-01,对拍档一达成) |
 
 ## TL;DR(决策摘要)
 

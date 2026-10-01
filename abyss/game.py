@@ -12,7 +12,7 @@ import random
 import time
 from pathlib import Path
 
-from .ansi import fmt
+from .ansi import c, fmt
 from .combat import battle_tick, spawn_monster, tier_of
 from .data import (ACTIVE_DEF, ACTIVE_SKILLS, BAL, CAPS, CLASSES, PASSIVE_DEF,
                    PASSIVE_SKILLS, RARITY_IDX, SLOTS)
@@ -27,9 +27,10 @@ VIRTUAL_STATS = ("skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct")
 
 
 class Game:
-    def __init__(self, seed=None):
+    def __init__(self, seed=None, rng=None):
+        """rng:可选注入的 random.Random 兼容实例(审计/对拍用),默认行为不变"""
         self.seed = seed if seed is not None else random.SystemRandom().randrange(2 ** 31)
-        self.rng = random.Random(self.seed)
+        self.rng = rng or random.Random(self.seed)
         self.time = 0.0            # 游戏内秒
         self.playtime = 0.0
         self.gold = 0
@@ -265,7 +266,8 @@ class Game:
         systems.auto_equip_check(self, item)
         if item not in self.equip.values():
             self.bag.insert(0, item)
-            self.log("掉落 %s" % item.display(), item.rarity_color())
+            self.log("掉落 %s%s" % (item.display(), c(" Lv.%d" % item.tier, "bright_black")),
+                     item.rarity_color())
 
     def equip_item(self, item, silent_if_auto=False):
         """穿上 bag 或新掉落的 item"""

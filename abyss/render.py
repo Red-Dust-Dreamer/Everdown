@@ -152,7 +152,7 @@ def _card(g, hero_side):
         lines.append(" " * off + pad(colored, CARD_W - off, "center"))
     pct = m.hp_pct()
     lines.append(" " * off + pad(bar(m.hp, m.max_hp, 40, _hp_color(pct)), CARD_W - off, "center"))
-    lines.append(" " * off + pad(c("%s / %s  (强度%d)" % (fmt(m.hp), fmt(m.max_hp), m.tier),
+    lines.append(" " * off + pad(c("%s / %s  Lv.%d" % (fmt(m.hp), fmt(m.max_hp), m.tier),
                                    _hp_color(pct)), CARD_W - off, "center"))
     info = (c("攻击 ", "bright_black") + c(fmt(m.atk), "red")
             + c("  防御 ", "bright_black") + c(fmt(m.def_), "blue"))
@@ -288,7 +288,7 @@ def _tab_char_layout(g):
     right.append(" " + c("▌详情", "bright_white", bold=True))
     if it:
         right.append(" " + it.display())
-        right.append(" " + c("%s · 强度%d · %s" % (SLOT_NAMES[slot], it.tier,
+        right.append(" " + c("%s · Lv.%d · %s" % (SLOT_NAMES[slot], it.tier,
                                                   RARITIES[RARITY_IDX[it.rarity]][1]),
                               it.rarity_color()))
         right.append("")
@@ -340,7 +340,7 @@ def _tab_bag(g):
     if g.bag:
         it = g.bag[sel]
         right.append(" " + it.display())
-        right.append(" " + c("%s · 强度%d · 评分%s" % (SLOT_NAMES[it.slot], it.tier, fmt(it.score())),
+        right.append(" " + c("%s · Lv.%d · 评分%s" % (SLOT_NAMES[it.slot], it.tier, fmt(it.score())),
                               it.rarity_color()))
         right.append("")
         for ln in it.stat_lines()[:8]:
@@ -351,8 +351,14 @@ def _tab_bag(g):
             delta = it.score() - cur.score()
             arrow = c("▲ 优于当前 %s" % fmt(delta), "bright_green") if delta > 0 else \
                     c("▼ 劣于当前 %s" % fmt(-delta), "bright_red")
-            right.append(" " + c("对比: ", "bright_black") + c(cur.name, cur.rarity_color())
-                         + c(" +%d" % cur.plus if cur.plus else "", "bright_yellow"))
+            lv_gap = it.tier - cur.tier
+            lv_txt = (c("  Lv%+d" % lv_gap, "bright_green" if lv_gap > 0 else "bright_black")
+                      if lv_gap else c("  同级", "bright_black"))
+            right.append(" " + c("对比: ", "bright_black")
+                         + c("Lv.%d " % cur.tier, "bright_black")
+                         + c(cur.name, cur.rarity_color())
+                         + c(" +%d" % cur.plus if cur.plus else "", "bright_yellow")
+                         + lv_txt)
             right.append(" " + arrow + c("   (E 穿上)", "bright_black"))
         else:
             right.append(" " + c("该部位为空,直接穿上", "bright_green"))

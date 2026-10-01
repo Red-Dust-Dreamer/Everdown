@@ -1,40 +1,43 @@
-# ⚔ 深渊挂机 (Abyss Idle)
+# ⚔ 深渊挂机 (Abyss Idle) v2.0
 
-终端里的**放置刷宝**游戏:你的深渊行者永不停歇地自动战斗,你要做的是看掉落、换装备、点强化、推深渊。纯 Python 标准库实现,**零依赖**。
+终端与浏览器里的**放置刷宝**游戏:你的深渊行者永不停歇地自动战斗,你要做的是看掉落、换装备、点强化、推深渊。
 
-![平台](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows/macOS/Linux-green) ![依赖](https://img.shields.io/badge/%E4%BE%9D%E8%B5%96-%E6%97%A0-blue)
+**双实现**:
 
-## 运行
+- **TypeScript(`src/`)= 主实现** —— 网页/移动端与 Node CLI 共用同一套核心,RNG 与 Python 版逐位兼容;
+- **Python(`abyss/`)= 冻结基准** —— 仅用于对拍验证与平衡模拟,不再新增功能。
+
+![平台](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows/macOS/Linux-green) ![实现](https://img.shields.io/badge/%E5%AE%9E%E7%8E%B0-TS%E4%B8%BB%E5%AE%9E%E7%8E%B0%2FPython%E5%9F%BA%E5%87%86-blue) ![版本](https://img.shields.io/badge/%E7%89%88%E6%9C%AC-v2.0-orange)
+
+## 运行(三个入口)
 
 ```bash
-# Windows(推荐 Windows Terminal,窗口至少 100×30)
-py run.py
+# 1) 网页版(推荐):秒开、离线可用,与 CLI 共用同一核心与存档格式
+npm run dev                       # http://localhost:8614
 
-# macOS / Linux
-python3 run.py
+# 2) TS CLI(免编译直跑,需 Node 22+)
+npm run cli                       # 或:node --experimental-strip-types src/cli.ts
+
+# 3) Python CLI(冻结基准实现,纯标准库零依赖)
+py run.py                         # Windows(推荐 Windows Terminal,窗口至少 100×30)
+python3 run.py                    # macOS / Linux
 ```
 
 > Windows 老版 cmd 也能跑(程序会自动开启 VT 模式),但 Windows Terminal 字体渲染更好。
 > 若提示窗口太小,把终端窗口拉大到 **100 列 × 30 行**以上。
+> 网页存档保存在浏览器 localStorage,支持导出/导入 JSON(可与 CLI 的 save.json 互通);
+> 关闭页面再打开会自动结算**离线收益**(上限 12 小时,与 CLI 同一套懒结算 `resolve()`)。
 
-### 网页版(浏览器直接玩,与 CLI 共用同一核心与存档格式)
+遗留网页版(Pyodide 慢启动,首载约 10 秒):`py -m http.server 8613` 后访问 http://localhost:8613/web/legacy/ 。
 
-```bash
-cd abyss-idle
-py -m http.server 8613          # 任意静态服务器均可
-# 浏览器打开 http://localhost:8613/web/legacy/
-```
-
-- 首次加载约 10 秒(本地 vendor 的 Pyodide 运行时,离线可玩;vendor 目录缺失时自动回退 CDN);
-- 存档保存在浏览器 localStorage,支持导出/导入 JSON(可从 CLI 的 save.json 导入);
-- 关闭页面再打开会自动结算**离线收益**(上限 12 小时,与 CLI 同一套懒结算 `resolve()`)。
+现代网页版 **web/app**(2026-10-01 新增,图形界面,与 CLI/legacy 共用 Python 核心与 localStorage 存档):项目根起服务后访问 http://localhost:8613/web/app/ 。功能与 CLI 对齐(7 页全交互、离线结算弹窗、存档导出导入);设计稿见 `web/mockup/`。
 
 其他命令:
 
 ```bash
-py run.py --demo        # 自检:模拟 30 秒并渲染全部界面
-py run.py --sim 3600    # 平衡模拟:无渲染跑 1 小时,输出进度报告
-py run.py --new         # 忽略存档重新开始
+npm run sim               # 平衡模拟(TS):无渲染长跑,输出进度报告
+npm run demo              # 自检(TS):模拟 30 秒并渲染全部界面
+py run.py --demo          # Python 基准侧同款:--sim 3600 平衡模拟 / --new 重开
 ```
 
 存档自动保存在游戏目录 `save.json`(每 30 秒 + 退出时)。
@@ -44,9 +47,10 @@ py run.py --new         # 忽略存档重新开始
 | 系统 | 说明 |
 |------|------|
 | **自动战斗** | 攻击/防御/攻速/暴击/暴伤/吸血六维,伤害公式 `atk²/(atk+def)` 平滑减伤;击杀回血 8% |
-| **装备** | 6 部位 × 6 稀有度(普通→神话),每件随机 1~6 条词缀,词条随怪物强度成长 |
+| **装备等级** | 装备等级 = 掉落时主线档位(与怪物同源):高层掉高等级装备,属性随等级多项式成长(见下表);背包对比显示 Lv 差 |
+| **装备** | 6 部位 × 6 稀有度(普通→神话),每件随机 1~6 条词缀;数值属性随装备等级成长,百分比属性靠稀有度/强化/成就 |
 | **掉落** | 普通怪 16%、精英 35%、头目必掉且保底稀有;金币加成词缀同时提升高稀有度权重 |
-| **背包** | 40 格,装备对比(▲▼评分差)、出售、分解(史诗+出重铸石)、一键清杂 |
+| **背包** | 40 格,装备对比(▲▼评分差 + Lv 等级差)、出售、分解(史诗+出重铸石)、一键清杂 |
 | **强化** | 金币强化 +8% 全属性/级,无硬上限,费用指数递增(软上限) |
 | **重铸** | 3 重铸石重掷全部词缀与主属性,保留稀有度/强化 |
 | **技能** | 4 个自动施放技能(重击/战吼/治疗/处决),金币升级,Lv5/10/20 解锁 |
@@ -78,7 +82,45 @@ py run.py --new         # 忽略存档重新开始
 | `H` | 帮助 | 全局 |
 | `Q` | 退出(自动存档) | 全局 |
 
+## 职业与技能(存档 v4)
+
+开局三选一(**1** 战士 / **2** 法师 / **3** 射手),职业决定基础属性倾向与专属技能池:
+
+| 职业 | 定位 | 属性倾向 |
+|------|------|----------|
+| ⚔ 战士 | 生存/斩杀 | 生命×1.30 攻击×1.05 防御×1.35,攻速 1.2s |
+| ✦ 法师 | 技能爆发 | 生命×1.05 攻击×1.10 防御×1.00,攻速 1.2s,技能伤害流 |
+| ➤ 射手 | 攻速暴击 | 生命×0.95 攻击×0.95 防御×0.90,攻速 0.8s,暴击流 |
+
+- **技能池**:每职业 **10 主动 + 10 被动**(解锁等级 1~55,战斗中自动施放);
+- **装配**:从池中自选 **4 主动 + 4 被动**,槽位随等级解锁(Lv 1/8/16/26);
+- **升级**:金币升级技能等级(费用线性+平方,自然收敛);
+- **装备加成**:新词缀「全技能等级 +0.3~0.8/件」为全部装配技能提供额外等级;
+- **被动机制**:数值类直接进属性;机制类含触发钩子(击杀增益/免死/低血增伤/
+  对头目增伤/暴击加速/受击增伤/闪避/无视防御等);
+- **主动类型**:伤害/连击/增益/护盾/斩杀,带降攻、降防、冻结、印记等附加效果。
+
+技能页(5)键位:`←→` 装配区/主动池/被动池,`↑↓` 选择,`E` 装配/卸下,`U` 升级。
+
+> 60 分钟挂机模拟(autopilot 合理配装):战士 115 区 / 射手 93 区 / 法师 76-93 区
+> (法师曲线方差大、成型后爆发,是设计个性;有真实玩家数据后再精调)。
+
 ## 玩法循环
+
+**装备等级 → 属性速查**(主属性 = 槽基值 + 槽斜率 × Lv^1.12,词缀另计;稀有度倍率 普通×1.0 → 神话×2.1):
+
+| 装备等级 | 武器攻击 | 头盔生命 | 护甲防御 | 攻击词缀(上限) | 生命词缀(上限) |
+|---------|---------|---------|---------|---------------|---------------|
+| Lv.10 | 33 | 215 | 21 | +2~5 | +19~22 |
+| Lv.30 | 103 | 662 | 66 | +4~6 | +20~23 |
+| Lv.60 | 220 | 1403 | 140 | +5~8 | +21~24 |
+| Lv.100 | 386 | 2463 | 246 | +7~10 | +23~26 |
+| Lv.300 | 1313 | 8357 | 836 | +17~20 | +33~36 |
+
+> 等级 = 掉落时的主线档位(第 N 区第 M 层 → Lv.(N-1)×10+M-1),怪物血量按同源但更陡的
+> 幂(1.28)成长——越往后换装提升越需搭配稀有度/强化/被动,这是节奏设计。
+> 强化对全部属性生效:0~10 级每级 +8%、11~20 级 +4%、21 级起 +2%。
+> 数值词缀随等级线性成长(攻击 +0.05/级、生命 +0.35/级),百分比词缀不随等级变化。
 
 ```
 自动战斗 → 掉装备 → 自动换装(或手动)→ 金币强化/升技能
@@ -109,14 +151,30 @@ py run.py --new         # 忽略存档重新开始
 (`add`=直接加值,`pct`=百分比乘),统一在 `recalc_hero` 应用(先加后乘再截断),
 随存档持久化(v3)——未来属性丹/悬赏奖励/公会 buff 直接挂入,无需改核心。
 
-所有常数集中在 `abyss/data.py` 的 `BAL` 字典。
+所有常数集中在 `src/core/data.ts` 的 `BAL`(Python 基准侧镜像于 `abyss/data.py`,随对拍保持一致)。
 
 ## 项目结构
 
 ```
 abyss-idle/
-├── run.py            # CLI 入口
-├── abyss/            # 游戏核心(无 UI 依赖,CLI/网页共用)
+├── src/              # TS 主实现(Web + Node CLI 共用核心)
+│   ├── core/         # 游戏核心(零 UI 依赖,与 abyss/ 逐位对拍兼容)
+│   │   ├── rng.ts    #   播种 RNG(与 Python 版逐位一致)
+│   │   ├── data.ts   #   静态数据 + 平衡常数 BAL(常量唯一活口)
+│   │   ├── items.ts / combat.ts / systems.ts / skills.ts
+│   │   ├── game.ts   #   Game 状态机(事件输出,存档迁移)
+│   │   ├── render.ts / ansi.ts / view.ts / host.ts
+│   ├── cli.ts        # Node CLI 入口(免编译直跑)
+│   ├── web/          # 网页版(Vite 入口,端口 8614)
+│   ├── tests/        # regression.ts 回归测试(核心行为快照)
+│   └── sim.ts        # 平衡模拟 / demo 自检(同 seed 可复现)
+├── scripts/
+│   └── parity.sh     # TS ⇄ Python 对拍脚本(同 seed 双跑比对)
+├── package.json      # npm scripts:dev / build / cli / sim / demo
+├── tsconfig.json     # TypeScript 配置
+├── vite.config.ts    # Vite 配置(root=src/web,端口 8614)
+├── run.py            # Python CLI 入口
+├── abyss/            # Python 版核心 —— 冻结基准(仅对拍与平衡模拟,不再新增功能)
 │   ├── ansi.py       # ANSI 颜色 / CJK 宽度对齐 / 进度条 / 数字格式化
 │   ├── data.py       # 静态数据:稀有度/词缀/地图/怪物/技能/成就 + 平衡常数 BAL
 │   ├── items.py      # 装备生成 / 属性 / 评分 / 命名 / 出售分解
@@ -127,7 +185,7 @@ abyss-idle/
 │   ├── render.py     # 渲染:7 个标签页 + 弹窗(100×30 画布,含互撞动画)
 │   └── main.py       # CLI 宿主:主循环 / 按键分发 / demo / sim(同 seed 可复现)
 ├── web/
-│   ├── legacy/       # 网页版(Pyodide + xterm.js,localStorage 存档)
+│   ├── legacy/       # 旧网页版(遗留:Pyodide + xterm.js,localStorage 存档,端口 8613)
 │   │   ├── abyss_bridge.py  # 网页宿主桥接(boot/tick/key/frame/save)
 │   │   ├── main.js / index.html
 │   │   ├── fonts/abyss-mono.woff2  # NSimSun 子集(2:1 等宽 CJK)
@@ -137,9 +195,15 @@ abyss-idle/
 └── save.json         # CLI 存档(自动生成)
 ```
 
-> 架构要点:**核心(abyss/)零 UI 依赖、全部输出走事件队列、随机全播种**——
-> 这是"CLI / 网页 / 未来服务器"三个宿主共用同一份游戏逻辑的基础(P0 已完成)。
-> 网页化与多人规划见 [docs/](docs/README.md)。
+> 架构要点:**核心(src/core)零 UI 依赖、全部输出走事件队列、随机全播种(RNG 与 Python 逐位兼容)**——
+> 这是"CLI / 网页 / 未来服务器"多个宿主共用同一份游戏逻辑的基础;`abyss/` 冻结为对拍基准。
+> 多人规划见 [docs/](docs/README.md)。
+
+## 开发
+
+- **前置**:先 `npm install`(仅 typescript + vite 两个 devDependencies;Python 侧仍零依赖,`py run.py` 开箱即用);
+- **对拍**:`bash scripts/parity.sh` —— 同 seed 分别驱动 TS 与 Python 核心逐位比对,改动 `src/core` 后必跑;
+- **回归**:`node --experimental-strip-types src/tests/regression.ts` —— 核心行为快照回归,防止重构悄悄改变数值。
 
 ## Roadmap(候选)
 

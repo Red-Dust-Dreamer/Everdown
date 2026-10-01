@@ -5,7 +5,7 @@ const VENDOR = "./vendor/pyodide/";
 const CDN = "https://unpkg.com/pyodide@0.26.4/";
 let PYODIDE_URL = VENDOR + "pyodide.mjs";
 let PYODIDE_INDEX = VENDOR;
-const MODULES = ["__init__", "ansi", "data", "items", "combat",
+const MODULES = ["__init__", "ansi", "data", "items", "skills", "combat",
                  "systems", "view", "game", "render", "main"];
 
 const $ = (id) => document.getElementById(id);
@@ -57,7 +57,7 @@ async function loadCore(pyodide) {
   // 把 abyss 包写入 Pyodide 虚拟文件系统,再 import
   pyodide.FS.mkdirTree("/abyss");
   for (const m of MODULES) {
-    const src = await (await fetch(`/abyss/${m}.py`)).text();
+    const src = await (await fetch(`/abyss/${m}.py?v=4`)).text();
     pyodide.FS.writeFile(`/abyss/${m}.py`, src, { encoding: "utf8" });
   }
   pyodide.runPython("import sys; sys.path.insert(0, '/')");

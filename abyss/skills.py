@@ -17,11 +17,12 @@ def class_of(g):
 
 
 def equip_skill_lv(g):
-    """装备词缀提供的全技能等级加成(向下取整)"""
-    total = 0.0
-    for it in g.equip.values():
-        total += it.stats().get("skill_lv", 0)
-    return int(total)
+    """装备词缀提供的全技能等级加成(向下取整)。
+
+    词缀已在 recalc_hero 聚合进 hero['skill_lv'](虚拟属性管道),
+    这里直接读缓存——本函数在每次伤害计算的热路径上,不可重算装备。
+    """
+    return int(g.hero.get("skill_lv", 0))
 
 
 def eff_lv(g, sid):
@@ -30,7 +31,7 @@ def eff_lv(g, sid):
 
 
 def skill_val(defn, lv):
-    return defn["base"] + defn["per"] * (lv - 1)
+    return defn["base"] + defn.get("per", 0) * (lv - 1)
 
 
 def _fmt_val(v):

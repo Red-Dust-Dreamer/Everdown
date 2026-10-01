@@ -1,0 +1,303 @@
+/** 游戏静态数据 — 与 abyss/data.ts 数值逐项一致(对拍基准) */
+import type { Color } from "./ansi.ts";
+
+// ---------------------------------------------------------------- 稀有度
+export interface RarityDef {
+  key: string; name: string; color: Color; affixes: number; mainMul: number; weight: number;
+}
+export const RARITIES: RarityDef[] = [
+  { key: "common", name: "普通", color: "bright_black", affixes: 1, mainMul: 1.0, weight: 55.0 },
+  { key: "fine", name: "精良", color: "green", affixes: 2, mainMul: 1.12, weight: 25.0 },
+  { key: "rare", name: "稀有", color: "bright_blue", affixes: 3, mainMul: 1.28, weight: 12.0 },
+  { key: "epic", name: "史诗", color: "bright_magenta", affixes: 4, mainMul: 1.48, weight: 5.5 },
+  { key: "legendary", name: "传说", color: "bright_yellow", affixes: 5, mainMul: 1.75, weight: 2.0 },
+  { key: "mythic", name: "神话", color: "bright_red", affixes: 6, mainMul: 2.1, weight: 0.5 },
+];
+export const RARITY_IDX: Record<string, number> =
+  Object.fromEntries(RARITIES.map((r, i) => [r.key, i]));
+export const RARITY_PREFIX = ["破旧的", "精制的", "秘银", "龙裔", "星陨", "湮灭"];
+
+// ---------------------------------------------------------------- 属性键
+export type StatKey = "atk" | "def" | "hp" | "haste" | "crit" | "crit_dmg"
+  | "lifesteal" | "goldfind" | "skill_lv" | "skill_dmg" | "cd_reduce"
+  | "dodge" | "armor_pierce" | "xp_pct" | "dmg_pct" | "all";
+export const STAT_NAMES: Record<string, string> = {
+  atk: "攻击", def: "防御", hp: "生命", haste: "攻速",
+  crit: "暴击率", crit_dmg: "暴击伤害", lifesteal: "吸血",
+  goldfind: "金币加成", dmg_pct: "伤害加成",
+  skill_lv: "全技能等级", skill_dmg: "技能伤害", cd_reduce: "冷却缩减",
+  dodge: "闪避", armor_pierce: "无视防御", xp_pct: "经验加成",
+};
+
+// ---------------------------------------------------------------- 装备槽
+export interface SlotDef {
+  id: string; name: string; main: StatKey; mainBase: number; names: string[];
+}
+export const SLOTS: SlotDef[] = [
+  { id: "weapon", name: "武器", main: "atk", mainBase: 4.0, names: ["利刃", "战刃", "重锤", "长枪", "巨剑"] },
+  { id: "helmet", name: "头盔", main: "hp", mainBase: 30.0, names: ["头盔", "面甲", "兜帽", "战冠"] },
+  { id: "armor", name: "护甲", main: "def", mainBase: 3.0, names: ["胸甲", "鳞铠", "法袍", "重铠"] },
+  { id: "boots", name: "鞋子", main: "atk", mainBase: 2.5, names: ["战靴", "疾行鞋", "踏云靴", "铁蹄"] },
+  { id: "amulet", name: "项链", main: "crit_dmg", mainBase: 14.0, names: ["坠饰", "项链", "符珠", "龙牙链"] },
+  { id: "ring", name: "戒指", main: "crit", mainBase: 3.4, names: ["戒指", "指环", "印记", "魔戒"] },
+];
+export const SLOT_NAMES: Record<string, string> = Object.fromEntries(SLOTS.map(s => [s.id, s.name]));
+export const SLOT_MAIN_K: Record<string, number> = {
+  weapon: 2.2, helmet: 14.0, armor: 1.4, boots: 1.4,
+};
+export const SLOT_INNATE: Record<string, [StatKey, number]> = {
+  boots: ["haste", 2.5], amulet: ["crit_dmg", 6], ring: ["crit", 1.4],
+};
+
+// ---------------------------------------------------------------- 词缀池
+export interface AffixDef {
+  id: StatKey; name: string; lo: number; hi: number; k: number; pct: boolean; weight: number;
+}
+export const AFFIXES: AffixDef[] = [
+  { id: "atk", name: "攻击力", lo: 2.0, hi: 4.5, k: 0.05, pct: false, weight: 1.0 },
+  { id: "def", name: "防御力", lo: 2.5, hi: 5.0, k: 0.06, pct: false, weight: 0.45 },
+  { id: "hp", name: "生命值", lo: 18.0, hi: 38.0, k: 0.35, pct: false, weight: 0.085 },
+  { id: "haste", name: "攻击速度", lo: 3.0, hi: 7.0, k: 0, pct: true, weight: 6.5 },
+  { id: "crit", name: "暴击率", lo: 2.0, hi: 4.5, k: 0, pct: true, weight: 9.0 },
+  { id: "crit_dmg", name: "暴击伤害", lo: 8.0, hi: 16.0, k: 0, pct: true, weight: 2.8 },
+  { id: "lifesteal", name: "吸血", lo: 1.0, hi: 2.5, k: 0, pct: true, weight: 7.0 },
+  { id: "goldfind", name: "金币加成", lo: 5.0, hi: 12.0, k: 0, pct: true, weight: 1.8 },
+  { id: "skill_lv", name: "全技能等级", lo: 0.3, hi: 0.8, k: 0, pct: false, weight: 11.0 },
+];
+export const AFFIX_DEF: Record<string, AffixDef> = Object.fromEntries(AFFIXES.map(a => [a.id, a]));
+export const AFFIX_SUFFIX: Record<string, string> = {
+  atk: "蛮力", def: "坚壁", hp: "巨鲸", haste: "疾风",
+  crit: "鹰眼", crit_dmg: "斩首", lifesteal: "嗜血",
+  goldfind: "贪婪", skill_lv: "大师",
+};
+export const CAPS: Partial<Record<StatKey, number>> = {
+  haste: 150, crit: 75, lifesteal: 25,
+  skill_dmg: 300, cd_reduce: 40, dodge: 40,
+  armor_pierce: 50, xp_pct: 200,
+};
+
+// ---------------------------------------------------------------- 职业
+export interface ClassDef {
+  name: string; icon: string; color: Color; desc: string;
+  base: { hp: number; atk: number; def: number };
+  interval: number; crit0: number;
+}
+export const CLASSES: Record<string, ClassDef> = {
+  warrior: {
+    name: "战士", icon: "⚔", color: "bright_red",
+    desc: "钢铁与怒火:生存极强,越战越勇,斩杀收头",
+    base: { hp: 1.3, atk: 1.05, def: 1.35 }, interval: 1.2, crit0: 0,
+  },
+  mage: {
+    name: "法师", icon: "✦", color: "bright_blue",
+    desc: "元素与毁灭:普攻平庸,技能伤害爆炸",
+    base: { hp: 1.05, atk: 1.1, def: 1.0 }, interval: 1.2, crit0: 0,
+  },
+  ranger: {
+    name: "射手", icon: "➤", color: "bright_green",
+    desc: "风与箭雨:攻速快、暴击高,连击风筝",
+    base: { hp: 0.95, atk: 0.95, def: 0.9 }, interval: 0.8, crit0: 5.0,
+  },
+};
+
+// ---------------------------------------------------------------- 主动技能池
+export type ActiveKind = "damage" | "multi" | "buff" | "heal" | "shield" | "execute";
+export interface ActiveSkill {
+  id: string; cls: string; name: string; icon: string; unlock: number; cd: number;
+  color: Color; kind: ActiveKind; base: number; per: number; desc: string;
+  hits?: number; lifesteal?: number; def_down?: number; def_down_dur?: number;
+  atk_down?: number; atk_down_dur?: number; freeze?: number; must_crit?: boolean;
+  vs_elite?: number; mark?: number; mark_dur?: number;
+  stat?: StatKey; dur?: number; threshold?: number;
+}
+export const ACTIVE_SKILLS: ActiveSkill[] = [
+  // ---- 战士 ----
+  { id: "w_strike", cls: "warrior", name: "重击", icon: "⚔", unlock: 1, cd: 8, color: "bright_yellow", kind: "damage", base: 260, per: 60, desc: "造成 {v}% 攻击力伤害" },
+  { id: "w_whirl", cls: "warrior", name: "旋风斩", icon: "🌀", unlock: 5, cd: 5, color: "bright_yellow", kind: "damage", base: 170, per: 40, desc: "快频攻击:造成 {v}% 攻击力伤害" },
+  { id: "w_warcry", cls: "warrior", name: "战吼", icon: "🔥", unlock: 8, cd: 24, color: "bright_red", kind: "buff", stat: "atk", base: 45, per: 8, dur: 8, desc: "8秒内攻击力 +{v}%" },
+  { id: "w_taunt", cls: "warrior", name: "嘲讽打击", icon: "💢", unlock: 12, cd: 15, color: "bright_yellow", kind: "damage", base: 150, per: 35, atk_down: 15, atk_down_dur: 6, desc: "{v}% 伤害并降低敌人攻击 15%,持续6秒" },
+  { id: "w_exec", cls: "warrior", name: "处决", icon: "☠", unlock: 16, cd: 30, color: "bright_magenta", kind: "execute", base: 500, per: 0, threshold: 20, desc: "生命低于20%的敌人直接斩杀(否则 {v}% 伤害)" },
+  { id: "w_blood", cls: "warrior", name: "嗜血打击", icon: "🩸", unlock: 20, cd: 12, color: "bright_red", kind: "damage", base: 250, per: 55, lifesteal: 30, desc: "{v}% 伤害,并将伤害的 30% 转为自身生命" },
+  { id: "w_wall", cls: "warrior", name: "护盾壁垒", icon: "🛡", unlock: 26, cd: 20, color: "bright_cyan", kind: "shield", base: 25, per: 2, desc: "获得 {v}% 最大生命的护盾" },
+  { id: "w_fury", cls: "warrior", name: "狂暴", icon: "⚡", unlock: 32, cd: 30, color: "bright_red", kind: "buff", stat: "haste", base: 40, per: 4, dur: 10, desc: "10秒内攻速 +{v}%" },
+  { id: "w_fatal", cls: "warrior", name: "致命一击", icon: "💥", unlock: 40, cd: 20, color: "bright_yellow", kind: "damage", base: 500, per: 90, must_crit: true, desc: "{v}% 伤害,必定暴击" },
+  { id: "w_roar", cls: "warrior", name: "毁灭怒吼", icon: "🔥", unlock: 50, cd: 45, color: "bright_red", kind: "buff", stat: "all", base: 30, per: 3, dur: 12, desc: "12秒内全属性 +{v}%" },
+  // ---- 法师 ----
+  { id: "m_missile", cls: "mage", name: "奥术飞弹", icon: "✧", unlock: 1, cd: 6, color: "bright_blue", kind: "damage", base: 220, per: 55, desc: "射出奥术能量,造成 {v}% 攻击力伤害" },
+  { id: "m_fire", cls: "mage", name: "火球术", icon: "🔥", unlock: 5, cd: 10, color: "bright_red", kind: "damage", base: 300, per: 70, desc: "投掷火球,造成 {v}% 攻击力伤害" },
+  { id: "m_ice", cls: "mage", name: "寒冰箭", icon: "❄", unlock: 8, cd: 12, color: "bright_cyan", kind: "damage", base: 180, per: 45, atk_down: 25, atk_down_dur: 5, desc: "{v}% 伤害并降低敌人攻击 18%,持续5秒" },
+  { id: "m_surge", cls: "mage", name: "奥术涌动", icon: "✦", unlock: 12, cd: 25, color: "bright_blue", kind: "buff", stat: "dmg_pct", base: 50, per: 5, dur: 8, desc: "8秒内造成的所有伤害 +{v}%" },
+  { id: "m_chain", cls: "mage", name: "闪电链", icon: "⚡", unlock: 16, cd: 12, color: "bright_yellow", kind: "damage", base: 240, per: 60, vs_elite: 1.5, desc: "{v}% 伤害,对精英与头目 ×1.5" },
+  { id: "m_storm", cls: "mage", name: "烈焰风暴", icon: "🌀", unlock: 20, cd: 15, color: "bright_red", kind: "damage", base: 420, per: 95, desc: "烈焰席卷,造成 {v}% 攻击力伤害" },
+  { id: "m_nova", cls: "mage", name: "冰霜新星", icon: "❄", unlock: 26, cd: 35, color: "bright_cyan", kind: "damage", base: 150, per: 35, freeze: 3, desc: "{v}% 伤害并冻结敌人 3 秒" },
+  { id: "m_shield", cls: "mage", name: "法力护盾", icon: "🛡", unlock: 32, cd: 22, color: "bright_blue", kind: "shield", base: 30, per: 2.5, desc: "获得 {v}% 最大生命的护盾" },
+  { id: "m_meteor", cls: "mage", name: "陨石术", icon: "☄", unlock: 40, cd: 26, color: "bright_red", kind: "damage", base: 700, per: 130, desc: "召唤陨石,造成 {v}% 攻击力伤害" },
+  { id: "m_cata", cls: "mage", name: "元素灾变", icon: "💥", unlock: 50, cd: 45, color: "bright_magenta", kind: "damage", base: 1000, per: 180, must_crit: true, desc: "{v}% 伤害,必定暴击" },
+  // ---- 射手 ----
+  { id: "r_volley", cls: "ranger", name: "疾风连射", icon: "➤", unlock: 1, cd: 8, color: "bright_green", kind: "multi", base: 90, per: 20, hits: 3, desc: "连射3箭,每箭 {v}% 攻击力伤害" },
+  { id: "r_pierce", cls: "ranger", name: "穿透箭", icon: "➤", unlock: 5, cd: 12, color: "bright_green", kind: "damage", base: 280, per: 65, def_down: 20, def_down_dur: 5, desc: "{v}% 伤害并降低敌人防御 20%,持续5秒" },
+  { id: "r_mark", cls: "ranger", name: "猎杀印记", icon: "◎", unlock: 8, cd: 18, color: "bright_yellow", kind: "damage", base: 80, per: 20, mark: 25, mark_dur: 10, desc: "标记目标:10秒内对其伤害 +25%(附带 {v}% 伤害)" },
+  { id: "r_back", cls: "ranger", name: "后跳射击", icon: "↩", unlock: 12, cd: 10, color: "bright_green", kind: "damage", base: 200, per: 45, lifesteal: 50, desc: "{v}% 伤害,并将伤害的 50% 转为自身生命" },
+  { id: "r_rain", cls: "ranger", name: "箭雨", icon: "☔", unlock: 16, cd: 14, color: "bright_green", kind: "multi", base: 110, per: 25, hits: 5, desc: "箭雨覆盖:5连击,每箭 {v}% 攻击力伤害" },
+  { id: "r_hawk", cls: "ranger", name: "鹰眼", icon: "👁", unlock: 24, cd: 25, color: "bright_yellow", kind: "buff", stat: "crit", base: 15, per: 1.5, dur: 10, desc: "10秒内暴击率 +{v} 点" },
+  { id: "r_dash", cls: "ranger", name: "疾行", icon: "💨", unlock: 26, cd: 22, color: "bright_cyan", kind: "buff", stat: "haste", base: 50, per: 4, dur: 8, desc: "8秒内攻速 +{v}%" },
+  { id: "r_deadly", cls: "ranger", name: "致命连射", icon: "💥", unlock: 32, cd: 25, color: "bright_red", kind: "multi", base: 180, per: 40, hits: 3, must_crit: true, desc: "3连击必暴击,每箭 {v}% 攻击力伤害" },
+  { id: "r_sky", cls: "ranger", name: "穿云箭", icon: "✷", unlock: 40, cd: 28, color: "bright_yellow", kind: "damage", base: 800, per: 150, desc: "贯穿一切:造成 {v}% 攻击力伤害" },
+  { id: "r_god", cls: "ranger", name: "猎神之怒", icon: "🌟", unlock: 50, cd: 45, color: "bright_green", kind: "buff", stat: "all", base: 25, per: 2.5, dur: 12, desc: "12秒内全属性 +{v}%" },
+];
+export const ACTIVE_DEF: Record<string, ActiveSkill> =
+  Object.fromEntries(ACTIVE_SKILLS.map(s => [s.id, s]));
+
+// ---------------------------------------------------------------- 被动技能池
+export type HookName = "on_kill_buff" | "low_hp_dmg" | "undying" | "on_crit_haste"
+  | "on_crit_dmg_next" | "on_hurt_dmg" | "boss_dmg" | "low_target_dmg";
+export interface PassiveSkill {
+  id: string; cls: string; name: string; unlock: number; desc: string;
+  kind: "stat" | "hook";
+  stat?: StatKey; op?: "add" | "pct"; base: number; per: number;
+  hook?: HookName; dur?: number;
+}
+export const PASSIVE_SKILLS: PassiveSkill[] = [
+  // ---- 战士 ----
+  { id: "pw_tough", cls: "warrior", name: "坚韧", unlock: 1, kind: "stat", stat: "hp", op: "pct", base: 8, per: 0.8, desc: "生命 +{v}%" },
+  { id: "pw_brute", cls: "warrior", name: "蛮力", unlock: 5, kind: "stat", stat: "atk", op: "pct", base: 8, per: 0.8, desc: "攻击 +{v}%" },
+  { id: "pw_feast", cls: "warrior", name: "杀戮盛宴", unlock: 10, kind: "hook", hook: "on_kill_buff", stat: "atk", base: 10, per: 1, dur: 4, desc: "击杀后4秒内攻击 +{v}%" },
+  { id: "pw_iron", cls: "warrior", name: "铁壁", unlock: 15, kind: "stat", stat: "def", op: "pct", base: 10, per: 1, desc: "防御 +{v}%" },
+  { id: "pw_unyield", cls: "warrior", name: "不屈", unlock: 20, kind: "hook", hook: "undying", base: 25, per: 1.5, desc: "{v}% 概率免疫致命伤(60秒冷却)" },
+  { id: "pw_will", cls: "warrior", name: "战意", unlock: 25, kind: "hook", hook: "low_hp_dmg", base: 30, per: 3, desc: "生命低于一半时伤害 +{v}%" },
+  { id: "pw_hunt", cls: "warrior", name: "深渊猎手", unlock: 30, kind: "hook", hook: "boss_dmg", base: 15, per: 1.5, desc: "对精英与头目伤害 +{v}%" },
+  { id: "pw_break", cls: "warrior", name: "破甲", unlock: 35, kind: "stat", stat: "armor_pierce", op: "add", base: 10, per: 1, desc: "攻击无视 {v}% 敌人防御" },
+  { id: "pw_zerk", cls: "warrior", name: "狂战士", unlock: 45, kind: "hook", hook: "on_crit_haste", base: 20, per: 2, dur: 3, desc: "暴击后3秒攻速 +{v}%" },
+  { id: "pw_phoenix", cls: "warrior", name: "不死战魂", unlock: 55, kind: "stat", stat: "all", op: "pct", base: 10, per: 1, desc: "全属性 +{v}%" },
+  // ---- 法师 ----
+  { id: "pm_affin", cls: "mage", name: "奥术亲和", unlock: 1, kind: "stat", stat: "skill_dmg", op: "add", base: 25, per: 1, desc: "主动技能伤害 +{v}%" },
+  { id: "pm_prec", cls: "mage", name: "元素精准", unlock: 5, kind: "stat", stat: "crit", op: "add", base: 3, per: 0.3, desc: "暴击率 +{v} 点" },
+  { id: "pm_frost", cls: "mage", name: "冰霜之体", unlock: 10, kind: "stat", stat: "hp", op: "pct", base: 6, per: 0.6, desc: "生命 +{v}%" },
+  { id: "pm_sage", cls: "mage", name: "贤者洞察", unlock: 15, kind: "stat", stat: "xp_pct", op: "add", base: 10, per: 1, desc: "经验获取 +{v}%" },
+  { id: "pm_torrent", cls: "mage", name: "法力洪流", unlock: 20, kind: "stat", stat: "atk", op: "pct", base: 8, per: 0.8, desc: "攻击 +{v}%" },
+  { id: "pm_burn", cls: "mage", name: "燃烧殆尽", unlock: 25, kind: "hook", hook: "low_target_dmg", base: 20, per: 2, desc: "对血量低于30%的敌人伤害 +{v}%" },
+  { id: "pm_bar", cls: "mage", name: "秘法屏障", unlock: 30, kind: "stat", stat: "def", op: "pct", base: 8, per: 0.8, desc: "防御 +{v}%" },
+  { id: "pm_time", cls: "mage", name: "时间扭曲", unlock: 35, kind: "stat", stat: "cd_reduce", op: "add", base: 8, per: 0.6, desc: "技能冷却 -{v}%" },
+  { id: "pm_destr", cls: "mage", name: "毁灭倾向", unlock: 45, kind: "stat", stat: "crit_dmg", op: "add", base: 30, per: 3, desc: "暴击伤害 +{v}%" },
+  { id: "pm_arch", cls: "mage", name: "大法师", unlock: 55, kind: "stat", stat: "all", op: "pct", base: 10, per: 1, desc: "全属性 +{v}%" },
+  // ---- 射手 ----
+  { id: "pr_swift", cls: "ranger", name: "迅捷", unlock: 1, kind: "stat", stat: "haste", op: "add", base: 6, per: 0.6, desc: "攻速 +{v}%" },
+  { id: "pr_eye", cls: "ranger", name: "鹰眼视觉", unlock: 5, kind: "stat", stat: "crit", op: "add", base: 3, per: 0.3, desc: "暴击率 +{v} 点" },
+  { id: "pr_weak", cls: "ranger", name: "弱点洞察", unlock: 10, kind: "stat", stat: "crit_dmg", op: "add", base: 25, per: 2.5, desc: "暴击伤害 +{v}%" },
+  { id: "pr_inst", cls: "ranger", name: "猎人本能", unlock: 15, kind: "hook", hook: "boss_dmg", base: 12, per: 1.2, desc: "对精英与头目伤害 +{v}%" },
+  { id: "pr_wind", cls: "ranger", name: "疾风步", unlock: 20, kind: "stat", stat: "dodge", op: "add", base: 8, per: 0.8, desc: "{v}% 概率闪避攻击" },
+  { id: "pr_chain", cls: "ranger", name: "连锁反应", unlock: 25, kind: "hook", hook: "on_crit_dmg_next", base: 30, per: 3, desc: "暴击后下次攻击伤害 +{v}%" },
+  { id: "pr_avenge", cls: "ranger", name: "复仇", unlock: 30, kind: "hook", hook: "on_hurt_dmg", base: 15, per: 1.5, dur: 4, desc: "受击后4秒内伤害 +{v}%" },
+  { id: "pr_chase", cls: "ranger", name: "无情追击", unlock: 35, kind: "hook", hook: "low_target_dmg", base: 18, per: 1.8, desc: "对血量低于40%的敌人伤害 +{v}%" },
+  { id: "pr_master", cls: "ranger", name: "箭术大师", unlock: 45, kind: "stat", stat: "skill_dmg", op: "add", base: 8, per: 0.8, desc: "主动技能伤害 +{v}%" },
+  { id: "pr_legend", cls: "ranger", name: "传奇猎手", unlock: 55, kind: "stat", stat: "all", op: "pct", base: 10, per: 1, desc: "全属性 +{v}%" },
+];
+export const PASSIVE_DEF: Record<string, PassiveSkill> =
+  Object.fromEntries(PASSIVE_SKILLS.map(s => [s.id, s]));
+
+// ---------------------------------------------------------------- 地图主题
+export interface ThemeDef { name: string; mobs: string[]; boss: string; color: Color }
+export const THEMES: ThemeDef[] = [
+  { name: "幽暗森林", mobs: ["slime", "wolf", "goblin"], boss: "巨型史莱姆王", color: "green" },
+  { name: "废弃矿坑", mobs: ["bat", "skeleton", "golem"], boss: "骷髅领主", color: "bright_black" },
+  { name: "熔岩地狱", mobs: ["imp", "hound", "elemental"], boss: "炎魔男爵", color: "bright_red" },
+  { name: "寒冰冻土", mobs: ["wolf", "golem", "elemental"], boss: "霜暴巨兽", color: "bright_cyan" },
+  { name: "腐沼墓地", mobs: ["slime", "skeleton", "bat"], boss: "亡灵大祭司", color: "magenta" },
+  { name: "虚空裂隙", mobs: ["imp", "goblin", "hound"], boss: "虚空吞噬者", color: "bright_magenta" },
+];
+
+export interface MobDef { name: string; color: Color; power: number }
+export const MONSTERS: Record<string, MobDef> = {
+  slime: { name: "史莱姆", color: "green", power: 1.0 },
+  wolf: { name: "恐狼", color: "yellow", power: 1.05 },
+  goblin: { name: "哥布林", color: "bright_green", power: 0.95 },
+  bat: { name: "吸血蝠", color: "magenta", power: 0.9 },
+  skeleton: { name: "骷髅兵", color: "white", power: 1.05 },
+  golem: { name: "石魔像", color: "bright_black", power: 1.15 },
+  imp: { name: "小恶魔", color: "bright_red", power: 1.05 },
+  hound: { name: "地狱犬", color: "red", power: 1.1 },
+  elemental: { name: "元素灵", color: "bright_cyan", power: 1.05 },
+};
+
+export const ART: Record<string, string[]> = {
+  slime: ["   _____     ", "  /     \\    ", " |  > <  |   ", "  \\ __  /    ", "   \\___/     "],
+  wolf: ["  /\\___/\\    ", " (  ω  )\\,,  ", "  |    | ||  ", " /|    |\\||  ", " ‾‾     ‾    "],
+  goblin: ["   ,,,,      ", "  (o-o)      ", " <|  |>>     ", "  _| |_      ", "  /   \\      "],
+  bat: [" __  __      ", "/  \\/  \\,_,  ", "\\_/\\_/\\ 'b, ", "  _||_       ", "             "],
+  skeleton: ["   .-.       ", "  (o o)      ", "  |' '|      ", "  |   |      ", "  _/ \\_      "],
+  golem: ["  [===]      ", "  |o°o|      ", " [|||]|]     ", "  |___|      ", " _/] [_\\     "],
+  imp: ["  \\|/        ", " (>v<)       ", " </_\\>       ", "  | |        ", " _/ \\_       "],
+  hound: [" ^   ^      ", " (◉ ω ◉)~,  ", "   /|\\       ", "  / | \\      ", "    ‾        "],
+  elemental: ["   (  )      ", "  ( ◉ )     ", "   )  (      ", "  ( ⚡ )     ", "   \\  /      "],
+};
+
+// ---------------------------------------------------------------- 成就
+export interface AchievementDef {
+  id: string; name: string; metric: string; thresholds: number[];
+  stat: string; per: number;
+}
+export const ACHIEVEMENTS: AchievementDef[] = [
+  { id: "slayer", name: "深渊猎手", metric: "kills", thresholds: [100, 1000, 10000, 50000], stat: "atk", per: 4 },
+  { id: "zonewalk", name: "开疆拓土", metric: "max_zone", thresholds: [3, 6, 10, 15, 25], stat: "hp", per: 6 },
+  { id: "smith", name: "锻造宗师", metric: "enhance_total", thresholds: [10, 50, 200, 600], stat: "def", per: 5 },
+  { id: "boss", name: "弑主者", metric: "boss_kills", thresholds: [10, 50, 200, 800], stat: "crit", per: 2 },
+  { id: "tycoon", name: "深渊富豪", metric: "gold_earned", thresholds: [1e4, 1e5, 1e6, 1e8], stat: "goldfind", per: 5 },
+  { id: "death", name: "不死鸟", metric: "deaths", thresholds: [1, 10, 50, 200], stat: "hp", per: 3 },
+];
+
+// ---------------------------------------------------------------- 悬赏任务
+export interface QuestTypeDef {
+  type: string; tpl: string; base: number; growth: number; goldK: number; stones: number;
+}
+export const QUEST_TYPES: QuestTypeDef[] = [
+  { type: "kill", tpl: "击杀 {n} 只怪物", base: 20, growth: 1.15, goldK: 25, stones: 0 },
+  { type: "boss", tpl: "击败 {n} 个头目", base: 2, growth: 1.1, goldK: 40, stones: 1 },
+  { type: "loot", tpl: "获取 {n} 件稀有+装备", base: 3, growth: 1.12, goldK: 30, stones: 1 },
+  { type: "enhance", tpl: "强化装备 {n} 次", base: 3, growth: 1.15, goldK: 35, stones: 1 },
+];
+
+// ---------------------------------------------------------------- 平衡常数
+export const BAL = {
+  hero_hp0: 120.0, hero_atk0: 15.0, hero_def0: 3.0,
+  hero_interval: 1.1, hero_crit0: 5.0, hero_critdmg0: 50.0,
+  hp_per_lv: 6.0, atk_per_lv: 1.2, def_per_lv: 0.5,
+  xp_req0: 60.0, xp_req_p: 1.65,
+
+  kills_per_stage: 3,
+
+  mob_hp0: 50.0, mob_hp_k: 26.0, mob_hp_p: 1.28,
+  mob_atk0: 6.8, mob_atk_k: 2.2, mob_atk_p: 1.05,
+  mob_def0: 3.0, mob_def_k: 1.5, mob_def_p: 1.0,
+  mob_interval: 1.6,
+  boss_hp: 2.6, boss_atk: 1.15, boss_gold: 5.0, boss_interval: 3.2,
+  elite_hp: 3.0, elite_atk: 1.3, elite_gold: 2.5,
+  elite_chance: 0.10,
+
+  gold0: 6.0, gold_k: 3.0, gold_p: 0.85,
+  xp0: 9.0, xp_k: 5.0, xp_p: 0.9,
+  drop_chance: 0.16, elite_drop: 0.35,
+  boss_drop: 1.0, boss_stone_chance: 0.6, boss_stone_amt: 2,
+
+  item_main_p: 1.12,
+
+  plus_pct_1: 8.0, plus_pct_2: 4.0, plus_pct_3: 2.0,
+  enhance_cost0: 25.0, enhance_cost_t: 1.8,
+  enhance_plus_a: 0.5, enhance_plus_b: 0.04,
+  plus_max: 999,
+  reforge_stones: 3,
+  bag_size: 40,
+
+  skill_cost0: 60.0, skill_cost_lv: 35.0, skill_cost_lv2: 6.0,
+  skill_cost_t: 2.0,
+  loadout_unlock: [1, 8, 16, 26],
+  undying_cd: 60.0,
+
+  offline_cap_sec: 12 * 3600,
+  offline_min_sec: 60,
+  offline_item_cap: 15,
+
+  respawn_sec: 4.0,
+  death_row_to_farm: 2,
+} as const;
+
+export const VIRTUAL_STATS = ["skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct"] as const;

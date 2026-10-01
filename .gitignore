@@ -2,8 +2,15 @@
 __pycache__/
 *.pyc
 
+# Node / 构建产物
+node_modules/
+dist/
+
 # 本地游戏存档(运行时生成,不属于源代码)
 save.json
+
+# 本地临时目录产物(parity 对拍输出等)
+/tmp/
 
 # 日志与临时文件
 *.log
