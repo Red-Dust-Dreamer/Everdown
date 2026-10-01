@@ -297,6 +297,8 @@ export const BAL = {
   offline_item_cap: 15,
 
   respawn_sec: 4.0,
+  // 游戏倍速档位(等级门槛):1x 始终可用,Lv10 解锁 2x,Lv30 解锁 3x
+  speed_unlock: [1, 10, 30],
   death_row_to_farm: 2,
 } as const;
 

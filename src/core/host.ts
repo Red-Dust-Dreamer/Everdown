@@ -46,6 +46,10 @@ export function handleKey(g: Game, key: string): KeyResult {
     g.setMode(g.mode === "push" ? "farm" : "push");
     return true;
   }
+  if (key === "b") {
+    g.cycleSpeed();
+    return true;
+  }
 
   const tab = ui.tab;
   if (tab === 0) {

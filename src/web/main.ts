@@ -96,6 +96,7 @@ interface State {
                   stat: string; per: number; bonus: number; next: number | null }[];
   loadout: { active: string[]; passive: string[] };
   loadout_slots: number; loadout_unlock: readonly number[];
+  speed: number; max_speed: number; speed_unlock: readonly number[];
   skills: { active: SkillUI[]; passive: SkillUI[] };
   skill_cd: Record<string, number>;
   stats: Record<string, number>;
@@ -222,6 +223,8 @@ function buildState(g: Game): State {
     loadout: { active: [...g.loadout.active], passive: [...g.loadout.passive] },
     loadout_slots: g.loadoutSlots(),
     loadout_unlock: D.BAL.loadout_unlock,
+    speed: g.settings.speed ?? 1, max_speed: g.maxSpeed(),
+    speed_unlock: D.BAL.speed_unlock,
     skills, skill_cd: g.skillCd,
     stats: { ...g.stats }, settings: { ...g.settings },
     reforge_stones: D.BAL.reforge_stones,
@@ -236,6 +239,7 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
   switch (name) {
     case "choose_class": if (a) g.chooseClass(a); break;
     case "mode": g.setMode(g.mode === "push" ? "farm" : "push"); break;
+    case "speed": g.cycleSpeed(); break;
     case "farm_stage": g.setFarmStage(a === "1" ? 1 : -1); break;
     case "enhance": if (a) g.enhance(a); break;
     case "reforge": if (a) g.reforge(a); break;
@@ -338,6 +342,12 @@ function renderTop(st: State): void {
     `<span class="theme" style="color:var(--dim)">${esc(theme)}</span>`;
   const modeBtn = $("mode-btn") as HTMLButtonElement;
   modeBtn.textContent = st.mode === "push" ? "推进▶" : "挂机◎";
+  const speedBtn = $("speed-btn") as HTMLButtonElement;
+  speedBtn.textContent = `×${st.speed}`;
+  speedBtn.style.color = st.speed > 1 ? "var(--green)" : "";
+  speedBtn.title = st.max_speed > st.speed
+    ? `游戏速度 ×${st.speed}(下一档 Lv${st.speed_unlock[st.speed]}解锁)`
+    : `游戏速度 ×${st.speed}(已满档)`;
   $("res-lv").innerHTML = `Lv.<span class="v">${st.level}</span>`;
   $("res-gold").innerHTML = `◈ <span class="v">${fmt(st.gold)}</span>`;
   $("res-stone").innerHTML = `✦ <span class="v">${fmt(st.stones)}</span>`;
@@ -767,6 +777,7 @@ document.addEventListener("keydown", (e: KeyboardEvent) => {
     const item = document.querySelector(`.nav-item[data-tab="${tabs[+e.key - 1]}"]`) as HTMLElement | null;
     if (item) item.click();
   } else if (e.key === "f" || e.key === "F") { doCmd("mode"); renderNow(); }
+  else if (e.key === "b" || e.key === "B") { doCmd("speed"); renderNow(); }
   else if (e.key === "p" || e.key === "P") togglePause();
   else if (e.key === "s" || e.key === "S") localCmd("save");
 });

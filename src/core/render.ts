@@ -28,7 +28,9 @@ const padRows = (rows: string[]) => rows.map(r => pad(trunc(r, W), W));
 // ================================================================ 头 / 尾
 function header(g: Game): string {
   const theme = zoneTheme(g.zone)[0];
-  const mode = g.mode === "push" ? c("推进▶", "bright_yellow") : c("挂机◎", "bright_cyan");
+  let mode = g.mode === "push" ? c("推进▶", "bright_yellow") : c("挂机◎", "bright_cyan");
+  const spd = g.settings.speed ?? 1;
+  if (spd > 1) mode += c(` ×${spd}`, "bright_green", "", true);
   const zoneTxt = `第${g.zone}区·${g.stage}层`;
   const left = c("⚔ 深渊挂机 ", "bright_red", "", true) + c(zoneTxt, "bright_white")
     + " " + theme + " " + mode;
@@ -68,7 +70,7 @@ function footer(g: Game): string {
 }
 
 const HINTS: Record<number, string> = {
-  0: "1-7 切页 │ F 推进/挂机 │ P 暂停 │ S 存档 │ H 帮助 │ Q 退出",
+  0: "1-7 切页 │ F 模式 │ B 倍速 │ P 暂停 │ S 存档 │ H 帮助 │ Q 退出",
   1: "↑↓ 选择部位 │ U 强化 │ R 重铸 │ E 卸下 │ H 帮助",
   2: "↑↓ 选择 │ E 装备 │ D 分解 │ X 出售 │ A 一键出售普通/精良 │ H 帮助",
   3: "↑↓ 选择 │ U 强化(+8%全属性) │ R 重铸(3石) │ H 帮助",
@@ -561,6 +563,12 @@ function tabSettings(g: Game): string[] {
   rows.push("  " + c("▸ 战斗模式  ", "bright_white") + mode + c("   [F] 切换", "bright_black"));
   rows.push("  " + c("▸ 挂机层位  ", "bright_white") + c(`第 ${g.farmStage} 层`, "bright_white")
     + c("   [←→] 调整(仅挂机模式生效)", "bright_black"));
+  const spd = g.settings.speed ?? 1;
+  const spdTxt = spd > 1 ? c(`×${spd}`, "bright_green", "", true) : c("×1", "bright_black");
+  const nxtTh = (BAL.speed_unlock as readonly number[]).find(th => g.level < th);
+  const lockTxt = nxtTh ? c(`   (Lv${nxtTh} 解锁下一档)`, "bright_black") : "";
+  rows.push("  " + c("▸ 游戏速度  ", "bright_white") + spdTxt
+    + c("   [B] 切换", "bright_black") + lockTxt);
   rows.push("");
   rows.push("  " + c("▸ 立即存档   [S]", "bright_white"));
   rows.push(g.view.ui.confirm_reset

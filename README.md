@@ -15,6 +15,9 @@
 # 1) 网页版(推荐):秒开、离线可用,与 CLI 共用同一核心与存档格式
 npm run dev                       # http://localhost:8614
 
+#    网页版为现代图形 UI(2026-10-01 起,替代旧 xterm 终端界面):桌面三栏布局,
+#    手机端(≤768px)自动切换为底部标签栏 + 单列布局,PWA 可安装;无需横屏。
+
 # 2) TS CLI(免编译直跑,需 Node 22+)
 npm run cli                       # 或:node --experimental-strip-types src/cli.ts
 

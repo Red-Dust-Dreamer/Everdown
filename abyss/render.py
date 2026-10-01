@@ -30,6 +30,9 @@ def _kv(label, value, lw=8, lcolor="bright_black", vcolor="white"):
 def _header(g):
     theme = zone_theme(g.zone)[0]
     mode = c("推进▶", "bright_yellow") if g.mode == "push" else c("挂机◎", "bright_cyan")
+    spd = g.settings.get("speed", 1)
+    if spd > 1:
+        mode += c(" ×%d" % spd, "bright_green", bold=True)
     if g.mode == "farm":
         zone_txt = "第%d区·%d层" % (g.zone, g.stage)
     else:
@@ -73,7 +76,7 @@ def _footer(g):
 
 
 _HINTS = {
-    0: "1-7 切页 │ F 推进/挂机 │ P 暂停 │ S 存档 │ H 帮助 │ Q 退出",
+    0: "1-7 切页 │ F 模式 │ B 倍速 │ P 暂停 │ S 存档 │ H 帮助 │ Q 退出",
     1: "↑↓ 选择部位 │ U 强化 │ R 重铸 │ E 卸下 │ H 帮助",
     2: "↑↓ 选择 │ E 装备 │ D 分解 │ X 出售 │ A 一键出售普通/精良 │ H 帮助",
     3: "↑↓ 选择 │ U 强化(+8%全属性) │ R 重铸(3石) │ H 帮助",
@@ -599,6 +602,12 @@ def _tab_settings(g):
     rows.append("  " + c("▸ 战斗模式  ", "bright_white") + mode + c("   [F] 切换", "bright_black"))
     farm = c("第 %d 层" % g.farm_stage, "bright_white")
     rows.append("  " + c("▸ 挂机层位  ", "bright_white") + farm + c("   [←→] 调整(仅挂机模式生效)", "bright_black"))
+    spd = g.settings.get("speed", 1)
+    spd_txt = c("×%d" % spd, "bright_green", bold=True) if spd > 1 else c("×1", "bright_black")
+    nxt_th = next((th for th in BAL["speed_unlock"] if g.level < th), None)
+    lock_txt = c("   (Lv%d 解锁下一档)" % nxt_th, "bright_black") if nxt_th else ""
+    rows.append("  " + c("▸ 游戏速度  ", "bright_white") + spd_txt
+                + c("   [B] 切换", "bright_black") + lock_txt)
     rows.append("")
     rows.append("  " + c("▸ 立即存档   [S]", "bright_white"))
     if g.view.ui["confirm_reset"]:

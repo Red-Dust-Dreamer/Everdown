@@ -246,6 +246,9 @@ class Game:
                         self.log("★ 技能可解锁:%s(技能页装配)" % s["name"], "bright_cyan")
             if self.level in BAL["loadout_unlock"]:
                 self.log("★ 装配槽 +1(技能页可装配更多技能)", "bright_cyan")
+            if self.level in BAL["speed_unlock"][1:]:
+                tier = BAL["speed_unlock"].index(self.level) + 1
+                self.log("★ 解锁 ×%d 倍速!按 B 切换" % tier, "bright_cyan")
 
     # ================================================================ 背包/装备
     def add_item(self, item):
@@ -501,14 +504,36 @@ class Game:
         crit_mult = 1 + (h["crit"] / 100.0) * (h["crit_dmg"] / 100.0)
         return h["atk"] / interval * crit_mult
 
+    # ================================================================ 倍速
+    def max_speed(self):
+        """当前等级可用的最高倍速档(Lv1=×1,Lv10=×2,Lv30=×3)"""
+        n = 1
+        for i, th in enumerate(BAL["speed_unlock"]):
+            if self.level >= th:
+                n = i + 1
+        return n
+
+    def cycle_speed(self):
+        """B 键:在已解锁档位间循环 1→2→3→1"""
+        cur = self.settings.get("speed", 1)
+        nxt = cur + 1
+        if nxt > self.max_speed():
+            nxt = 1
+        self.settings["speed"] = nxt
+        self.toast("游戏速度 ×%d" % nxt)
+        return nxt
+
     def tick(self, dt):
-        """推进一帧(dt 秒)。暂停由宿主控制:暂停时宿主不调用本方法。"""
-        self.time += dt
-        self.playtime += dt
-        battle_tick(self, dt)
-        if self.monster is None and self.respawn_timer <= 0:
-            self.spawn()
-        self.autosave_acc += dt
+        """推进一帧(dt 秒 × speed 倍速,核心内实现:三宿主一致)。
+        暂停由宿主控制:暂停时宿主不调用本方法。"""
+        speed = min(self.settings.get("speed", 1), self.max_speed())
+        for _ in range(speed):
+            self.time += dt
+            self.playtime += dt
+            battle_tick(self, dt)
+            if self.monster is None and self.respawn_timer <= 0:
+                self.spawn()
+        self.autosave_acc += dt  # 自动存档按真实时间计
         if self.autosave_acc > 30:
             self.autosave_acc = 0
             self.save()

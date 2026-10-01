@@ -134,6 +134,9 @@ def handle_key(g, key):
     if key == "f" and ui["tab"] != 6:
         g.set_mode("farm" if g.mode == "push" else "push")
         return True
+    if key == "b":
+        g.cycle_speed()
+        return True
 
     tab = ui["tab"]
     if tab == 0:

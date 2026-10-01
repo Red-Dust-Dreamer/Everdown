@@ -240,6 +240,10 @@ export class Game {
       if ((BAL.loadout_unlock as readonly number[]).includes(this.level)) {
         this.log("★ 装配槽 +1(技能页可装配更多技能)", "bright_cyan");
       }
+      if (this.level > 1 && (BAL.speed_unlock as readonly number[]).includes(this.level)) {
+        const tier = (BAL.speed_unlock as readonly number[]).indexOf(this.level) + 1;
+        this.log(`★ 解锁 ×${tier} 倍速!按 B 切换`, "bright_cyan");
+      }
     }
   }
 
@@ -509,12 +513,32 @@ export class Game {
     return h.atk / interval * critMult;
   }
 
+  // ================================================================ 倍速
+  maxSpeed(): number {
+    let n = 1;
+    for (let i = 0; i < BAL.speed_unlock.length; i++) {
+      if (this.level >= BAL.speed_unlock[i]) n = i + 1;
+    }
+    return n;
+  }
+
+  cycleSpeed(): number {
+    const cur = this.settings.speed ?? 1;
+    const nxt = cur + 1 > this.maxSpeed() ? 1 : cur + 1;
+    this.settings.speed = nxt;
+    this.toast(`游戏速度 ×${nxt}`);
+    return nxt;
+  }
+
   tick(dt: number): void {
-    this.time += dt;
-    this.playtime += dt;
-    battleTick(this, dt);
-    if (!this.monster && this.respawnTimer <= 0) this.spawn();
-    this.autosaveAcc += dt;
+    const speed = Math.min(this.settings.speed ?? 1, this.maxSpeed());
+    for (let i = 0; i < speed; i++) {
+      this.time += dt;
+      this.playtime += dt;
+      battleTick(this, dt);
+      if (!this.monster && this.respawnTimer <= 0) this.spawn();
+    }
+    this.autosaveAcc += dt;  // 自动存档按真实时间计
     if (this.autosaveAcc > 30) {
       this.autosaveAcc = 0;
       this.save();
