@@ -147,12 +147,9 @@ const SFX_KEY = "abyss_sfx";
 let sfxOn = localStorage.getItem(SFX_KEY) !== "0";
 let sfxCtx = null, attackBuf = null, sfxLastMs = 0;
 
-function ensureSfx() {
-  if (sfxCtx) {
-    if (sfxOn && sfxCtx.state === "suspended") sfxCtx.resume();
-    return;
-  }
-  if (!sfxOn) return;
+/** 页面加载即建 context 并预解码(suspended 态可解码),首次交互只需 resume */
+function initSfx() {
+  if (sfxCtx || !sfxOn) return;
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) return;
   sfxCtx = new AC();
@@ -161,6 +158,9 @@ function ensureSfx() {
     .then(b => sfxCtx.decodeAudioData(b))
     .then(buf => { attackBuf = buf; })
     .catch(() => {});   // 音效缺失静默降级
+}
+function ensureSfx() {
+  if (sfxOn && sfxCtx && sfxCtx.state === "suspended") sfxCtx.resume();
 }
 function playAttackHit() {
   if (!sfxOn || !attackBuf || !sfxCtx || sfxCtx.state !== "running") return;
@@ -175,7 +175,8 @@ function playAttackHit() {
   src.connect(gain).connect(sfxCtx.destination);
   src.start();
 }
-// 自动播放策略:首次交互预热解锁(选职业点击必先于战斗)
+initSfx();
+// 自动播放策略:首次交互解锁(选职业点击必先于战斗)
 ["pointerdown", "keydown"].forEach(ev =>
   document.addEventListener(ev, ensureSfx, { once: true }));
 
@@ -591,6 +592,8 @@ function renderSettings(st) {
         '<div style="display:flex;gap:6px"><button class="btn" data-cmd="farm_stage" data-a="-1">− 1 层</button>' +
         '<button class="btn" data-cmd="farm_stage" data-a="1">+ 1 层</button></div></div>'
       : "") +
+    '<div class="set-row"><div class="lbl">音效<div class="d">普通攻击命中音(复古 8-bit,CC0)</div></div>' +
+    '<div class="toggle' + (sfxOn ? " on" : "") + '" data-local="sfx"></div></div>' +
     '<div class="set-row"><div class="lbl">存档<div class="d">自动存档于浏览器(localStorage),离线收益自动结算</div></div>' +
       '<div style="display:flex;gap:6px">' +
       '<button class="btn" data-local="save">手动存档</button>' +
@@ -680,7 +683,14 @@ function localCmd(name) {
     URL.revokeObjectURL(a.href);
     toast("存档已导出");
   } else if (name === "import") $("file-input").click();
-  else if (name === "reset") {
+  else if (name === "sfx") {
+    sfxOn = !sfxOn;
+    localStorage.setItem(SFX_KEY, sfxOn ? "1" : "0");
+    if (sfxOn && !sfxCtx) initSfx();   // 趁点击手势建 context
+    ensureSfx();
+    toast(sfxOn ? "音效:开" : "音效:关");
+    renderNow();
+  } else if (name === "reset") {
     if (confirm("确定清空浏览器存档并重新开始?")) {
       py.cmd("reset");
       renderNow();

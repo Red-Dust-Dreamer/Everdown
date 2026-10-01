@@ -329,12 +329,9 @@ let attackBuf: AudioBuffer | null = null;
 let sfxLastMs = 0;
 let sfxPlays = 0;
 
-function ensureSfx(): void {
-  if (sfxCtx) {
-    if (sfxOn && sfxCtx.state === "suspended") void sfxCtx.resume();
-    return;
-  }
-  if (!sfxOn) return;
+/** 页面加载即建 context 并预解码(suspended 态可解码),首次交互只需 resume */
+function initSfx(): void {
+  if (sfxCtx || !sfxOn) return;
   const AC = window.AudioContext ??
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AC) return;
@@ -344,6 +341,9 @@ function ensureSfx(): void {
     .then(b => sfxCtx!.decodeAudioData(b))
     .then(buf => { attackBuf = buf; })
     .catch(() => { /* 音效缺失时静默降级,游戏照常 */ });
+}
+function ensureSfx(): void {
+  if (sfxOn && sfxCtx?.state === "suspended") void sfxCtx.resume();
 }
 function playAttackHit(crit = false): void {
   if (!sfxOn || !attackBuf) return;
@@ -364,7 +364,8 @@ function playAttackHit(crit = false): void {
 function toggleSfx(): void {
   sfxOn = !sfxOn;
   localStorage.setItem(SFX_KEY, sfxOn ? "1" : "0");
-  if (sfxOn) ensureSfx();   // 趁点击手势解锁 AudioContext
+  if (sfxOn && !sfxCtx) initSfx();   // 趁点击手势建 context 并解锁
+  ensureSfx();
   toast(sfxOn ? "音效:开" : "音效:关");
   renderNow();
 }
@@ -372,7 +373,8 @@ function sfxDebug(): string {
   return `on=${sfxOn} ready=${attackBuf !== null} ctx=${sfxCtx?.state ?? "none"} plays=${sfxPlays}`;
 }
 
-// 浏览器自动播放策略:首次交互预热解锁(选职业的点击必然先于战斗事件)。
+initSfx();
+// 浏览器自动播放策略:首次交互解锁(选职业的点击必然先于战斗事件)。
 for (const ev of ["pointerdown", "keydown"] as const)
   document.addEventListener(ev, ensureSfx, { once: true });
 
