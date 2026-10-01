@@ -199,6 +199,16 @@ abyss-idle/
 > 这是"CLI / 网页 / 未来服务器"多个宿主共用同一份游戏逻辑的基础;`abyss/` 冻结为对拍基准。
 > 多人规划见 [docs/](docs/README.md)。
 
+## 部署与分享
+
+- **局域网即玩**(面对面):`npx vite preview --host 0.0.0.0 --port 8616`,手机连同一 WiFi
+  访问 `http://<电脑IP>:8616/`(查 IP:`ipconfig` 看 IPv4);
+- **公网发布**:`bash scripts/deploy-pages.sh` 一键构建并推送 gh-pages 分支
+  (首次需到仓库 Settings → Pages → Branch 选 gh-pages,之后每次重跑脚本即更新),
+  地址 `https://red-dust-dreamer.github.io/Everdown/`;
+- 手机打开后**横屏**,底部虚拟按键即全部操作;浏览器菜单"添加到主屏幕"即可当
+  App 安装(离线可玩)。
+
 ## 开发
 
 - **前置**:先 `npm install`(仅 typescript + vite 两个 devDependencies;Python 侧仍零依赖,`py run.py` 开箱即用);
