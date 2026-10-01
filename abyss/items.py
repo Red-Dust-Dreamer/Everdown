@@ -40,16 +40,21 @@ class Item:
 
     # ------------------------------------------------ 属性
     def mult(self):
-        """稀有度 × 强化 总倍率。强化收益分段递减,质量乘数随强化自然饱和。"""
-        rmul = RARITIES[RARITY_IDX[self.rarity]][3]
+        """稀有度 × 强化 总倍率(主属性与数值词缀用)。
+        稀有度倍率取系数列 [4](1.00~2.10);旧实现误取词缀数 [3](1~6),
+        蓝色×3/神话×6 导致数值爆炸——已与 TS 主实现同步修正。"""
+        rmul = RARITIES[RARITY_IDX[self.rarity]][4]
         return rmul * (1 + plus_bonus(self.plus))
 
     def stats(self):
-        """最终属性 dict"""
+        """最终属性 dict。
+        百分比词缀 roll 时已按稀有度分档,只吃强化不吃倍率;数值词缀吃 倍率×强化。"""
         m = self.mult()
+        pb = 1 + plus_bonus(self.plus)
         out = {self._main_stat(): self.main_val * m}
         for aid, val in self.affixes:
-            out[aid] = out.get(aid, 0) + val * m
+            pct = AFFIX_DEF[aid][5]
+            out[aid] = out.get(aid, 0) + val * (pb if pct else m)
         innate = SLOT_INNATE.get(self.slot)
         if innate:
             k, per = innate
@@ -85,18 +90,24 @@ class Item:
         return min(len(self.affixes), BAL["reforge_slots"][rid])
 
     def reforge_affixes_with_luck(self, rng, luck_off=1.0):
-        """洗 N 条词缀:重掷选中词条的值(基值区间不变,值域 ×luck_off),
-        数值型词缀的成长部分(tier×k)保持。返回被洗的词条名列表。"""
+        """洗 N 条词缀:重掷选中词条的值。
+        百分比词缀维持稀有度分档(档位基数不变,随机宽度 ×luck_off),
+        数值型词缀的值域 ×luck_off、tier×k 成长部分保持。返回被洗的词条名列表。"""
         n = self.reforge_count()
         if n <= 0 or not self.affixes:
             return []
+        rid = RARITY_IDX[self.rarity]
         indices = list(range(len(self.affixes)))
         rng.shuffle(indices)
         picked = indices[:n]
         for i in picked:
             aid = self.affixes[i][0]
             a = AFFIX_DEF[aid]
-            val = rng.uniform(a[2], a[3] * luck_off) + a[4] * self.tier
+            if a[5]:
+                step = a[7]
+                val = rid * step + rng.uniform(0, step * luck_off)
+            else:
+                val = rng.uniform(a[2], a[3] * luck_off) + a[4] * self.tier
             self.affixes[i] = (aid, val)
         return [AFFIX_DEF[self.affixes[i][0]][1] for i in picked]
 
@@ -214,7 +225,12 @@ def roll_item(tier, rng=None, luck=0.0, min_idx=0, boost=0.0):
     rng.shuffle(pool)
     affixes = []
     for a in pool[:n_affix]:
-        lo, hi, k = a[2], a[3], a[4]
-        val = rng.uniform(lo, hi) + k * tier
+        # 百分比词缀按稀有度分档:白 0~step、精良 step~2step……神话 5step~6step
+        # (crit_dmg step=10 → 白0~10/绿10~20/蓝20~30/紫30~40/金40~50/神50~60)
+        if a[5]:
+            step = a[7]
+            val = rid * step + rng.uniform(0, step)
+        else:
+            val = rng.uniform(a[2], a[3]) + a[4] * tier
         affixes.append((a[0], val))
     return Item(slot_def[0], rar[0], tier, main_val, affixes, rng=rng)

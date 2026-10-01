@@ -66,16 +66,19 @@ export class Item {
   }
 
   mult(): number {
-    // 对拍基准:Python mult() 用 RARITIES[rid][3](即词缀数)作稀有度倍率
-    const rmul = RARITIES[RARITY_IDX[this.rarity]].affixes;
+    // 稀有度倍率用 mainMul(1.00~2.10);旧实现误用词缀数(1~6),蓝色×3/神话×6 导致数值爆炸(已修)
+    const rmul = RARITIES[RARITY_IDX[this.rarity]].mainMul;
     return rmul * (1 + plusBonus(this.plus));
   }
 
   stats(): Record<string, number> {
     const m = this.mult();
+    const pb = 1 + plusBonus(this.plus);
     const out: Record<string, number> = { [this.mainStat()]: this.mainVal * m };
     for (const a of this.affixes) {
-      out[a.id] = (out[a.id] ?? 0) + a.val * m;
+      // 百分比词缀 roll 时已按稀有度分档,只吃强化不吃倍率;数值词缀吃 倍率×强化
+      const pct = AFFIX_DEF[a.id]?.pct;
+      out[a.id] = (out[a.id] ?? 0) + a.val * (pct ? pb : m);
     }
     const innate = SLOT_INNATE[this.slot];
     if (innate) {
@@ -113,13 +116,17 @@ export class Item {
   reforgeAffixesWithLuck(rng: any, luckOff = 1.0): string[] {
     const n = this.reforgeCount();
     if (n <= 0 || !this.affixes.length) return [];
+    const rid = RARITY_IDX[this.rarity];
     const indices = this.affixes.map((_, i) => i);
     rng.shuffle(indices);
     const picked = indices.slice(0, n);
     for (const i of picked) {
       const aid = this.affixes[i].id;
       const a = AFFIX_DEF[aid];
-      const val = rng.uniform(a.lo, a.hi * luckOff) + a.k * this.tier;
+      // 百分比词缀维持稀有度分档(档位基数不变,随机宽度受 luck 放大)
+      const val = a.pct
+        ? rid * (a.step ?? 5) + rng.uniform(0, (a.step ?? 5) * luckOff)
+        : rng.uniform(a.lo, a.hi * luckOff) + a.k * this.tier;
       this.affixes[i] = { id: aid, val };
     }
     return picked.map(i => AFFIX_DEF[this.affixes[i].id].name);
@@ -236,7 +243,12 @@ export function rollItem(tier: number, rng: PyRandom, luck = 0, minIdx = 0, boos
   rng.shuffle(pool);
   const affixes: AffixRoll[] = [];
   for (const a of pool.slice(0, nAffix)) {
-    affixes.push({ id: a.id, val: rng.uniform(a.lo, a.hi) + a.k * tier });
+    // 百分比词缀按稀有度分档:白 0~step、精良 step~2step……神话 5step~6step
+    // (crit_dmg step=10 → 白0~10/绿10~20/蓝20~30/紫30~40/金40~50/神50~60)
+    const val = a.pct
+      ? rid * (a.step ?? 5) + rng.uniform(0, a.step ?? 5)
+      : rng.uniform(a.lo, a.hi) + a.k * tier;
+    affixes.push({ id: a.id, val });
   }
   return new Item(slotDef.id, rar.key, tier, mainVal, affixes, 0, null, rng);
 }

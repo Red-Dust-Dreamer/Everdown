@@ -52,18 +52,20 @@ export const SLOT_INNATE: Record<string, [StatKey, number]> = {
 // ---------------------------------------------------------------- 词缀池
 export interface AffixDef {
   id: StatKey; name: string; lo: number; hi: number; k: number; pct: boolean; weight: number;
+  /** 百分比词缀的稀有度分档步长:值 = rid×step + u(0,step) → 白 0~step,神话 5step~6step */
+  step?: number;
 }
 export const AFFIXES: AffixDef[] = [
   { id: "atk", name: "攻击力", lo: 2.0, hi: 4.5, k: 0.05, pct: false, weight: 1.0 },
   { id: "def", name: "防御力", lo: 2.5, hi: 5.0, k: 0.06, pct: false, weight: 0.45 },
   { id: "hp", name: "生命值", lo: 18.0, hi: 38.0, k: 0.35, pct: false, weight: 0.085 },
-  { id: "haste", name: "攻击速度", lo: 3.0, hi: 7.0, k: 0, pct: true, weight: 6.5 },
-  { id: "crit", name: "暴击率", lo: 2.0, hi: 4.5, k: 0, pct: true, weight: 9.0 },
-  { id: "crit_dmg", name: "暴击伤害", lo: 8.0, hi: 16.0, k: 0, pct: true, weight: 2.8 },
-  { id: "lifesteal", name: "吸血", lo: 1.0, hi: 2.5, k: 0, pct: true, weight: 7.0 },
-  { id: "goldfind", name: "金币加成", lo: 5.0, hi: 12.0, k: 0, pct: true, weight: 1.8 },
+  { id: "haste", name: "攻击速度", lo: 3.0, hi: 7.0, k: 0, pct: true, weight: 6.5, step: 3 },
+  { id: "crit", name: "暴击率", lo: 2.0, hi: 4.5, k: 0, pct: true, weight: 9.0, step: 1.5 },
+  { id: "crit_dmg", name: "暴击伤害", lo: 8.0, hi: 16.0, k: 0, pct: true, weight: 2.8, step: 10 },
+  { id: "lifesteal", name: "吸血", lo: 1.0, hi: 2.5, k: 0, pct: true, weight: 7.0, step: 1 },
+  { id: "goldfind", name: "金币加成", lo: 5.0, hi: 12.0, k: 0, pct: true, weight: 1.8, step: 6 },
   { id: "skill_lv", name: "全技能等级", lo: 0.3, hi: 0.8, k: 0, pct: false, weight: 11.0 },
-  { id: "luck", name: "幸运", lo: 2.0, hi: 5.0, k: 0, pct: true, weight: 5.0 },
+  { id: "luck", name: "幸运", lo: 2.0, hi: 5.0, k: 0, pct: true, weight: 5.0, step: 3 },
 ];
 export const AFFIX_DEF: Record<string, AffixDef> = Object.fromEntries(AFFIXES.map(a => [a.id, a]));
 export const AFFIX_SUFFIX: Record<string, string> = {
