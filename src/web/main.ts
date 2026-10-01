@@ -18,6 +18,7 @@ interface ITermOptions {
 interface ITerminal {
   readonly cols: number;
   readonly rows: number;
+  options: { fontSize: number };
   open(parent: HTMLElement): void;
   loadAddon(addon: unknown): void;
   write(data: string): void;
@@ -91,7 +92,32 @@ async function boot(): Promise<void> {
   const fit = new window.FitAddon.FitAddon();
   term.loadAddon(fit);
   term.open($("term"));
-  try { fit.fit(); } catch { /* 布局未稳定时忽略 */ }
+
+  // ---------------- 自适应字号:小屏逐级降字号,塞下 100×30 画布为止
+  // (触屏手机横屏 ~844×390 → 8~9px 可容纳;竖屏塞不下 → 提示横屏)
+  const MIN_COLS = 100, MIN_ROWS = 30;
+  const FONT_LADDER = [16, 14, 12, 11, 10, 9, 8];
+  const isTouch = "ontouchstart" in window || navigator.maxTouchPoints > 0;
+  if (isTouch) document.body.classList.add("touch");
+  const hintEl = $("viewport-hint");
+
+  function fitFontSize(): void {
+    try { fit.fit(); } catch { /* 容器未就绪 */ }
+    if (term.cols >= MIN_COLS && term.rows >= MIN_ROWS) {
+      hintEl.classList.remove("show");
+      return;
+    }
+    for (const size of FONT_LADDER) {
+      term.options.fontSize = size;
+      try { fit.fit(); } catch { /* ignore */ }
+      if (term.cols >= MIN_COLS && term.rows >= MIN_ROWS) {
+        hintEl.classList.remove("show");
+        return;
+      }
+    }
+    hintEl.classList.add("show"); // 到 8px 仍放不下(竖屏)→ 提示横屏
+  }
+  fitFontSize();
 
   term.write("\x1b[2J\x1b[H\x1b[?25l\x1b[?7l");   // 清屏 + 藏光标 + 关自动换行
   $("loading").classList.add("hide");
@@ -164,9 +190,52 @@ async function boot(): Promise<void> {
     }
   });
 
-  // ---------------- 尺寸自适应
+  // ---------------- 虚拟按键栏(触屏):直接复用 handleKey,与键盘同一入口
+  function pressKey(key: string): void {
+    if (!running) return;
+    const r: KeyResult = handleKey(g, key);
+    if (r === false) {
+      shutdown("已退出,存档已保存。刷新页面继续。");
+    } else if (r === "reset") {
+      localStorage.removeItem(SAVE_KEY);
+      g = new Game();
+      g.view = view;
+      g.log("存档已重置,新的冒险开始。", "bright_red");
+      term.write("\x1b[2J\x1b[H");
+    }
+  }
+  if (isTouch) {
+    const pad = $("pad");
+    const row1: [string, string, string][] = [
+      ["1", "1", "k-num"], ["2", "2", "k-num"], ["3", "3", "k-num"],
+      ["4", "4", "k-num"], ["5", "5", "k-num"], ["6", "6", "k-num"],
+      ["7", "7", "k-num"], ["f", "F", "k-act"], ["p", "⏸", "k-sys"], ["h", "?", "k-sys"],
+    ];
+    const row2: [string, string, string][] = [
+      ["up", "↑", "k-nav"], ["down", "↓", "k-nav"], ["left", "←", "k-nav"], ["right", "→", "k-nav"],
+      ["e", "E装", "k-act"], ["u", "U升", "k-act"], ["x", "X售", "k-act"],
+      ["d", "D解", "k-act"], ["a", "A清", "k-act"], ["r", "R铸", "k-act"], ["s", "S档", "k-sys"],
+    ];
+    for (const defs of [row1, row2]) {
+      const row = document.createElement("div");
+      row.className = "row";
+      for (const [key, label, cls] of defs) {
+        const btn = document.createElement("button");
+        btn.textContent = label;
+        btn.className = cls;
+        btn.addEventListener("click", (ev) => {
+          ev.preventDefault();
+          pressKey(key);
+        });
+        row.appendChild(btn);
+      }
+      pad.appendChild(row);
+    }
+  }
+
+  // ---------------- 尺寸自适应(含字号重算)
   window.addEventListener("resize", () => {
-    if (running) fit.fit();
+    if (running) fitFontSize();
   });
 
   // ---------------- 存档:visibilitychange / pagehide / 定期
@@ -241,6 +310,15 @@ async function boot(): Promise<void> {
     localStorage.removeItem(SAVE_KEY);
     location.reload();
   };
+
+  // ---------------- PWA:注册 Service Worker(离线可玩/可安装)
+  // 路径跟随 vite base(本地 / 或 GitHub Pages /Everdown/);dev(8614)跳过,
+  // 避免缓存 vite 开发资产导致改动不生效。
+  if (location.port !== "8614" && "serviceWorker" in navigator) {
+    const base = (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL || "/";
+    navigator.serviceWorker.register(base + "sw.js")
+      .catch(() => { /* 离线壳降级:在线玩 */ });
+  }
 }
 
 boot().catch((err: unknown) => {

@@ -15,3 +15,6 @@ save.json
 # 日志与临时文件
 *.log
 *.tmp
+qr-lan.png
+dist-gh/
+src/web/dist-gh/

@@ -2,97 +2,118 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>深渊挂机 · Abyss Idle</title>
-<link rel="stylesheet" href="/vendor/xterm/xterm.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/favicon-96.png" type="image/png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<meta name="theme-color" content="#0a0a0f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="深渊挂机">
 <link rel="preload" href="/fonts/abyss-mono.woff2" as="font" type="font/woff2" crossorigin>
-<style>
-  @font-face {
-    font-family: "AbyssMono";
-    src: url("/fonts/abyss-mono.woff2") format("woff2");
-    font-display: swap;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  html, body { height: 100%; background: #0a0a0f; }
-  body {
-    display: flex; flex-direction: column;
-    font-family: "AbyssMono", monospace;
-    color: #c8c8d0; overflow: hidden;
-  }
-  #topbar {
-    display: flex; align-items: center; gap: 14px;
-    padding: 8px 16px; background: #10101a; border-bottom: 1px solid #26263a;
-    font-size: 14px; flex: none;
-  }
-  #topbar .title { color: #ff6b6b; font-weight: bold; font-size: 16px; }
-  #topbar .sub { color: #4a4a60; }
-  #topbar .sp { flex: 1; }
-  #topbar button {
-    background: #1b1b2a; color: #9ad1ff; border: 1px solid #33334d;
-    padding: 4px 12px; cursor: pointer; font-family: inherit; font-size: 13px;
-    border-radius: 3px;
-  }
-  #topbar button:hover { background: #26263a; }
-  #stage { flex: 1; min-height: 0; position: relative; }
-  #term { width: 100%; height: 100%; padding: 6px 0; }
-  /* 加载遮罩:核心是本地 TS,秒开 —— 纯 CSS 一闪即隐(main.ts 就绪后加 .hide) */
-  #loading {
-    position: absolute; inset: 0; z-index: 10;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    gap: 12px; background: #0a0a0f;
-    opacity: 1; transition: opacity .35s ease;
-    pointer-events: none;
-  }
-  #loading .logo { font-size: 26px; color: #ff6b6b; font-weight: bold; letter-spacing: 4px; }
-  #loading .bar { width: 220px; height: 3px; background: #1b1b2a; border-radius: 2px; overflow: hidden; }
-  #loading .bar i { display: block; height: 100%; width: 40%; background: #9ad1ff;
-    border-radius: 2px; animation: flash .9s ease-in-out infinite; }
-  @keyframes flash { 0% { transform: translateX(-100%); } 100% { transform: translateX(280%); } }
-  #loading.hide { opacity: 0; }
-  #toast {
-    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
-    background: #16162a; border: 1px solid #33334d; color: #9ad1ff;
-    padding: 8px 18px; font-size: 13px; border-radius: 4px; z-index: 20;
-    opacity: 0; pointer-events: none; transition: opacity .25s;
-  }
-  #toast.show { opacity: 1; }
-  /* 小屏提示:窗口不足以容纳 100×30 终端时覆盖显示 */
-  #viewport-hint { display: none; }
-  @media (max-width: 820px), (max-height: 560px) {
-    #viewport-hint { display: flex; }
-  }
-  #viewport-hint {
-    position: absolute; inset: 0; z-index: 30; align-items: center; justify-content: center;
-    background: rgba(10,10,15,.96); color: #ffd166; font-size: 15px; text-align: center;
-    padding: 20px; line-height: 1.9;
-  }
-</style>
+<link rel="stylesheet" href="/style.css">
 </head>
 <body>
-  <div id="topbar">
-    <span class="title">⚔ 深渊挂机</span>
-    <span class="sub">终端放置刷宝 · 网页版</span>
-    <span class="sp"></span>
-    <button id="btn-save">存档 (S)</button>
-    <button id="btn-export">导出</button>
-    <button id="btn-import">导入</button>
-    <button id="btn-reset">重置</button>
-  </div>
-  <div id="stage">
-    <div id="term"></div>
-    <div id="loading">
-      <div class="logo">⚔ 深渊挂机</div>
-      <div class="bar"><i></i></div>
+
+<!-- 加载层(TS 核心本地加载,一闪即隐) -->
+<div id="loading">
+  <div class="load-logo">⚔ 深渊挂机</div>
+  <div class="load-bar"><i></i></div>
+  <div id="loading-msg">正在编织深渊…</div>
+</div>
+
+<!-- 顶栏 -->
+<header id="topbar">
+  <span class="logo">⚔ 深渊挂机</span>
+  <span class="zone-chip" id="zone-chip"></span>
+  <button class="btn mode-btn" id="mode-btn" data-cmd="mode">推进▶</button>
+  <span class="sp"></span>
+  <span class="res res-lv" id="res-lv"></span>
+  <span class="res res-gold" id="res-gold"></span>
+  <span class="res res-stone" id="res-stone"></span>
+  <span class="res res-time" id="res-time"></span>
+  <button class="btn" data-local="save">存档</button>
+  <button class="btn warn" id="pause-btn" data-local="pause">暂停</button>
+</header>
+
+<div id="main">
+  <!-- 导航(手机端变为底部标签栏) -->
+  <nav id="nav">
+    <div class="nav-item on" data-tab="battle"><span class="ic">⚔</span><span class="tx">战斗</span><span class="kbd">1</span></div>
+    <div class="nav-item" data-tab="hero"><span class="ic">🧙</span><span class="tx">角色</span><span class="kbd">2</span></div>
+    <div class="nav-item" data-tab="bag"><span class="ic">🎒</span><span class="tx">背包</span><span class="kbd">3</span></div>
+    <div class="nav-item" data-tab="forge"><span class="ic">🔨</span><span class="tx">锻造</span><span class="kbd">4</span></div>
+    <div class="nav-item" data-tab="skill"><span class="ic">✦</span><span class="tx">技能</span><span class="kbd">5</span></div>
+    <div class="nav-item" data-tab="quest"><span class="ic">📜</span><span class="tx">悬赏</span><span class="kbd">6</span></div>
+    <div class="nav-item" data-tab="settings"><span class="ic">⚙</span><span class="tx">设置</span><span class="kbd">7</span></div>
+  </nav>
+
+  <!-- 内容区:各页容器由 main.ts 填充 -->
+  <div id="content">
+    <div class="page on" id="page-battle">
+      <div id="battle-top">
+        <div class="col" id="col-hero">
+          <div class="card" id="hero-card"></div>
+          <div class="card grow" id="equip-mini"></div>
+        </div>
+        <div id="stage-wrap">
+          <div class="card" id="stage-track"></div>
+          <div id="stage">
+            <div class="aura"></div>
+            <div id="stage-inner"></div>
+            <div id="floaters"></div>
+          </div>
+          <div class="card" id="skillbar-card"></div>
+        </div>
+        <div class="col" id="col-right">
+          <div class="card" id="quests-mini"></div>
+          <div class="card grow" id="log-card">
+            <h3><span class="dot"></span>战斗日志</h3>
+            <div id="log-body"></div>
+          </div>
+        </div>
+      </div>
     </div>
-    <div id="viewport-hint">窗口太小了,<br>请把浏览器窗口调大(至少 100 列 × 30 行)<br>或用横屏 / 桌面浏览器打开</div>
+
+    <div class="page" id="page-hero"><div class="card" id="hero-detail"></div></div>
+    <div class="page" id="page-bag"><div class="card grow" id="bag-list"></div></div>
+    <div class="page" id="page-forge"><div class="card grow" id="forge-list"></div></div>
+    <div class="page" id="page-skill">
+      <div class="card" id="loadout-card"></div>
+      <div class="card grow" id="skill-pools"></div>
+    </div>
+    <div class="page" id="page-quest">
+      <div class="card" id="quest-list"></div>
+      <div class="card grow" id="ach-list"></div>
+    </div>
+    <div class="page" id="page-settings"><div class="card grow" id="settings-panel"></div></div>
   </div>
-  <div id="toast"></div>
+</div>
 
-  <input type="file" id="file-input" accept=".json" style="display:none">
+<!-- 职业选择(新档) -->
+<div class="overlay" id="class-select">
+  <div class="modal wide">
+    <h2>选择你的职业</h2>
+    <p class="dim">选择将决定你的技能池与成长方向(存档内不可更换)</p>
+    <div class="cls-grid" id="cls-grid"></div>
+  </div>
+</div>
 
-  <!-- xterm UMD(本地 vendor,无 CDN 回退) -->
-  <script src="/vendor/xterm/xterm.js"></script>
-  <script src="/vendor/xterm/addon-fit.js"></script>
-  <script type="module" src="/main.ts"></script>
+<!-- 离线报告 -->
+<div class="overlay" id="offline-modal">
+  <div class="modal">
+    <h2>🌙 离线收益</h2>
+    <div id="offline-body"></div>
+    <button class="btn big" data-cmd="dismiss_offline">收下,继续冒险</button>
+  </div>
+</div>
+
+<!-- toast -->
+<div id="toast"></div>
+
+<input type="file" id="file-input" accept=".json" style="display:none">
+<script type="module" src="/main.ts"></script>
 </body>
 </html>
