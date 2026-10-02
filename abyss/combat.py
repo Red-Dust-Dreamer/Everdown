@@ -320,7 +320,7 @@ def _on_monster_killed(game, mon):
         kt = max(0.5, game.time - game.last_spawn_time)
         game.ema_kill = game.ema_kill * 0.7 + kt * 0.3 if game.ema_kill else kt
 
-    gold_mul = 1 + h["goldfind"] / 100.0
+    gold_mul = 1 + (h["goldfind"] + S.buff_pct(game, "gold")) / 100.0
     gold = mob_gold(mon.tier) * gold_mul
     if mon.boss:
         gold *= BAL["boss_gold"]
@@ -337,7 +337,8 @@ def _on_monster_killed(game, mon):
         game.stats["boss_kills"] += 1
         if game.rng.random() < BAL["boss_stone_chance"]:
             game.stones += BAL["boss_stone_amt"]
-    game.gain_xp(int(mob_xp(mon.tier) * (1 + h.get("xp_pct", 0) / 100.0)))
+    game.gain_xp(int(mob_xp(mon.tier) * (1 + (h.get("xp_pct", 0)
+        + S.buff_pct(game, "xp")) / 100.0)))
     game.quest_progress("kill", 1)
     if mon.boss:
         game.quest_progress("boss", 1)

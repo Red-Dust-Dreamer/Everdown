@@ -21,6 +21,7 @@ import { BAL, CLASSES } from "../core/data.ts";
 import { pyRound, Item } from "../core/items.ts";
 import { Relic, rollRelic } from "../core/relics.ts";
 import { fmt, dwidth } from "../core/ansi.ts";
+import { buffPct, atkNow } from "../core/skills.ts";
 import type { ResolveReport } from "../core/systems.ts";
 
 // ================================================================ 断言工具
@@ -581,6 +582,20 @@ function testSaveDefenseAndRelicRoll(): void {
     const rid = ["common", "fine", "rare", "epic", "legendary", "mythic"].indexOf(r.rarity);
     ok(rid >= 2, `luck=1e7 时稀有度应 ≥ 稀有(实际 ${r.rarity})`);
   }
+
+  // ---- 药剂:力量药剂走 atk 键(旧 dmg 键无人消费,属死 buff) ----
+  const g4 = newGame(93);
+  g4.chooseClass("warrior");
+  g4.gold = 10_000_000;
+  const baseAtk = g4.hero.atk;
+  g4.usePotion("might");
+  eq(buffPct(g4, "atk"), 20, "力量药剂挂 atk buff");
+  eq(buffPct(g4, "dmg"), 0, "旧 dmg 键不再使用");
+  close(atkNow(g4), baseAtk * 1.2, "atkNow 含药剂加成");
+  g4.usePotion("wisdom");
+  eq(buffPct(g4, "xp"), 50, "智慧药剂挂 xp buff");
+  g4.usePotion("fortune");
+  eq(buffPct(g4, "gold"), 30, "贪婪药剂挂 gold buff");
 }
 
 // ================================================================ runner

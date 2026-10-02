@@ -31,6 +31,18 @@ def quest_desc(q):
 
 
 # ---------------------------------------------------------------- 成就
+def altar_mods(altar_lv):
+    """深渊祭坛等级 → 统一修饰器(与成就同管道:先 add 后 pct 再截断;与 TS 同构)"""
+    from .data import ALTAR_LINES
+    mods = []
+    for line in ALTAR_LINES:
+        lv = altar_lv.get(line[0], 0)
+        if lv <= 0:
+            continue
+        mods.append({"stat": line[3], "op": line[4], "v": line[5] * lv})
+    return mods
+
+
 def achievement_mods(stats):
     """成就永久加成 → 统一修饰器结构 [{stat, op, v}]。
 

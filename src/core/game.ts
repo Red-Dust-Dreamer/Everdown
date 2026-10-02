@@ -88,6 +88,7 @@ export class Game {
   questRerollCount = 0;       // 今日悬赏刷新次数(上限 BAL.quest_reroll_max)
   towerKeysBought = 0;        // 今日已加购塔钥匙数(上限 BAL.tower_key_extra)
   altarLv: Record<string, number> = {};   // 深渊祭坛各线等级(金币→永久属性)
+  bagExpLv = 0;               // 背包扩容次数(每 +1 扩 BAL.bag_expand_step 格,至 bag_expand_max)
   questDailyDate = "";        // 本地日期 YYYY-MM-DD,跨日重置计数
   events: [string, string, string][] = [];
   statMods: { src: string; stat: string; op: "add" | "pct"; v: number }[] = [];
@@ -291,7 +292,7 @@ export class Game {
       this.log(`自动出售 ${item.display()} (+${fmt(price)} 金币)`, "bright_black");
       return;
     }
-    if (this.bag.length >= BAL.bag_size) {
+    if (this.bag.length >= this.bagCap()) {
       const price = item.sellPrice();
       this.gold += price;
       this.stats.gold_earned += price;
@@ -320,7 +321,7 @@ export class Game {
     const bi = this.bag.indexOf(item);
     if (bi >= 0) this.bag.splice(bi, 1);
     if (old) {
-      if (this.bag.length >= BAL.bag_size) {
+      if (this.bag.length >= this.bagCap()) {
         const price = old.sellPrice();
         this.gold += price;
         this.stats.gold_earned += price;
@@ -341,7 +342,7 @@ export class Game {
   unequip(slot: string): void {
     const it = this.equip[slot];
     if (!it) { this.toast("该部位没有装备"); return; }
-    if (this.bag.length >= BAL.bag_size) { this.toast("背包已满"); return; }
+    if (this.bag.length >= this.bagCap()) { this.toast("背包已满"); return; }
     delete this.equip[slot];
     this.bag.unshift(it);
     this.recalcHero();
@@ -404,6 +405,52 @@ export class Game {
     this.recalcHero();
     this.log(`⚒ ${it.name} 强化至 +${it.plus}`, "bright_yellow");
     this.toast(`${it.name} +${it.plus}`);
+  }
+
+  /** 十连强化:连续强化至多 n 次(钱不够/到上限即停),一次性汇报 */
+  enhanceMulti(slot: string, times = 10): void {
+    const it = this.equip[slot];
+    if (!it) { this.toast("该部位没有装备"); return; }
+    const plus0 = it.plus;
+    let spent = 0, n = 0;
+    while (n < times) {
+      if (it.plus >= BAL.plus_max) break;
+      const cost = it.enhanceCost();
+      if (this.gold < cost) break;
+      this.gold -= cost;
+      it.plus += 1;
+      spent += cost;
+      n += 1;
+      this.stats.enhance_total += 1;
+      this.questProgress("enhance", 1);
+    }
+    if (n > 0) {
+      this.recalcHero();
+      this.log(`⚒ ${it.name} 强化至 +${it.plus}(十连 ×${n},共 ◈${fmt(spent)})`, "bright_yellow");
+      this.toast(`${it.name} +${plus0}→+${it.plus}(×${n})`);
+    } else {
+      this.toast(it.plus >= BAL.plus_max ? "已达强化上限" : "金币不足");
+    }
+  }
+
+  /** 背包容量 = 基础 + 扩容步长×次数(上限 bag_expand_max) */
+  bagCap(): number {
+    return Math.min(BAL.bag_size + BAL.bag_expand_step * this.bagExpLv, BAL.bag_expand_max);
+  }
+  /** 下一次扩容费用(多项式递增,不随深度缩水);已满返回 null */
+  bagExpandCost(): number | null {
+    if (this.bagCap() >= BAL.bag_expand_max) return null;
+    const n = this.bagExpLv + 1;
+    return Math.round(BAL.bag_expand_cost0 * n + BAL.bag_expand_cost_k * n * n);
+  }
+  buyBagSlots(): void {
+    const cost = this.bagExpandCost();
+    if (cost === null) { this.toast(`背包已达上限 ${BAL.bag_expand_max} 格`); return; }
+    if (this.gold < cost) { this.toast(`金币不足 (需要 ${fmt(cost)})`); return; }
+    this.gold -= cost;
+    this.bagExpLv += 1;
+    this.log(`🎒 背包扩容至 ${this.bagCap()} 格`, "bright_cyan");
+    this.toast(`背包 ${this.bagCap()} 格`);
   }
 
   reforge(slot: string): void {
@@ -766,7 +813,7 @@ export class Game {
     if (this.gold < cost) { this.toast(`金币不足(需要 ${fmt(cost)})`); return; }
     this.gold -= cost;
     S.addBuff(this, def.buff, def.pct, def.dur);
-    this.log(`${def.icon} 饮下${def.name}:30 分钟内${def.buff === "dmg" ? "伤害" : def.buff === "xp" ? "经验" : "金币"} +${def.pct}%`,
+    this.log(`${def.icon} 饮下${def.name}:30 分钟内${def.buff === "atk" ? "攻击" : def.buff === "xp" ? "经验" : "金币"} +${def.pct}%`,
       "bright_green");
     this.toast(`${def.name} 已生效(30 分钟)`);
   }
@@ -908,6 +955,7 @@ export class Game {
       quest_reroll_count: this.questRerollCount,
       tower_keys_bought: this.towerKeysBought,
       altar_lv: this.altarLv,
+      bag_exp_lv: this.bagExpLv,
       relics: this.relics.map(r => r ? r.toDict() : null),
       // pendingSwap 不序列化;待确认的新遗物并入存档背包,避免关页丢失
       relic_bag: (() => {
@@ -979,6 +1027,7 @@ export class Game {
     g.questRerollCount = d.quest_reroll_count ?? 0;
     g.towerKeysBought = d.tower_keys_bought ?? 0;
     g.altarLv = d.altar_lv ?? {};
+    g.bagExpLv = d.bag_exp_lv ?? 0;
     g.emaKill = d.ema_kill ?? 0;
     g.recalcHero();
     g.hero.hp = Math.min(d.hero_hp ?? g.hero.max_hp, g.hero.max_hp);

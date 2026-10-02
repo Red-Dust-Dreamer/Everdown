@@ -231,6 +231,7 @@ def state():
         "equip": {s: _item_ui(it) for s, it in g.equip.items()},
         "bag": [_item_ui(it) for it in g.bag],
         "bag_size": D.BAL["bag_size"],
+        "bag_cap": g.bag_cap(), "bag_expand_cost": g.bag_expand_cost(),
         "quests": quests, "achievements": ach,
         "loadout": {"active": list(g.loadout["active"]),
                     "passive": list(g.loadout["passive"])},
@@ -241,6 +242,16 @@ def state():
         "stats": dict(g.stats),
         "tower": {"keys": g.tower.get("keys", 3),
                   "max_floor": g.tower.get("max_floor", 0)},
+        "altar": [{"id": l[0], "name": l[1], "icon": l[2], "stat": l[3],
+                   "stat_name": D.STAT_NAMES.get(l[3], l[3]), "op": l[4], "per": l[5],
+                   "lv": g.altar_lv.get(l[0], 0), "cost": g.altar_cost(l[0]),
+                   "bonus": round(l[5] * g.altar_lv.get(l[0], 0), 1)}
+                  for l in D.ALTAR_LINES],
+        "potions": [{"id": q[0], "name": q[1], "icon": q[2], "buff": q[3], "pct": q[4],
+                     "cost": g.potion_cost(q[0]),
+                     "remain": round(max(0.0, g.buffs.get(q[3], {}).get("until", 0) - g.time))}
+                    for q in D.POTIONS],
+        "quest_reroll_cost": g.quest_reroll_cost(), "quest_reroll_used": g.quest_reroll_count,
         "settings": dict(g.settings),
         "reforge_stones": D.BAL["reforge_stones"],
         "pending_offline": po,
@@ -298,6 +309,21 @@ def cmd(name, a=None, b=None):
         g.toast("掉落自动出售已更新")
     elif name == "dismiss_offline":
         g.pending_offline = None
+    elif name == "bag_expand":
+        g.buy_bag_slots()
+    elif name == "enhance_multi":
+        if a:
+            g.enhance_multi(a)
+    elif name == "altar_up":
+        if a:
+            g.altar_up(a)
+    elif name == "potion":
+        if a:
+            g.use_potion(a)
+    elif name == "tower_key":
+        g.buy_tower_key()
+    elif name == "quest_reroll":
+        g.reroll_quests()
     elif name == "reset":
         localStorage.removeItem(SAVE_KEY)
         _g = Game()

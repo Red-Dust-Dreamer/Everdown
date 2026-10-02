@@ -27,6 +27,8 @@ export const STAT_NAMES: Record<string, string> = {
   goldfind: "金币加成", dmg_pct: "伤害加成",
   skill_lv: "全技能等级", skill_dmg: "技能伤害", cd_reduce: "冷却缩减",
   dodge: "闪避", armor_pierce: "无视防御", xp_pct: "经验加成", luck: "幸运",
+  // buff 键补充(buff 条/药剂显示用)
+  gold: "金币", xp: "经验", all: "全属性",
 };
 
 // ---------------------------------------------------------------- 装备槽
@@ -304,11 +306,11 @@ export const ALTAR_LINES: AltarLine[] = [
 // ---------------------------------------------------------------- 临时药剂(30 分钟增益,buff 管道)
 export interface PotionDef {
   id: string; name: string; icon: string;
-  buff: string;      // buff 键:dmg=伤害 / xp=经验 / gold=金币
+  buff: string;      // buff 键:atk=攻击 / xp=经验 / gold=金币
   pct: number; dur: number;   // 增幅% 与 秒
 }
 export const POTIONS: PotionDef[] = [
-  { id: "might",   name: "力量药剂", icon: "🧪", buff: "dmg",  pct: 20, dur: 1800 },
+  { id: "might",   name: "力量药剂", icon: "🧪", buff: "atk",  pct: 20, dur: 1800 },
   { id: "wisdom",  name: "智慧药剂", icon: "⚗",  buff: "xp",   pct: 50, dur: 1800 },
   { id: "fortune", name: "贪婪药剂", icon: "💰", buff: "gold", pct: 30, dur: 1800 },
 ];
@@ -359,6 +361,10 @@ export const BAL = {
   potion_cost_k: 300,        // 药剂价格 = k × 当前层击杀金(30 分钟)
   tower_key_extra: 2,        // 每日可加购钥匙数(免费 3 把之外)
   tower_key_cost_k: 150,     // 第 n 把加购价格 = k × n × 击杀金
+  bag_expand_step: 10,       // 背包每次扩容格数
+  bag_expand_max: 100,       // 背包容量上限
+  bag_expand_cost0: 30000,   // 扩容费用 = cost0×n + cost_k×n²(n=第几次)
+  bag_expand_cost_k: 5000,
   quest_reroll_max: 3,       // 每日悬赏刷新次数
   quest_reroll_cost_k: 100,  // 第 n 次刷新价格 = k × (n+1) × 击杀金
 

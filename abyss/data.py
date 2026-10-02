@@ -75,6 +75,8 @@ STAT_NAMES = {
     "skill_lv": "全技能等级", "skill_dmg": "技能伤害", "cd_reduce": "冷却缩减",
     "dodge": "闪避", "armor_pierce": "无视防御", "xp_pct": "经验加成",
     "luck": "幸运",
+    # buff 键补充(buff 条/药剂显示用)
+    "gold": "金币", "xp": "经验", "all": "全属性",
 }
 # 百分比词缀上限(最终汇总时截断)
 CAPS = {"haste": 150.0, "crit": 75.0, "lifesteal": 25.0, "luck": 200.0,
@@ -447,9 +449,9 @@ ALTAR_LINES = [
 ]
 
 # ---------------------------------------------------------------- 临时药剂(30 分钟增益,buff 管道;与 TS 同构)
-# (id, 名称, 图标, buff键, 增幅%, 持续秒)  buff: dmg=伤害 / xp=经验 / gold=金币
+# (id, 名称, 图标, buff键, 增幅%, 持续秒)  buff: atk=攻击 / xp=经验 / gold=金币
 POTIONS = [
-    ("might",   "力量药剂", "🧪", "dmg",  20, 1800),
+    ("might",   "力量药剂", "🧪", "atk",  20, 1800),
     ("wisdom",  "智慧药剂", "⚗",  "xp",   50, 1800),
     ("fortune", "贪婪药剂", "💰", "gold", 30, 1800),
 ]
@@ -507,6 +509,10 @@ BAL = {
     "potion_cost_k": 300,        # 药剂价格 = k × 当前层击杀金(30 分钟)
     "tower_key_extra": 2,        # 每日可加购钥匙数(免费 3 把之外)
     "tower_key_cost_k": 150,     # 第 n 把加购价格 = k × n × 击杀金
+    "bag_expand_step": 10,       # 背包每次扩容格数
+    "bag_expand_max": 100,       # 背包容量上限
+    "bag_expand_cost0": 30000,   # 扩容费用 = cost0×n + cost_k×n²(n=第几次)
+    "bag_expand_cost_k": 5000,
     "quest_reroll_max": 3,       # 每日悬赏刷新次数
     "quest_reroll_cost_k": 100,  # 第 n 次刷新价格 = k × (n+1) × 击杀金
 

@@ -81,7 +81,7 @@ export interface Buff { pct: number; until: number }
 export function addBuff(g: Game, stat: string, pct: number, dur: number): void {
   const until = g.time + dur;
   const cur = g.buffs[stat];
-  if (cur && cur.until > g.time && cur.pct >= pct) return;
+  if (cur && cur.until > g.time && cur.pct > pct) return;   // 同值续时(药剂重饮)
   g.buffs[stat] = { pct, until };
 }
 

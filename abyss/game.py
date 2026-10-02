@@ -13,14 +13,18 @@ import time
 from pathlib import Path
 
 from .ansi import c, fmt
-from .combat import battle_tick, spawn_monster, tier_of
-from .data import (ACTIVE_DEF, ACTIVE_SKILLS, BAL, CAPS, CLASSES, PASSIVE_DEF, TOWER,
+from .combat import battle_tick, spawn_monster, tier_of, mob_gold
+from .data import (ACTIVE_DEF, ACTIVE_SKILLS, BAL, CAPS, CLASSES, PASSIVE_DEF,
+                   ALTAR_LINES, POTIONS, TOWER,
                    PASSIVE_SKILLS, RARITY_IDX, SLOTS)
 from .items import Item, roll_item
 from . import systems
 from . import skills as S
 from . import relics as RL
 from . import tower as TW
+
+D_ALTAR = {a[0]: a for a in ALTAR_LINES}
+D_POTION = {p[0]: p for p in POTIONS}
 
 SAVE_PATH = Path(__file__).resolve().parent.parent / "save.json"
 SAVE_VERSION = 7
@@ -61,6 +65,10 @@ class Game:
         self.settings = {"auto_equip": True, "auto_sell_idx": -1}
         self.quests = []
         self.quest_daily_count = 0   # 今日已完成悬赏数(上限 BAL["quest_daily_limit"])
+        self.quest_reroll_count = 0  # 今日悬赏刷新次数(上限 BAL["quest_reroll_max"])
+        self.tower_keys_bought = 0   # 今日已加购塔钥匙数(上限 BAL["tower_key_extra"])
+        self.altar_lv = {}           # 深渊祭坛各线等级(金币→永久属性)
+        self.bag_exp_lv = 0          # 背包扩容次数(每 +1 扩 10 格,至 100)
         self.quest_daily_date = ""   # 本地日期 %Y-%m-%d,跨日重置计数
         self.events = []           # [(kind, text, color)] 宿主 drain
         self.view = None           # CLI 宿主挂载,核心不读写
@@ -206,6 +214,7 @@ class Game:
                 agg[k] = agg.get(k, 0) + v
         # 统一修饰管道:成就 + 被动技能 + 遗物 + 外部挂口;先加后乘,再截断
         mods = (systems.achievement_mods(self.stats)
+                + systems.altar_mods(self.altar_lv)
                 + (S.passive_mods(self) if self.class_id else [])
                 + RL.relic_mods(self.relics)
                 + self.stat_mods)
@@ -272,7 +281,7 @@ class Game:
             self.stats["gold_earned"] += price
             self.log("自动出售 %s (+%s 金币)" % (item.display(), fmt(price)), "bright_black")
             return
-        if len(self.bag) >= BAL["bag_size"]:
+        if len(self.bag) >= self.bag_cap():
             price = item.sell_price()
             self.gold += price
             self.stats["gold_earned"] += price
@@ -291,7 +300,7 @@ class Game:
         if item in self.bag:
             self.bag.remove(item)
         if old is not None:
-            if len(self.bag) >= BAL["bag_size"]:
+            if len(self.bag) >= self.bag_cap():
                 price = old.sell_price()
                 self.gold += price
                 self.stats["gold_earned"] += price
@@ -310,7 +319,7 @@ class Game:
         if it is None:
             self.toast("该部位没有装备")
             return
-        if len(self.bag) >= BAL["bag_size"]:
+        if len(self.bag) >= self.bag_cap():
             self.toast("背包已满")
             return
         del self.equip[slot]
@@ -377,6 +386,59 @@ class Game:
         self.recalc_hero()
         self.log("⚒ %s 强化至 +%d" % (it.name, it.plus), "bright_yellow")
         self.toast("%s +%d" % (it.name, it.plus))
+
+    def enhance_multi(self, slot, times=10):
+        """十连强化:连续强化至多 n 次(钱不够/到上限即停),一次性汇报(与 TS 同构)"""
+        it = self.equip.get(slot)
+        if it is None:
+            self.toast("该部位没有装备")
+            return
+        plus0 = it.plus
+        spent, n = 0, 0
+        while n < times:
+            if it.plus >= BAL["plus_max"]:
+                break
+            cost = it.enhance_cost()
+            if self.gold < cost:
+                break
+            self.gold -= cost
+            it.plus += 1
+            spent += cost
+            n += 1
+            self.stats["enhance_total"] += 1
+            self.quest_progress("enhance", 1)
+        if n > 0:
+            self.recalc_hero()
+            self.log("⚒ %s 强化至 +%d(十连 ×%d,共 ◈%s)" % (it.name, it.plus, n, fmt(spent)),
+                     "bright_yellow")
+            self.toast("%s +%d→+%d(×%d)" % (it.name, plus0, it.plus, n))
+        else:
+            self.toast("已达强化上限" if it.plus >= BAL["plus_max"] else "金币不足")
+
+    def bag_cap(self):
+        """背包容量 = 基础 + 扩容步长×次数(上限 bag_expand_max)"""
+        return min(BAL["bag_size"] + BAL["bag_expand_step"] * self.bag_exp_lv,
+                   BAL["bag_expand_max"])
+
+    def bag_expand_cost(self):
+        """下一次扩容费用(多项式递增);已满返回 None"""
+        if self.bag_cap() >= BAL["bag_expand_max"]:
+            return None
+        n = self.bag_exp_lv + 1
+        return int(round(BAL["bag_expand_cost0"] * n + BAL["bag_expand_cost_k"] * n * n))
+
+    def buy_bag_slots(self):
+        cost = self.bag_expand_cost()
+        if cost is None:
+            self.toast("背包已达上限 %d 格" % BAL["bag_expand_max"])
+            return
+        if self.gold < cost:
+            self.toast("金币不足 (需要 %s)" % fmt(cost))
+            return
+        self.gold -= cost
+        self.bag_exp_lv += 1
+        self.log("🎒 背包扩容至 %d 格" % self.bag_cap(), "bright_cyan")
+        self.toast("背包 %d 格" % self.bag_cap())
 
     def reforge(self, slot):
         """洗脸:按品质洗 N 条词缀(精良/稀有1、史诗/传说2、神话3),
@@ -588,6 +650,95 @@ class Game:
         if gained > 0:
             self.log("🔑 每日钥匙 +%d(现有 %d)" % (gained, self.tower["keys"]), "bright_cyan")
 
+    # ================================================================ 金币消耗(祭坛/药剂/钥匙/悬赏刷新;与 TS 同构)
+    def altar_cost(self, line_id):
+        """祭坛单线下一级费用:多项式(基费 + 线性 + 平方 + 深度项),无等级上限"""
+        lv = self.altar_lv.get(line_id, 0)
+        t = tier_of(self.zone, self.stage)
+        return int(round(BAL["altar_cost0"] + BAL["altar_cost_lv"] * lv
+                         + BAL["altar_cost_lv2"] * lv * lv + BAL["altar_cost_t"] * t))
+
+    def altar_up(self, line_id):
+        line = D_ALTAR.get(line_id)
+        if line is None:
+            self.toast("无此祭坛")
+            return
+        cost = self.altar_cost(line_id)
+        if self.gold < cost:
+            self.toast("金币不足 (需要 %s)" % fmt(cost))
+            return
+        self.gold -= cost
+        self.altar_lv[line_id] = self.altar_lv.get(line_id, 0) + 1
+        self.recalc_hero()
+        self.log("🕯 %s Lv.%d(+%s%s %s)" % (line[1], self.altar_lv[line_id], line[5],
+                 "%" if line[4] == "pct" else " 点", line[3]), "bright_magenta")
+        self.toast("%s Lv.%d" % (line[1], self.altar_lv[line_id]))
+
+    def potion_cost(self, pid):
+        """药剂价格 = k × 当前层击杀金(30 分钟增益,同键续时不叠加)"""
+        return int(round(BAL["potion_cost_k"] * mob_gold(tier_of(self.zone, self.stage))))
+
+    def use_potion(self, pid):
+        d = D_POTION.get(pid)
+        if d is None:
+            self.toast("无此药剂")
+            return
+        cost = self.potion_cost(pid)
+        if self.gold < cost:
+            self.toast("金币不足 (需要 %s)" % fmt(cost))
+            return
+        self.gold -= cost
+        S.add_buff(self, d[3], d[4], d[5])
+        what = {"atk": "攻击", "xp": "经验", "gold": "金币"}[d[3]]
+        self.log("%s 饮下%s:30 分钟内%s +%d%%" % (d[2], d[1], what, d[4]), "bright_green")
+        self.toast("%s 已生效(30 分钟)" % d[1])
+
+    def tower_key_cost(self):
+        """塔钥匙加购:每日限 BAL["tower_key_extra"] 把,第 n 把价格 = k×n×击杀金;购满返回 None"""
+        if self.tower_keys_bought >= BAL["tower_key_extra"]:
+            return None
+        return int(round(BAL["tower_key_cost_k"] * (self.tower_keys_bought + 1)
+                         * mob_gold(tier_of(self.zone, self.stage))))
+
+    def buy_tower_key(self):
+        self.roll_daily()
+        cost = self.tower_key_cost()
+        if cost is None:
+            self.toast("今日钥匙已购满,明日再来")
+            return
+        if self.gold < cost:
+            self.toast("金币不足 (需要 %s)" % fmt(cost))
+            return
+        self.gold -= cost
+        self.tower_keys_bought += 1
+        self.tower["keys"] += 1
+        self.log("🔑 金币加购塔钥匙(现有 %d)" % self.tower["keys"], "bright_cyan")
+        self.toast("钥匙 +1(今日加购 %d/%d)" % (self.tower_keys_bought, BAL["tower_key_extra"]))
+
+    def quest_reroll_cost(self):
+        """悬赏刷新:每日限 BAL["quest_reroll_max"] 次,第 n 次价格 = k×(n+1)×击杀金;刷满返回 None"""
+        if self.quest_reroll_count >= BAL["quest_reroll_max"]:
+            return None
+        return int(round(BAL["quest_reroll_cost_k"] * (self.quest_reroll_count + 1)
+                         * mob_gold(tier_of(self.zone, self.stage))))
+
+    def reroll_quests(self):
+        self.roll_daily()
+        cost = self.quest_reroll_cost()
+        if cost is None:
+            self.toast("今日悬赏已刷满,明日再来")
+            return
+        if self.gold < cost:
+            self.toast("金币不足 (需要 %s)" % fmt(cost))
+            return
+        self.gold -= cost
+        self.quest_reroll_count += 1
+        for q in self.quests:
+            q.clear()
+            q.update(systems.roll_quest(self.zone, self.rng))
+        self.log("🔄 悬赏已刷新(%d/%d)" % (self.quest_reroll_count, BAL["quest_reroll_max"]), "bright_cyan")
+        self.toast("悬赏已刷新")
+
     # ================================================================ 悬赏
     def roll_daily(self):
         """每日悬赏:本地日期跨日重置计数(与 TS 主实现同构,保持对拍)。"""
@@ -595,6 +746,8 @@ class Game:
         if d != self.quest_daily_date:
             self.quest_daily_date = d
             self.quest_daily_count = 0
+            self.quest_reroll_count = 0
+            self.tower_keys_bought = 0
 
     def quest_progress(self, qtype, n):
         self.roll_daily()
@@ -682,6 +835,10 @@ class Game:
             "quests": self.quests,
             "quest_daily_count": self.quest_daily_count,
             "quest_daily_date": self.quest_daily_date,
+            "quest_reroll_count": self.quest_reroll_count,
+            "tower_keys_bought": self.tower_keys_bought,
+            "altar_lv": self.altar_lv,
+            "bag_exp_lv": self.bag_exp_lv,
             "relics": [r.to_dict() if r else None for r in self.relics],
             "tower": self.tower,
             "hero_hp": self.hero.get("hp"),
@@ -741,6 +898,10 @@ class Game:
         g.quests = d.get("quests") or g.quests
         g.quest_daily_count = d.get("quest_daily_count", 0)
         g.quest_daily_date = d.get("quest_daily_date", "")
+        g.quest_reroll_count = d.get("quest_reroll_count", 0)
+        g.tower_keys_bought = d.get("tower_keys_bought", 0)
+        g.altar_lv = d.get("altar_lv") or {}
+        g.bag_exp_lv = d.get("bag_exp_lv", 0)
         g.ema_kill = d.get("ema_kill", 0.0)
         g.recalc_hero()
         # hero_hp 仅在缺失时回满:0 血存档应保留(与 TS 的 ?? 语义对齐,不再用 or)

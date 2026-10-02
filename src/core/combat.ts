@@ -329,7 +329,7 @@ function onMonsterKilled(g: Game, mon: Monster): void {
     const kt = Math.max(0.5, g.time - g.lastSpawnTime);
     g.emaKill = g.emaKill ? g.emaKill * 0.7 + kt * 0.3 : kt;
   }
-  let gold = mobGold(mon.tier) * (1 + h.goldfind / 100);
+  let gold = mobGold(mon.tier) * (1 + (h.goldfind + S.buffPct(g, "gold")) / 100);
   if (mon.boss) gold *= BAL.boss_gold;
   else if (mon.elite) gold *= BAL.elite_gold;
 
@@ -341,7 +341,8 @@ function onMonsterKilled(g: Game, mon: Monster): void {
     g.stats.boss_kills += 1;
     if (g.rng.random() < BAL.boss_stone_chance) g.stones += BAL.boss_stone_amt;
   }
-  g.gainXp(Math.trunc(mobXp(mon.tier) * (1 + (h.xp_pct ?? 0) / 100)));
+  g.gainXp(Math.trunc(mobXp(mon.tier)
+    * (1 + (h.xp_pct ?? 0) / 100 + S.buffPct(g, "xp") / 100)));
   g.questProgress("kill", 1);
   if (mon.boss) g.questProgress("boss", 1);
 

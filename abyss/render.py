@@ -344,7 +344,7 @@ def _tab_bag(g):
     left_w, right_w = 52, 42
     left = []
     left.append(" " + c("▌背包", "bright_white", bold=True)
-                + c(" %d/%d" % (len(g.bag), BAL["bag_size"]), "bright_black")
+                + c(" %d/%d" % (len(g.bag), g.bag_cap()), "bright_black")
                 + pad(c("第%d页" % (page + 1), "bright_black"), 10, "right"))
     start = page * BAG_PAGE
     items = g.bag[start:start + BAG_PAGE]

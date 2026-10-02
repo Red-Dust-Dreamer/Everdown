@@ -7,7 +7,7 @@
 import { Game, installSaveHooks, migrateSave } from "../core/game.ts";
 import * as D from "../core/data.ts";
 import * as systems from "../core/systems.ts";
-import { effLv, skillVal } from "../core/skills.ts";
+import { effLv, skillVal, buffPct, atkNow } from "../core/skills.ts";
 import { plusBonus, Item, PCT_MAINS } from "../core/items.ts";
 import type { Relic } from "../core/relics.ts";
 import confetti from "canvas-confetti";
@@ -68,6 +68,12 @@ function fmtTime(sec: number): string {
   const p = (x: number) => String(x).padStart(2, "0");
   return h ? `${h}:${p(m)}:${p(s)}` : `${p(m)}:${p(s)}`;
 }
+
+/** buff 剩余时长:≥60 秒按分钟(1 位小数),不足 60 秒才用秒 */
+function fmtBuffTime(sec: number): string {
+  if (sec >= 60) return `${(sec / 60).toFixed(1).replace(/\.0$/, "")}分`;
+  return `${Math.round(sec)}s`;
+}
 function pctTxt(v: number): string {
   v = Number(v) || 0;
   return (v >= 100 ? v.toFixed(0) : v.toFixed(1).replace(/\.0$/, "")) + "%";
@@ -125,6 +131,7 @@ interface State {
   equip: Record<string, ItemUI>;
   bag: ItemUI[];
   bag_size: number;
+  bag_cap: number; bag_expand_cost: number | null;
   quests: { desc: string; progress: number; target: number; gold: number; stones: number }[];
   quest_daily_count: number; quest_daily_limit: number;
   achievements: { id: string; name: string; val: number; tiers: number; total: number;
@@ -133,6 +140,12 @@ interface State {
   loadout_slots: number; loadout_unlock: readonly number[];
   speed: number; max_speed: number; speed_unlock: readonly number[];
   skills: { active: SkillUI[]; passive: SkillUI[] };
+  altar: { id: string; name: string; icon: string; stat: string; stat_name: string;
+           op: string; per: number; lv: number; cost: number; bonus: number }[];
+  potions: { id: string; name: string; icon: string; buff: string; pct: number;
+             cost: number; remain: number }[];
+  tower_key_cost: number | null; tower_keys_bought: number;
+  quest_reroll_cost: number | null; quest_reroll_used: number;
   skill_cd: Record<string, number>;
   tower: { keys: number; max_floor: number };
   in_tower: boolean;
@@ -229,7 +242,12 @@ function buildState(g: Game): State {
 
   let dps = g.theoreticalDps();
   if (!Number.isFinite(dps)) dps = 0;
-  const hero: Record<string, number> = { ...(h as unknown as Record<string, number>), dps };
+  // 面板属性跟随生效中的 buff:攻击(atk/all)、攻速(haste)、DPS(含伤害加成)
+  const bHaste = buffPct(g, "haste");
+  dps = dps * (atkNow(g) / Math.max(1e-9, h.atk)) * (1 + bHaste / 100)
+    * (1 + buffPct(g, "dmg_pct") / 100);
+  const hero: Record<string, number> = { ...(h as unknown as Record<string, number>), dps,
+    atk: atkNow(g), haste: h.haste + bHaste };
 
   const buffs = Object.entries(g.buffs)
     .filter(([, b]) => b.until > g.time)
@@ -299,6 +317,7 @@ function buildState(g: Game): State {
     equip: Object.fromEntries(Object.entries(g.equip).map(([k, v]) => [k, itemUI(v)])),
     bag: g.bag.map(itemUI),
     bag_size: D.BAL.bag_size,
+    bag_cap: g.bagCap(), bag_expand_cost: g.bagExpandCost(),
     quests, achievements,
     quest_daily_count: questDaily.count, quest_daily_limit: questDaily.limit,
     loadout: { active: [...g.loadout.active], passive: [...g.loadout.passive] },
@@ -308,6 +327,19 @@ function buildState(g: Game): State {
     speed_unlock: D.BAL.speed_unlock,
     skills, skill_cd: g.skillCd,
     tower: { keys: g.tower.keys, max_floor: g.tower.max_floor },
+    altar: D.ALTAR_LINES.map(l => {
+      const lv = g.altarLv[l.id] ?? 0;
+      return { id: l.id, name: l.name, icon: l.icon, stat: l.stat,
+               stat_name: D.STAT_NAMES[l.stat] ?? l.stat, op: l.op, per: l.per,
+               lv, cost: g.altarCost(l.id), bonus: l.per * lv };
+    }),
+    potions: D.POTIONS.map(p => ({
+      id: p.id, name: p.name, icon: p.icon, buff: p.buff, pct: p.pct,
+      cost: g.potionCost(p.id),
+      remain: Math.round(Math.max(0, (g.buffs[p.buff]?.until ?? 0) - g.time)),
+    })),
+    tower_key_cost: g.towerKeyCost(), tower_keys_bought: g.towerKeysBought,
+    quest_reroll_cost: g.questRerollCost(), quest_reroll_used: g.questRerollCount,
     in_tower: g.inTower,
     tower_floor_sel: g.towerFloorSel,
     relics: g.relics.map(r => r ? relicUI(r) : null),
@@ -351,6 +383,12 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
       break;
     }
     case "tower_exit": g.towerExit(false); break;   // 撤退:视作战败,仅耗钥匙
+    case "altar_up": if (a) g.altarUp(a); break;
+    case "potion": if (a) g.usePotion(a); break;
+    case "tower_key": g.buyTowerKey(); break;
+    case "quest_reroll": g.rerollQuests(); break;
+    case "bag_expand": g.buyBagSlots(); break;
+    case "enhance_multi": if (a) g.enhanceMulti(a); break;
     case "unequip_relic": g.unequipRelic(Number(a)); break;
     case "relic_equip": g.equipRelicFromBag(Number(a)); break;
     case "relic_bag_up": g.upgradeRelicBag(); break;
@@ -490,7 +528,7 @@ for (const ev of ["pointerdown", "keydown"] as const)
 
 // ---------------------------------------------------------------- 事件流
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
-const LOG_CAP = 60;
+const LOG_CAP = 100;   // 日志保留条数(近 100 条可回看)
 
 function drainEvents(): void {
   if (!g.events.length) return;
@@ -799,6 +837,7 @@ function renderNow(): void {
   renderQuest(st);
   renderTower(st);
   renderLeaderboard(st);
+  renderAltar(st);
   renderSettings(st);
   renderOverlays(st);
 }
@@ -826,8 +865,8 @@ function renderTop(st: State): void {
   $("res-lv").title = `经验 ${fmt(st.xp)} / ${fmt(st.xp_req)} (${xpPct.toFixed(1)}%)`;
 }
 
-function kv(k: string, v: string): string {
-  return `<div class="kv"><span class="k">${k}</span><b>${v}</b></div>`;
+function kv(k: string, v: string, cls = ""): string {
+  return `<div class="kv"><span class="k">${k}</span><b${cls ? ` class="${cls}"` : ""}>${v}</b></div>`;
 }
 function slotName(s: string): string {
   return D.SLOT_NAMES[s] ?? s;
@@ -847,7 +886,12 @@ function renderBattle(st: State): void {
   const hpPct = Math.max(0, Math.min(100, h.hp / h.max_hp * 100));
   const shield = h.shield ?? 0;
   const buffs = st.buffs.map(b =>
-    `<span class="buff">${esc(b.name)} +${pctTxt(b.pct)} ${b.remain}s</span>`).join("");
+    `<span class="buff">${esc(b.name)} +${pctTxt(b.pct)} ${fmtBuffTime(b.remain)}</span>`).join("");
+  // 生效中的 buff 高亮对应属性(药剂/技能增益一眼可辨)
+  const has = (k: string) => st.buffs.some(b => b.key === k);
+  const atkUp = has("atk") || has("all");
+  const hasteUp = has("haste");
+  const dpsUp = atkUp || hasteUp || has("dmg_pct");
   $("hero-card").innerHTML =
     `<h3><span class="dot"></span>英雄 · ${esc(st.cls.name)}</h3>` +
     `<div class="bar hero-hp lg"><div class="fill" style="width:${hpPct}%"></div>` +
@@ -855,11 +899,11 @@ function renderBattle(st: State): void {
     `<div class="num">${fmt(h.hp)} / ${fmt(h.max_hp)}` +
       (shield > 0 ? ` (🛡${fmt(shield)})` : "") + `</div></div>` +
     `<div class="stat-grid" style="margin-top:9px">` +
-      kv("攻击", fmt(h.atk)) + kv("防御", fmt(h.def)) +
-      kv("攻速", "+" + pctTxt(h.haste)) + kv("暴击", pctTxt(h.crit)) +
+      kv("攻击", fmt(h.atk), atkUp ? "up" : "") + kv("防御", fmt(h.def)) +
+      kv("攻速", "+" + pctTxt(h.haste), hasteUp ? "up" : "") + kv("暴击", pctTxt(h.crit)) +
       kv("暴伤", "+" + pctTxt(h.crit_dmg)) + kv("幸运", "+" + fmt(h.luck ?? 0)) +
       kv("吸血", pctTxt(h.lifesteal)) +
-      kv("DPS", fmt(h.dps)) +
+      kv("DPS", fmt(h.dps), dpsUp ? "up" : "") +
       kv("击杀均时", st.ema_kill ? st.ema_kill.toFixed(1) + "s" : "—") +
     `</div>` + (buffs ? `<div class="buff-row">${buffs}</div>` : "");
 
@@ -1005,8 +1049,12 @@ function renderBag(st: State): void {
       `</div></div>`;
   });
   $("bag-list").innerHTML =
-    `<h3><span class="dot"></span>背包 · ${st.bag.length} / ${st.bag_size}` +
-    `<span class="rt"><button class="btn" data-cmd="sell_junk">一键出售 普通/精良</button></span></h3>` +
+    `<h3><span class="dot"></span>背包 · ${st.bag.length} / ${st.bag_cap}` +
+    `<span class="rt">` +
+      (st.bag_expand_cost !== null
+        ? `<button class="btn mini" data-cmd="bag_expand" title="金币扩容 +10 格">扩容 ◈${fmt(st.bag_expand_cost)}</button>`
+        : `<span style="color:var(--dim);font-size:11px">背包已满级</span>`) +
+      `<button class="btn" data-cmd="sell_junk">一键出售 普通/精良</button></span></h3>` +
     (cards ? `<div class="bag-grid">${cards}</div>`
            : `<div style="color:var(--dim);padding:30px;text-align:center">背包空空如也</div>`);
 }
@@ -1031,6 +1079,7 @@ function renderForge(st: State): void {
       `<div class="slot-r">` +
         `<div class="cost">◈${fmt(it.ecost)}</div>` +
         `<button class="btn" data-cmd="enhance" data-a="${s}">⚒ 强化</button>` +
+        `<button class="btn mini" data-cmd="enhance_multi" data-a="${s}" title="连续强化10次(钱不够自动停)">⚒×10</button>` +
         `<button class="btn" data-cmd="reforge" data-a="${s}" title="按品质洗词条(幸运提升值域)">✦ 洗练(${st.reforge_stones}石)</button>` +
       `</div></div>`;
   }
@@ -1108,7 +1157,12 @@ function renderQuest(st: State): void {
   }
   const dailyCap2 = st.quest_daily_count >= st.quest_daily_limit;
   $("quest-list").innerHTML =
-    `<h3><span class="dot"></span>悬赏任务(完成后自动刷新)· 今日 ${st.quest_daily_count}/${st.quest_daily_limit}</h3>` +
+    `<h3><span class="dot"></span>悬赏任务(完成后自动刷新)· 今日 ${st.quest_daily_count}/${st.quest_daily_limit}` +
+      `<span class="rt">` +
+      (st.quest_reroll_cost !== null
+        ? `<button class="btn mini" data-cmd="quest_reroll" title="金币刷新全部悬赏">刷新 ◈${fmt(st.quest_reroll_cost)}(${st.quest_reroll_used}/${D.BAL.quest_reroll_max})</button>`
+        : `<span style="color:var(--dim);font-size:11px">今日刷新已满</span>`) +
+      `</span></h3>` +
     (dailyCap2 ? `<div style="color:var(--dim);font-size:12px;margin:-4px 0 8px">今日悬赏已达上限(${st.quest_daily_limit}个):在途任务进度冻结,明日 0 点自动恢复</div>` : "") + qs;
 
   let ach = "";
@@ -1145,7 +1199,11 @@ function renderTower(st: State): void {
 
   let html =
     `<h3><span class="dot"></span>深渊塔 · 钥匙 ×${tw.keys}(每日 ${D.TOWER.keys_per_day} 把)` +
-      `<span class="rt" style="color:var(--dim)">最高 第${tw.max_floor}层</span></h3>` +
+      `<span class="rt">` +
+      (st.tower_key_cost !== null
+        ? `<button class="btn mini" data-cmd="tower_key" title="金币加购(今日 ${st.tower_keys_bought}/${D.BAL.tower_key_extra})">加购 ◈${fmt(st.tower_key_cost)}</button>`
+        : `<span style="color:var(--dim);font-size:11px">今日加购已满</span>`) +
+      `<span style="color:var(--dim)">最高 第${tw.max_floor}层</span></span></h3>` +
     `<div class="stage-lbl" style="margin:2px 0 8px;flex-wrap:wrap;gap:8px"><span>` +
       `<button class="btn mini" data-cmd="tower_sel" data-a="-1">−</button>` +
       `<span class="mono" style="font-size:16px;font-weight:800;margin:0 8px">第 ${sel} 层</span>` +
@@ -1440,9 +1498,11 @@ function togglePause(): void {
 document.addEventListener("keydown", (e: KeyboardEvent) => {
   const t = e.target as HTMLElement;
   if (t.tagName === "SELECT" || t.tagName === "INPUT") return;
-  const tabs = ["battle", "hero", "bag", "forge", "skill", "quest", "tower", "leaderboard", "settings"];
-  if (e.key >= "1" && e.key <= "9") {
-    const item = document.querySelector(`.nav-item[data-tab="${tabs[+e.key - 1]}"]`) as HTMLElement | null;
+  const tabs = ["battle", "hero", "bag", "forge", "skill", "quest", "tower",
+                 "leaderboard", "altar", "settings"];
+  const idx = e.key === "0" ? 9 : (e.key >= "1" && e.key <= "9" ? +e.key - 1 : -1);
+  if (idx >= 0) {
+    const item = document.querySelector(`.nav-item[data-tab="${tabs[idx]}"]`) as HTMLElement | null;
     if (item) item.click();
   } else if (e.key === "f" || e.key === "F") { doCmd("mode"); renderNow(); }
   else if (e.key === "b" || e.key === "B") { doCmd("speed"); renderNow(); }
@@ -1577,6 +1637,60 @@ function lbUuid(): string {
 }
 function lbMyName(): string {
   return localStorage.getItem("abyss_lbname") ?? `深渊行者#${lbUuid().slice(0, 4).toUpperCase()}`;
+}
+
+function ensureAltarDom(): void {
+  if (document.querySelector('.nav-item[data-tab="altar"]')) return;
+  const settingsNav = document.querySelector('.nav-item[data-tab="settings"]');
+  const nav = document.createElement("div");
+  nav.className = "nav-item";
+  nav.dataset.tab = "altar";
+  nav.innerHTML = `<span class="ic">🕯</span><span class="tx">祭坛</span><span class="kbd">0</span>`;
+  settingsNav?.before(nav);
+  const pageSettings = document.getElementById("page-settings");
+  const page = document.createElement("div");
+  page.className = "page";
+  page.id = "page-altar";
+  page.innerHTML = `<div class="card" id="potions-card"></div>
+                    <div class="card grow" id="altar-list"></div>`;
+  pageSettings?.before(page);
+}
+
+// ================================================================ 深渊祭坛(金币→永久属性)+ 药剂
+function renderAltar(st: State): void {
+  const potCard = $("potions-card"), list = $("altar-list");
+  if (!potCard || !list) return;
+  if (!st.class_id) { potCard.innerHTML = ""; list.innerHTML = ""; return; }
+
+  // —— 药剂(30 分钟增益;显示价格与生效剩余)
+  const buffName = (b: string) => b === "atk" ? "攻击" : b === "xp" ? "经验" : "金币";
+  potCard.innerHTML =
+    `<h3><span class="dot"></span>临时药剂 · 30 分钟</h3>` +
+    `<div class="potion-row">` + st.potions.map(p =>
+      `<button class="potion-btn" data-cmd="potion" data-a="${p.id}">
+        <span class="ic">${p.icon}</span>
+        <span class="nm">${p.name}</span>
+        <span class="ds">${buffName(p.buff)} +${p.pct}%${p.remain > 0 ? ` · 剩${Math.ceil(p.remain / 60)}分` : ""}</span>
+        <span class="cost">◈${fmt(p.cost)}</span>
+      </button>`).join("") + `</div>`;
+
+  // —— 祭坛 6 线
+  list.innerHTML =
+    `<h3><span class="dot"></span>深渊祭坛 · 金币献祭换永久加成(费用随等级平方上涨,无上限)</h3>` +
+    st.altar.map(l => {
+      const cur = l.op === "pct"
+        ? `${l.stat_name} +${l.bonus.toFixed(1)}%`
+        : `${l.stat_name} +${l.bonus.toFixed(1)}`;
+      const next = l.op === "pct" ? `+${l.per}%` : `+${l.per}`;
+      return `<div class="altar-row">
+        <span class="ic">${l.icon}</span>
+        <span class="nm">${l.name}</span>
+        <span class="lv">Lv.${l.lv}</span>
+        <span class="cur">${cur}</span>
+        <span class="nx">(下一级 ${next})</span>
+        <button class="btn mini" data-cmd="altar_up" data-a="${l.id}">献祭 ◈${fmt(l.cost)}</button>
+      </div>`;
+    }).join("");
 }
 
 function ensureLeaderboardDom(): void {
@@ -1779,6 +1893,7 @@ function boot(): void {
 
   ensureTowerDom();   // 注入第 8 个「塔」tab 与页面容器
   ensureLeaderboardDom();   // 注入第 9 个「排行」tab 与页面容器
+  ensureAltarDom();          // 注入第 10 个「祭坛」tab 与页面容器
   $("loading").classList.add("hide");
   renderNow();
 

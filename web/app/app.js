@@ -224,7 +224,7 @@ initSfx();
   document.addEventListener(ev, ensureSfx, { once: true }));
 
 // ---------------------------------------------------------------- 事件流
-const LOG_CAP = 60;
+const LOG_CAP = 100;   // 日志保留条数(近 100 条可回看)
 function drainEvents() {
   let evs;
   try { evs = JSON.parse(py.events()); } catch (e) { return; }
@@ -249,6 +249,7 @@ function drainEvents() {
   if (logs.length) {
     logBody.insertAdjacentHTML("beforeend", logs.join(""));
     while (logBody.children.length > LOG_CAP) logBody.removeChild(logBody.firstChild);
+    logBody.scrollTop = logBody.scrollHeight;   // 始终滚到最新
   }
 }
 function spanColor(text, color) {
@@ -290,6 +291,7 @@ function renderNow() {
   renderSkills(st);
   renderQuest(st);
   renderLeaderboard(st);
+  renderAltar(st);
   renderSettings(st);
   renderOverlays(st);
   dirty = false;
@@ -494,8 +496,12 @@ function renderBag(st) {
       "</div></div>";
   });
   $("bag-list").innerHTML =
-    '<h3><span class="dot"></span>背包 · ' + st.bag.length + " / " + st.bag_size +
-    '<span class="rt"><button class="btn" data-cmd="sell_junk">一键出售 普通/精良</button></span></h3>' +
+    '<h3><span class="dot"></span>背包 · ' + st.bag.length + " / " + st.bag_cap +
+    '<span class="rt">' +
+      (st.bag_expand_cost !== null
+        ? '<button class="btn mini" data-cmd="bag_expand">扩容 ◈' + fmt(st.bag_expand_cost) + '</button>'
+        : '<span style="color:var(--dim);font-size:11px">背包已满级</span>') +
+      '<button class="btn" data-cmd="sell_junk">一键出售 普通/精良</button></span></h3>' +
     (cards ? '<div class="bag-grid">' + cards + "</div>"
            : '<div style="color:var(--dim);padding:30px;text-align:center">背包空空如也</div>');
 }
@@ -523,6 +529,7 @@ function renderForge(st) {
       '<div class="slot-r">' +
         '<div class="cost">◈' + fmt(it.ecost) + "</div>" +
         '<button class="btn" data-cmd="enhance" data-a="' + s + '">⚒ 强化</button>' +
+        '<button class="btn mini" data-cmd="enhance_multi" data-a="' + s + '" title="连续强化10次">⚒×10</button>' +
         '<button class="btn" data-cmd="reforge" data-a="' + s + '">✦ 重铸(' +
           st.reforge_stones + "石)</button>" +
       "</div></div>";
@@ -612,7 +619,16 @@ function renderQuest(st) {
       '<div class="num" style="font-size:10px">' + q.progress + " / " + q.target +
       "</div></div></div>";
   }
-  $("quest-list").innerHTML = '<h3><span class="dot"></span>悬赏任务(完成后自动刷新)</h3>' + qs;
+  const cap = st.quest_daily_count >= st.quest_daily_limit;
+  $("quest-list").innerHTML =
+    '<h3><span class="dot"></span>悬赏任务 · 今日 ' + st.quest_daily_count + '/' + st.quest_daily_limit +
+      '<span class="rt">' +
+      (st.quest_reroll_cost !== null
+        ? '<button class="btn mini" data-cmd="quest_reroll">刷新 ◈' + fmt(st.quest_reroll_cost) +
+          '(' + st.quest_reroll_used + '/3)</button>'
+        : '<span style="color:var(--dim);font-size:11px">今日刷新已满</span>') +
+      '</span></h3>' +
+    (cap ? '<div style="color:var(--dim);font-size:12px;margin:-4px 0 8px">今日已达上限,在途进度冻结,明日 0 点恢复</div>' : '') + qs;
 
   let ach = "";
   for (const a of st.achievements) {
@@ -712,6 +728,37 @@ function renderOverlays(st) {
     om.classList.remove("show");
     offlineShown = false;
   }
+}
+
+// ---------------------------------------------------------------- 深渊祭坛 + 药剂(金币消耗)
+function renderAltar(st) {
+  const potCard = $("potions-card"), list = $("altar-list");
+  if (!potCard || !list) return;
+  if (!st.class_id) { potCard.innerHTML = ""; list.innerHTML = ""; return; }
+  const buffName = b => b === "dmg" ? "伤害" : b === "xp" ? "经验" : "金币";
+  potCard.innerHTML =
+    '<h3><span class="dot"></span>临时药剂 · 30 分钟</h3>' +
+    '<div class="potion-row">' + st.potions.map(p =>
+      '<button class="potion-btn" data-cmd="potion" data-a="' + p.id + '">' +
+        '<span class="ic">' + p.icon + '</span>' +
+        '<span class="nm">' + p.name + '</span>' +
+        '<span class="ds">' + buffName(p.buff) + ' +' + p.pct + '%' +
+          (p.remain > 0 ? ' · 剩' + Math.ceil(p.remain / 60) + '分' : '') + '</span>' +
+        '<span class="cost">◈' + fmt(p.cost) + '</span>' +
+      '</button>').join("") + '</div>';
+  list.innerHTML =
+    '<h3><span class="dot"></span>深渊祭坛 · 金币献祭换永久加成(费用随等级平方上涨,无上限)</h3>' +
+    st.altar.map(l => {
+      const cur = l.op === "pct" ? l.stat_name + " +" + l.bonus + "%" : l.stat_name + " +" + l.bonus;
+      return '<div class="altar-row">' +
+        '<span class="ic">' + l.icon + '</span>' +
+        '<span class="nm">' + l.name + '</span>' +
+        '<span class="lv">Lv.' + l.lv + '</span>' +
+        '<span class="cur">' + cur + '</span>' +
+        '<span class="nx">(下一级 +' + l.per + (l.op === "pct" ? "%" : "") + ')</span>' +
+        '<button class="btn mini" data-cmd="altar_up" data-a="' + l.id + '">献祭 ◈' + fmt(l.cost) + '</button>' +
+      '</div>';
+    }).join("");
 }
 
 // ---------------------------------------------------------------- 排行榜(匿名,与 src/web 同规则)

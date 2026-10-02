@@ -96,7 +96,7 @@ def add_buff(g, stat, pct, dur):
     """动态增益(主动buff/被动触发buff):同属性取最大,异属性共存"""
     until = g.time + dur
     cur = g.buffs.get(stat)
-    if cur and cur["until"] > g.time and cur["pct"] >= pct:
+    if cur and cur["until"] > g.time and cur["pct"] > pct:   # 同值续时(药剂重饮)
         return
     g.buffs[stat] = {"pct": pct, "until": until}
 
