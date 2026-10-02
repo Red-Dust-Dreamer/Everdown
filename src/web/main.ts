@@ -11,6 +11,8 @@ import { effLv, skillVal } from "../core/skills.ts";
 import { plusBonus, Item, PCT_MAINS } from "../core/items.ts";
 import type { Relic } from "../core/relics.ts";
 import confetti from "canvas-confetti";
+import { cloudState, initCloud, onCloudState, signInEmail, signUpEmail,
+         signInGitHub, signOutCloud, pullSave, pushSave } from "./cloud.ts";
 
 const SAVE_KEY = "abyss_save_v2";
 const TICK = 0.1;
@@ -348,6 +350,14 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
     case "dismiss_offline": g.pendingOffline = null; break;
     case "swap_take": g.resolveSwap(true); break;
     case "swap_keep": g.resolveSwap(false); break;
+    case "cloud_login": showLoginModal(); break;
+    case "cloud_logout":
+      void signOutCloud();
+      toast("已退出云账号(本地存档保留)");
+      break;
+    case "cloud_push":
+      void pushSave(g.toDict()).then(err => toast(err ? "☁ 同步失败:" + err : "☁ 已上传云端"));
+      break;
     case "reset":
       localStorage.removeItem(SAVE_KEY);
       g = new Game();
@@ -1197,6 +1207,20 @@ function renderSettings(st: State): void {
       : "") +
     `<div class="set-row"><div class="lbl">音效<div class="d">普通攻击命中音(复古 8-bit,CC0)</div></div>` +
       `<div class="toggle${sfxOn ? " on" : ""}" data-local="sfx"></div></div>` +
+    (cloudState.ready
+      ? `<div class="set-row"><div class="lbl">云账号<div class="d">登录后多设备存档漫游;不登录照常玩</div></div>` +
+        `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px">` +
+        (cloudState.user
+          ? `<span class="cloud-chip${cloudState.error ? "" : "ok"}">${esc(cloudState.user.name)}` +
+            `${cloudState.user.email ? `(${esc(cloudState.user.email)})` : ""} · ` +
+            `${cloudState.syncing ? "同步中…" : cloudState.error ? "同步失败"
+              : cloudState.lastSyncMs ? "已同步 " + new Date(cloudState.lastSyncMs).toLocaleTimeString()
+              : "已登录"}</span>` +
+            `<button class="btn" data-cmd="cloud_push">立即同步</button>` +
+            `<button class="btn danger" data-cmd="cloud_logout">退出</button>`
+          : `<button class="btn" data-cmd="cloud_login">登录 / 注册</button>`) +
+        `</div></div>`
+      : "") +
     `<div class="set-row"><div class="lbl">存档<div class="d">自动存档于浏览器(localStorage),离线收益自动结算</div></div>` +
       `<div style="display:flex;gap:6px;flex-wrap:wrap">` +
       `<button class="btn" data-local="save">手动存档</button>` +
@@ -1351,7 +1375,7 @@ document.addEventListener("click", (e: MouseEvent) => {
 });
 
 function localCmd(name: string): void {
-  if (name === "save") { g.save(); toast("已存档到浏览器"); }
+  if (name === "save") { g.save(); toast("已存档到浏览器"); cloudPushDebounced(); }
   else if (name === "pause") togglePause();
   else if (name === "export") {
     const blob = new Blob([JSON.stringify(g.toDict())], { type: "application/json" });
@@ -1404,6 +1428,94 @@ document.addEventListener("keydown", (e: KeyboardEvent) => {
 });
 
 // ---------------------------------------------------------------- 启动
+// ---------------------------------------------------------------- 云账号
+let loginOpen = false;
+function showLoginModal(): void {
+  if (!cloudState.ready) { toast("云功能未配置(见 cloud.config.ts)"); return; }
+  if (cloudState.user) return;
+  loginOpen = true;
+  ($("login-err") as HTMLElement).textContent = "";
+  ($("login-email") as HTMLInputElement).value = "";
+  ($("login-pass") as HTMLInputElement).value = "";
+  $("login-modal").classList.add("show");
+}
+function hideLoginModal(): void {
+  loginOpen = false;
+  $("login-modal").classList.remove("show");
+}
+
+function setupLoginModal(): void {
+  $("login-close").addEventListener("click", hideLoginModal);
+  $("login-go").addEventListener("click", async () => {
+    const email = ($("login-email") as HTMLInputElement).value.trim();
+    const pass = ($("login-pass") as HTMLInputElement).value;
+    if (!email || pass.length < 6) {
+      ($("login-err") as HTMLElement).textContent = "请输入邮箱与至少 6 位密码";
+      return;
+    }
+    const err = await signInEmail(email, pass);
+    if (err) { ($("login-err") as HTMLElement).textContent = err; return; }
+    hideLoginModal();
+  });
+  $("login-reg").addEventListener("click", async () => {
+    const email = ($("login-email") as HTMLInputElement).value.trim();
+    const pass = ($("login-pass") as HTMLInputElement).value;
+    if (!email || pass.length < 6) {
+      ($("login-err") as HTMLElement).textContent = "请输入邮箱与至少 6 位密码";
+      return;
+    }
+    const err = await signUpEmail(email, pass);
+    if (err) { ($("login-err") as HTMLElement).textContent = err; return; }
+    // 项目关闭邮箱验证时直接进入会话;开启验证则提示查收邮件
+    ($("login-err") as HTMLElement).textContent = cloudState.user
+      ? "" : "注册成功:请到邮箱完成验证后再登录";
+    if (cloudState.user) hideLoginModal();
+  });
+  $("login-gh").addEventListener("click", async () => {
+    const err = await signInGitHub();
+    if (err) ($("login-err") as HTMLElement).textContent = err;
+  });
+}
+
+/** 登录瞬间:拉云端比对 last_saved,新者胜(覆盖前确认,不自动合并) */
+async function syncOnLogin(): Promise<void> {
+  if (!cloudState.ready || !cloudState.user) return;
+  const remote = await pullSave();
+  if (typeof remote === "string") { toast("☁ 云存档拉取失败:" + remote); return; }
+  const localRaw = localStorage.getItem(SAVE_KEY);
+  const localLast = localRaw ? Number(JSON.parse(localRaw).last_saved ?? 0) : 0;
+  const ts = (s: number) => new Date(s * 1000).toLocaleString();
+  if (!remote) {
+    if (!localRaw || !g.classId) { toast("☁ 已登录;开始冒险后自动上云"); return; }
+    const err = await pushSave(g.toDict());
+    toast(err ? "☁ 云上传失败:" + err : "☁ 云存档已创建");
+    return;
+  }
+  const remoteLast = Number(remote.data.last_saved ?? 0);
+  if (Math.abs(remoteLast - localLast) < 5) { toast("☁ 云端与本地一致"); return; }
+  if (remoteLast > localLast &&
+      confirm(`云端存档较新(${ts(remoteLast)})\n本地存档(${ts(localLast)})\n\n下载云端覆盖本地?` +
+        `\n(取消 = 保留本地,稍后自动上传覆盖云端)`)) {
+    localStorage.setItem(SAVE_KEY, JSON.stringify(remote.data));
+    location.reload();
+    return;
+  }
+  const err = await pushSave(g.toDict());
+  toast(err ? "☁ 云上传失败:" + err : "☁ 本地存档已上传云端");
+}
+
+let cloudPushTimer: ReturnType<typeof setTimeout> | undefined;
+/** 跟随 autosave 的 debounce 上传(30s 合并写;未登录/未配置时 no-op) */
+function cloudPushDebounced(): void {
+  if (!cloudState.ready || !cloudState.user) return;
+  if (cloudPushTimer !== undefined) clearTimeout(cloudPushTimer);
+  cloudPushTimer = setTimeout(async () => {
+    cloudPushTimer = undefined;
+    const err = await pushSave(g.toDict());
+    if (err) toast("☁ 云同步失败:" + err);
+  }, 30_000);
+}
+
 function boot(): void {
   installSaveHooks({
     write: (game) => localStorage.setItem(SAVE_KEY, JSON.stringify(game.toDict())),
@@ -1415,6 +1527,11 @@ function boot(): void {
   ensureTowerDom();   // 注入第 8 个「塔」tab 与页面容器
   $("loading").classList.add("hide");
   renderNow();
+
+  // 云账号:恢复会话 + 登录时同步;状态变化即时刷新设置页(未配置时全部 no-op)
+  setupLoginModal();
+  void initCloud(syncOnLogin);
+  onCloudState(() => { if (!document.hidden) renderNow(); });
 
   // 主循环:setInterval 驱动 0.1s 固定步进(与 CLI 一致)。
   // 页面隐藏时不步进(定时器被节流),回切时用 resolve() 懒结算补算。
@@ -1435,7 +1552,7 @@ function boot(): void {
     drainEvents();
   }, 100);
   setInterval(() => { if (!document.hidden) renderNow(); }, RENDER_MS);
-  setInterval(() => { if (!document.hidden) g.save(); }, AUTOSAVE_MS);
+  setInterval(() => { if (!document.hidden) { g.save(); cloudPushDebounced(); } }, AUTOSAVE_MS);
 
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {

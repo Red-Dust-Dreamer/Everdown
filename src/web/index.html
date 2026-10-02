@@ -126,6 +126,27 @@
   </div>
 </div>
 
+<!-- 云账号登录(配置齐全时启用;游客模式永远可用) -->
+<div class="overlay" id="login-modal">
+  <div class="modal">
+    <h2>☁ 云账号</h2>
+    <p class="dim">登录后存档多设备漫游;不登录照常游玩(本地存档)</p>
+    <div class="login-form">
+      <input id="login-email" type="email" placeholder="邮箱" autocomplete="email" maxlength="80">
+      <input id="login-pass" type="password" placeholder="密码(至少 6 位)" autocomplete="current-password" maxlength="72">
+      <div id="login-err" class="login-err"></div>
+      <div class="login-ops">
+        <button class="btn big sell-on" id="login-go">登录</button>
+        <button class="btn big" id="login-reg">注册</button>
+      </div>
+      <div class="login-ops">
+        <button class="btn" id="login-gh">🐙 GitHub 登录</button>
+      </div>
+    </div>
+    <button class="btn big" id="login-close" style="margin-top:10px">先不登录,继续玩</button>
+  </div>
+</div>
+
 <!-- toast -->
 <div id="toast"></div>
 
