@@ -8,7 +8,7 @@ import { battleTick, spawnMonster, tierOf, mobGold } from "./combat.ts";
 import type { Monster } from "./combat.ts";
 import {
   ACTIVE_DEF, ACTIVE_SKILLS, BAL, CAPS, CLASSES, PASSIVE_DEF, PASSIVE_SKILLS,
-  RARITY_IDX, TOWER, ALTAR_LINES, POTIONS,
+  RARITIES, RARITY_IDX, TOWER, ALTAR_LINES, POTIONS,
 } from "./data.ts";
 import { Item, rollItem } from "./items.ts";
 import * as RL from "./relics.ts";
@@ -360,21 +360,22 @@ export class Game {
     }
   }
 
-  sellJunk(): void {
+  /** 一键出售背包中品质 ≤ maxRid 的装备(默认 1=普通+精良;CLI 键位沿用默认) */
+  sellJunk(maxRid = 1): void {
     let n = 0, gold = 0;
     const keep: Item[] = [];
     for (const it of this.bag) {
-      if (RARITY_IDX[it.rarity] < 2) { gold += it.sellPrice(); n++; }
+      if (RARITY_IDX[it.rarity] <= maxRid) { gold += it.sellPrice(); n++; }
       else keep.push(it);
     }
     if (n) {
       this.bag = keep;
       this.gold += gold;
       this.stats.gold_earned += gold;
-      this.log(`一键出售 ${n} 件 普通/精良 (+${fmt(gold)} 金币)`, "bright_black");
+      this.log(`一键出售 ${n} 件 ≤${RARITIES[maxRid].name} (+${fmt(gold)} 金币)`, "bright_black");
       this.toast(`出售 ${n} 件 +${fmt(gold)}`);
     } else {
-      this.toast("没有可出售的杂物");
+      this.toast("没有可出售的装备");
     }
   }
 

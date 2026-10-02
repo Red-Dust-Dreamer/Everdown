@@ -658,6 +658,41 @@ function testPower(): void {
   ok(!("power" in g.toDict()), "存档不含战力字段");
 }
 
+// ================================================================ 13. 一键出售品质档
+function testSellJunk(): void {
+  memHooks();
+  const g = newGame(95);
+  g.chooseClass("warrior");
+  const mk = (rarity: string) =>
+    new Item("weapon", rarity, 5, 30, [{ id: "atk", val: 4 }]);
+  // 六种品质各一件入包
+  for (const r of ["common", "fine", "rare", "epic", "legendary", "mythic"]) {
+    g.bag.push(mk(r));
+  }
+  // 默认(无参):卖普通+精良 —— CLI 键位行为不变
+  let gold0 = g.gold;
+  g.sellJunk();
+  eq(g.bag.length, 4, "默认一键出售剩稀有+");
+  eq(g.bag.every(it => ["rare", "epic", "legendary", "mythic"].includes(it.rarity)), true,
+    "默认只卖普通/精良");
+  ok(g.gold > gold0, "出售获得金币");
+
+  // 档位 2(≤稀有):再卖稀有
+  gold0 = g.gold;
+  const rarePrice = g.bag.find(it => it.rarity === "rare")!.sellPrice();
+  g.sellJunk(2);
+  eq(g.bag.map(it => it.rarity).join(","), "epic,legendary,mythic", "≤稀有档卖出稀有");
+  eq(g.gold - gold0, rarePrice, "金币增量 = 卖出件售价");
+
+  // 档位 0(仅普通):背包无普通时不动
+  g.sellJunk(0);
+  eq(g.bag.length, 3, "无普通件时档位0不卖");
+
+  // 满档 5(≤神话):清空
+  g.sellJunk(5);
+  eq(g.bag.length, 0, "≤神话档清空背包");
+}
+
 // ================================================================ runner
 const TESTS: [string, () => void][] = [
   ["1.RNG(MT19937 与 CPython 对拍)", testRng],
@@ -672,6 +707,7 @@ const TESTS: [string, () => void][] = [
   ["10.手动模式换装对比(装备/遗物)", testPendingSwap],
   ["11.存档防御+遗物roll修正(损坏/luck/空装配)", testSaveDefenseAndRelicRoll],
   ["12.战力系统(计算/预览还原/buff口径)", testPower],
+  ["13.一键出售品质档(默认/档位0/2/5)", testSellJunk],
 ];
 
 let failed = 0;

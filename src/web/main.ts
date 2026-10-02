@@ -398,7 +398,12 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
     case "equip": { const i = Number(a); if (i >= 0 && i < g.bag.length) g.equipItem(g.bag[i]); break; }
     case "sell": g.sellItem(Number(a)); break;
     case "dismantle": g.dismantleItem(Number(a)); break;
-    case "sell_junk": g.sellJunk(); break;
+    case "sell_junk": g.sellJunk(junkSellMax); break;
+    case "junk_pick": {
+      const i = Number(a);
+      if (i >= 0 && i < D.RARITIES.length) junkSellMax = i;
+      break;
+    }
     case "equip_skill": if (a) g.equipSkill(a, (b ?? "active") as "active" | "passive"); break;
     case "unequip_skill": if (a) g.unequipSkill(a); break;
     case "skill_up": if (a) g.skillUp(a); break;
@@ -951,22 +956,41 @@ function renderBattle(st: State): void {
   }
   $("equip-mini").innerHTML = `<h3><span class="dot"></span>装备</h3>` + eq;
 
-  let dots = "";
-  for (let i = 1; i <= 10; i++) {
-    const cls = i < st.stage ? "done" : i === st.stage ? "cur" : "";
-    dots += `<div class="stage-dot ${cls}${i === 10 ? " boss" : ""}"></div>`;
+  if (st.in_tower) {
+    // 塔副本模式:进度条改为 5 层一段(段末头目),信息与操作全换塔口径
+    const floor = st.tower_floor_sel;
+    const pos = ((floor - 1) % D.TOWER.boss_every) + 1;
+    let td = "";
+    for (let i = 1; i <= D.TOWER.boss_every; i++) {
+      const cls = i < pos ? "done" : i === pos ? "cur" : "";
+      td += `<div class="stage-dot ${cls}${i === D.TOWER.boss_every ? " boss" : ""}"></div>`;
+    }
+    const bossFloor = floor % D.TOWER.boss_every === 0;
+    $("stage-track").innerHTML =
+      `<div class="stage-track tower">${td}</div>` +
+      `<div class="stage-lbl"><span>深渊塔 · 第 ${floor} 层` +
+      (bossFloor ? ` <span style="color:var(--gold);font-weight:700">头目层!</span>` : "") +
+      `<span style="color:var(--dim)"> · 1 怪/层 · 通关必得遗物</span></span>` +
+      `<span class="act"><button class="btn mini warn" data-cmd="tower_exit">撤退(钥匙已消耗)</button>` +
+      `</span></div>`;
+  } else {
+    let dots = "";
+    for (let i = 1; i <= 10; i++) {
+      const cls = i < st.stage ? "done" : i === st.stage ? "cur" : "";
+      dots += `<div class="stage-dot ${cls}${i === 10 ? " boss" : ""}"></div>`;
+    }
+    const killsTxt = st.stage === 10
+      ? "头目战(1只)" : `本层击杀 ${st.stage_kills} / ${st.kills_per_stage}`;
+    $("stage-track").innerHTML =
+      `<div class="stage-track">${dots}</div>` +
+      `<div class="stage-lbl"><span>第 ${st.stage} / 10 层 · ${killsTxt}</span>` +
+      `<span class="act"><span>♛ ${esc(st.zone_boss)}</span>` +
+      (st.mode === "farm"
+        ? `<button class="btn mini" data-cmd="farm_stage" data-a="-1">−</button>` +
+          `<span class="mono">${st.farm_stage}</span>` +
+          `<button class="btn mini" data-cmd="farm_stage" data-a="1">+</button>`
+        : "") + `</span></div>`;
   }
-  const killsTxt = st.stage === 10
-    ? "头目战(1只)" : `本层击杀 ${st.stage_kills} / ${st.kills_per_stage}`;
-  $("stage-track").innerHTML =
-    `<div class="stage-track">${dots}</div>` +
-    `<div class="stage-lbl"><span>第 ${st.stage} / 10 层 · ${killsTxt}</span>` +
-    `<span class="act"><span>♛ ${esc(st.zone_boss)}</span>` +
-    (st.mode === "farm"
-      ? `<button class="btn mini" data-cmd="farm_stage" data-a="-1">−</button>` +
-        `<span class="mono">${st.farm_stage}</span>` +
-        `<button class="btn mini" data-cmd="farm_stage" data-a="1">+</button>`
-      : "") + `</span></div>`;
 
   const mon = st.monster;
   let inner = "";
@@ -1073,6 +1097,9 @@ function renderHeroPage(st: State): void {
     slots;
 }
 
+/** 一键出售的品质档(≤ 该档全卖);UI 会话级状态,默认精良(原「普通/精良」行为) */
+let junkSellMax = 1;
+
 function renderBag(st: State): void {
   if (!st.class_id) { $("bag-list").innerHTML = ""; return; }
   let cards = "";
@@ -1088,16 +1115,23 @@ function renderBag(st: State): void {
         `<button class="btn mini" data-cmd="sell" data-a="${i}">出售</button>` +
       `</div></div>`;
   });
+  // 一键出售:品质选择行(卖出 ≤ 所选品质),按钮文字跟随所选档位
+  const picks = D.RARITIES.map((r, i) =>
+    `<button class="btn mini rq-btn${i === junkSellMax ? " on" : ""} c-${r.color}"
+       data-cmd="junk_pick" data-a="${i}">${r.name}</button>`).join("");
   $("bag-list").innerHTML =
     `<h3><span class="dot"></span>背包 · ${st.bag.length} / ${st.bag_cap}` +
     `<span class="rt">` +
       (st.bag_expand_cost !== null
         ? `<button class="btn mini" data-cmd="bag_expand" title="金币扩容 +10 格">扩容 ◈${fmt(st.bag_expand_cost)}</button>`
         : `<span style="color:var(--dim);font-size:11px">背包已满级</span>`) +
-      `<button class="btn" data-cmd="sell_junk">一键出售 普通/精良</button></span></h3>` +
+      `<button class="btn" data-cmd="sell_junk">一键出售 ≤${D.RARITIES[junkSellMax].name}</button></span></h3>` +
+    `<div class="sell-bar"><span class="lbl">出售品质</span>${picks}` +
+      `<span class="hint">(卖出该品质及以下)</span></div>` +
     (cards ? `<div class="bag-grid">${cards}</div>`
            : `<div style="color:var(--dim);padding:30px;text-align:center">背包空空如也</div>`);
 }
+
 
 function renderForge(st: State): void {
   if (!st.class_id) { $("forge-list").innerHTML = ""; return; }

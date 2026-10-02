@@ -135,6 +135,9 @@ body{
 .stage-dot{flex:1;height:8px;border-radius:4px;background:#1e1e30;position:relative}
 .stage-dot.done{background:linear-gradient(90deg,#5f3a2a,#8a5a3a)}
 .stage-dot.cur{background:var(--red);box-shadow:0 0 10px rgba(255,107,107,.6)}
+/* 塔副本模式的进度条:品红配色区分主线 */
+.stage-track.tower .stage-dot.done{background:linear-gradient(90deg,#3a2450,#5a3a7a)}
+.stage-track.tower .stage-dot.cur{background:#e06bff;box-shadow:0 0 10px rgba(224,107,255,.6)}
 .stage-dot.boss:after{content:"♛";position:absolute;right:-3px;top:-15px;
   font-size:11px;color:var(--gold)}
 .stage-lbl{display:flex;justify-content:space-between;color:var(--dim);
@@ -371,6 +374,13 @@ body{
 .stat-grid.wide{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
 
 /* ---------------- 背包页 ---------------- */
+.sell-bar{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin:-4px 0 10px;
+  font-size:12px;color:var(--dim)}
+.sell-bar .lbl{margin-right:2px}
+.sell-bar .hint{font-size:11px;opacity:.8}
+.rq-btn{opacity:.55}                        /* 品质档未选中:压暗 */
+.rq-btn.on{opacity:1;border-color:currentColor;
+  background:#1e1e30;box-shadow:0 0 8px rgba(255,255,255,.06)}
 .bag-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));
   grid-auto-rows:1fr;      /* 统一行高:格子等大 */
   gap:8px;align-content:start}
@@ -538,6 +548,10 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
   .logo{display:none}
   #topbar .btn{padding:6px 10px;font-size:12px}
   #topbar [data-local="save"]{display:none}          /* 手机收进设置页 */
+  /* 单行溢出裁剪会把排在资源条后的按钮裁出屏:静音/暂停提前到资源条之前,保证可达 */
+  #topbar #sfx-btn, #topbar #pause-btn{order:1;flex:none}
+  #topbar .sp{order:2}
+  #topbar .res{order:3}
   .zone-chip{max-width:none;font-size:12px;padding:3px 9px;flex:1 1 auto;
     min-width:0;overflow:hidden}
   .zone-chip span:first-child{white-space:nowrap}
