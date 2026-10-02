@@ -26,7 +26,8 @@ export default {
     let out, status = 200;
     try {
       if (url.pathname === "/board" && request.method === "GET") {
-        out = await getBoard(env, url.searchParams);
+        const r = await getBoard(env, url.searchParams);
+        out = r.body; status = r.status;   // 与 POST 同口径:坏参数 400,不再 200+error
       } else if (url.pathname === "/submit" && request.method === "POST") {
         const r = await submit(env, await request.json());
         out = r.body; status = r.status;
@@ -72,7 +73,7 @@ async function checkRate(env, uuid) {
 // ---------------------------------------------------------------- 读榜
 async function getBoard(env, params) {
   const board = params.get("b") ?? "";
-  if (!BOARDS.includes(board)) return { error: "bad board" };
+  if (!BOARDS.includes(board)) return { body: { error: "bad board" }, status: 400 };
   const uuid = params.get("uuid") ?? "";
   const top = await env.DB.prepare(
     "SELECT uuid, name, score, kills, playtime, level, max_zone, updated_at " +
@@ -91,7 +92,7 @@ async function getBoard(env, params) {
               inTop: true, score: mine.score, kills: mine.kills };
     }
   }
-  return { board, top: rows, you };
+  return { body: { board, top: rows, you }, status: 200 };
 }
 
 // ---------------------------------------------------------------- 提交
