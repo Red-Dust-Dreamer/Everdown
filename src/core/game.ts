@@ -4,11 +4,11 @@
  * localStorage,服务器(P3)用数据库;核心零平台依赖。
  */
 import { c, fmt } from "./ansi.ts";
-import { battleTick, spawnMonster, tierOf } from "./combat.ts";
+import { battleTick, spawnMonster, tierOf, mobGold } from "./combat.ts";
 import type { Monster } from "./combat.ts";
 import {
   ACTIVE_DEF, ACTIVE_SKILLS, BAL, CAPS, CLASSES, PASSIVE_DEF, PASSIVE_SKILLS,
-  RARITY_IDX, TOWER,
+  RARITY_IDX, TOWER, ALTAR_LINES, POTIONS,
 } from "./data.ts";
 import { Item, rollItem } from "./items.ts";
 import * as RL from "./relics.ts";
@@ -85,6 +85,9 @@ export class Game {
   settings: Record<string, any> = { auto_equip: true, auto_sell_idx: -1 };
   quests: systems.Quest[] = [];
   questDailyCount = 0;        // 今日已完成悬赏数(上限 BAL.quest_daily_limit)
+  questRerollCount = 0;       // 今日悬赏刷新次数(上限 BAL.quest_reroll_max)
+  towerKeysBought = 0;        // 今日已加购塔钥匙数(上限 BAL.tower_key_extra)
+  altarLv: Record<string, number> = {};   // 深渊祭坛各线等级(金币→永久属性)
   questDailyDate = "";        // 本地日期 YYYY-MM-DD,跨日重置计数
   events: [string, string, string][] = [];
   statMods: { src: string; stat: string; op: "add" | "pct"; v: number }[] = [];
@@ -214,6 +217,7 @@ export class Game {
     // 统一修饰管道:成就 + 被动技能 + 遗物 + 外部挂口;先加后乘,再截断
     const mods = [
       ...systems.achievementMods(this.stats),
+      ...systems.altarMods(this.altarLv),
       ...(this.classId ? S.passiveMods(this) : []),
       ...RL.relicMods(this.relics),
       ...this.statMods,
@@ -730,6 +734,79 @@ export class Game {
     }
   }
 
+  // ================================================================ 金币消耗(祭坛/药剂/钥匙/悬赏刷新)
+  /** 祭坛单线下一级费用:多项式(基费 + 线性 + 平方 + 深度项),无等级上限 */
+  altarCost(lineId: string): number {
+    const lv = this.altarLv[lineId] ?? 0;
+    const t = tierOf(this.zone, this.stage);
+    return Math.round(BAL.altar_cost0 + BAL.altar_cost_lv * lv
+      + BAL.altar_cost_lv2 * lv * lv + BAL.altar_cost_t * t);
+  }
+  altarUp(lineId: string): void {
+    const line = ALTAR_LINES.find(l => l.id === lineId);
+    if (!line) { this.toast("无此祭坛"); return; }
+    const cost = this.altarCost(lineId);
+    if (this.gold < cost) { this.toast(`金币不足(需要 ${fmt(cost)})`); return; }
+    this.gold -= cost;
+    this.altarLv[lineId] = (this.altarLv[lineId] ?? 0) + 1;
+    this.recalcHero();
+    this.log(`🕯 ${line.name} Lv.${this.altarLv[lineId]}(+${line.per}${line.op === "pct" ? "%" : " 点"}${line.stat})`,
+      "bright_magenta");
+    this.toast(`${line.name} Lv.${this.altarLv[lineId]}`);
+  }
+
+  /** 药剂价格 = k × 当前层击杀金(30 分钟增益,同键续时不叠加) */
+  potionCost(pid: string): number {
+    return Math.round(BAL.potion_cost_k * mobGold(tierOf(this.zone, this.stage)));
+  }
+  usePotion(pid: string): void {
+    const def = POTIONS.find(p => p.id === pid);
+    if (!def) { this.toast("无此药剂"); return; }
+    const cost = this.potionCost(pid);
+    if (this.gold < cost) { this.toast(`金币不足(需要 ${fmt(cost)})`); return; }
+    this.gold -= cost;
+    S.addBuff(this, def.buff, def.pct, def.dur);
+    this.log(`${def.icon} 饮下${def.name}:30 分钟内${def.buff === "dmg" ? "伤害" : def.buff === "xp" ? "经验" : "金币"} +${def.pct}%`,
+      "bright_green");
+    this.toast(`${def.name} 已生效(30 分钟)`);
+  }
+
+  /** 塔钥匙加购:每日限 BAL.tower_key_extra 把,第 n 把价格 = k×n×击杀金 */
+  towerKeyCost(): number | null {
+    if (this.towerKeysBought >= BAL.tower_key_extra) return null;   // 今日已购满
+    return Math.round(BAL.tower_key_cost_k * (this.towerKeysBought + 1)
+      * mobGold(tierOf(this.zone, this.stage)));
+  }
+  buyTowerKey(): void {
+    this.rollDaily();
+    const cost = this.towerKeyCost();
+    if (cost === null) { this.toast("今日钥匙已购满,明日再来"); return; }
+    if (this.gold < cost) { this.toast(`金币不足(需要 ${fmt(cost)})`); return; }
+    this.gold -= cost;
+    this.towerKeysBought += 1;
+    this.tower.keys += 1;
+    this.log(`🔑 金币加购塔钥匙(现有 ${this.tower.keys})`, "bright_cyan");
+    this.toast(`钥匙 +1(今日加购 ${this.towerKeysBought}/${BAL.tower_key_extra})`);
+  }
+
+  /** 悬赏刷新:每日限 BAL.quest_reroll_max 次,第 n 次价格 = k×(n+1)×击杀金 */
+  questRerollCost(): number | null {
+    if (this.questRerollCount >= BAL.quest_reroll_max) return null;  // 今日已刷满
+    return Math.round(BAL.quest_reroll_cost_k * (this.questRerollCount + 1)
+      * mobGold(tierOf(this.zone, this.stage)));
+  }
+  rerollQuests(): void {
+    this.rollDaily();
+    const cost = this.questRerollCost();
+    if (cost === null) { this.toast("今日悬赏已刷满,明日再来"); return; }
+    if (this.gold < cost) { this.toast(`金币不足(需要 ${fmt(cost)})`); return; }
+    this.gold -= cost;
+    this.questRerollCount += 1;
+    for (const q of this.quests) Object.assign(q, systems.rollQuest(this.zone, this.rng));
+    this.log(`🔄 悬赏已刷新(${this.questRerollCount}/${BAL.quest_reroll_max})`, "bright_cyan");
+    this.toast("悬赏已刷新");
+  }
+
   // ================================================================ 悬赏
   /** 每日悬赏:本地日期跨日重置计数;达 BAL.quest_daily_limit 后冻结进度(在途任务明日恢复)。 */
   rollDaily(): void {
@@ -738,6 +815,8 @@ export class Game {
     if (d !== this.questDailyDate) {
       this.questDailyDate = d;
       this.questDailyCount = 0;
+      this.questRerollCount = 0;
+      this.towerKeysBought = 0;
     }
   }
 
@@ -826,6 +905,9 @@ export class Game {
       quests: this.quests,
       quest_daily_count: this.questDailyCount,
       quest_daily_date: this.questDailyDate,
+      quest_reroll_count: this.questRerollCount,
+      tower_keys_bought: this.towerKeysBought,
+      altar_lv: this.altarLv,
       relics: this.relics.map(r => r ? r.toDict() : null),
       // pendingSwap 不序列化;待确认的新遗物并入存档背包,避免关页丢失
       relic_bag: (() => {
@@ -894,6 +976,9 @@ export class Game {
     g.quests = d.quests ?? g.quests;
     g.questDailyCount = d.quest_daily_count ?? 0;
     g.questDailyDate = d.quest_daily_date ?? "";
+    g.questRerollCount = d.quest_reroll_count ?? 0;
+    g.towerKeysBought = d.tower_keys_bought ?? 0;
+    g.altarLv = d.altar_lv ?? {};
     g.emaKill = d.ema_kill ?? 0;
     g.recalcHero();
     g.hero.hp = Math.min(d.hero_hp ?? g.hero.max_hp, g.hero.max_hp);

@@ -1550,7 +1550,7 @@ function cloudPushDebounced(): void {
 // ================================================================ 排行榜(匿名,无需登录)
 // 主线榜(最远区域)+ 等级榜;服务端只存 Top50,落榜即删,不在榜返回估算名次。
 // API:workers/leaderboard(Cloudflare Workers + D1),未配置 URL 时本页显示引导。
-const LEADERBOARD_API = "";   // TODO 部署 workers/leaderboard 后填入,如 "https://abyss-leaderboard.<account>.workers.dev"
+const LEADERBOARD_API = "https://abyss-leaderboard.a-red6108.workers.dev";   // Cloudflare Worker(2026-10-02 上线)
 const LB_BOARDS: Array<"zone" | "level" | "tower"> = ["zone", "level", "tower"];
 const LB_BOARD_NAMES: Record<"zone" | "level" | "tower", string> =
   { zone: "主线榜 · 最远区域", level: "等级榜", tower: "爬塔榜 · 深渊塔" };

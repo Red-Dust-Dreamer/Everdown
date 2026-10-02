@@ -286,6 +286,33 @@ export const QUEST_TYPES: QuestTypeDef[] = [
 ];
 
 // ---------------------------------------------------------------- 平衡常数
+// ---------------------------------------------------------------- 深渊祭坛(金币→永久属性)
+// 费用多项式无上限、每级收益恒定:收入增长被平方费用自然吞噬(金币长期黑洞)。
+export interface AltarLine {
+  id: string; name: string; icon: string;
+  stat: string; op: "pct" | "add"; per: number;   // pct=百分比乘区 / add=点数
+}
+export const ALTAR_LINES: AltarLine[] = [
+  { id: "power",  name: "力量祭坛", icon: "⚔", stat: "atk",      op: "pct", per: 1.0 },
+  { id: "vigor",  name: "生命祭坛", icon: "❤", stat: "hp",       op: "pct", per: 2.0 },
+  { id: "guard",  name: "守护祭坛", icon: "🛡", stat: "def",      op: "pct", per: 2.0 },
+  { id: "edge",   name: "锋锐祭坛", icon: "🗡", stat: "crit_dmg", op: "add", per: 1.0 },
+  { id: "swift",  name: "迅捷祭坛", icon: "💨", stat: "haste",    op: "add", per: 0.5 },
+  { id: "greed",  name: "贪婪祭坛", icon: "◈", stat: "goldfind", op: "add", per: 1.5 },
+];
+
+// ---------------------------------------------------------------- 临时药剂(30 分钟增益,buff 管道)
+export interface PotionDef {
+  id: string; name: string; icon: string;
+  buff: string;      // buff 键:dmg=伤害 / xp=经验 / gold=金币
+  pct: number; dur: number;   // 增幅% 与 秒
+}
+export const POTIONS: PotionDef[] = [
+  { id: "might",   name: "力量药剂", icon: "🧪", buff: "dmg",  pct: 20, dur: 1800 },
+  { id: "wisdom",  name: "智慧药剂", icon: "⚗",  buff: "xp",   pct: 50, dur: 1800 },
+  { id: "fortune", name: "贪婪药剂", icon: "💰", buff: "gold", pct: 30, dur: 1800 },
+];
+
 export const BAL = {
   hero_hp0: 120.0, hero_atk0: 15.0, hero_def0: 3.0,
   hero_interval: 1.1, hero_crit0: 5.0, hero_critdmg0: 50.0,
@@ -328,6 +355,12 @@ export const BAL = {
   relic_bag_cost0: 10000,
   relic_bag_cost_k: 5.0,
   quest_daily_limit: 10,      // 每日完成悬赏上限(本地 0 点重置)
+  altar_cost0: 200, altar_cost_lv: 80, altar_cost_lv2: 10, altar_cost_t: 3,
+  potion_cost_k: 300,        // 药剂价格 = k × 当前层击杀金(30 分钟)
+  tower_key_extra: 2,        // 每日可加购钥匙数(免费 3 把之外)
+  tower_key_cost_k: 150,     // 第 n 把加购价格 = k × n × 击杀金
+  quest_reroll_max: 3,       // 每日悬赏刷新次数
+  quest_reroll_cost_k: 100,  // 第 n 次刷新价格 = k × (n+1) × 击杀金
 
   skill_cost0: 60.0, skill_cost_lv: 35.0, skill_cost_lv2: 6.0,
   skill_cost_t: 2.0,

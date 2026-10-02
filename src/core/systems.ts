@@ -1,5 +1,5 @@
 /** 外围系统:悬赏 / 成就 / resolve 懒结算(与 abyss/systems.py 一致) */
-import { BAL, QUEST_TYPES, RARITY_IDX, ACHIEVEMENTS, ACTIVE_DEF } from "./data.ts";
+import { BAL, QUEST_TYPES, RARITY_IDX, ACHIEVEMENTS, ACTIVE_DEF, ALTAR_LINES } from "./data.ts";
 import { pyRound, rollItem } from "./items.ts";
 import { mobGold, mobXp, spawnMonster, tierOf } from "./combat.ts";
 import type { Game } from "./game.ts";
@@ -24,6 +24,17 @@ export function questDesc(q: Quest): string {
 }
 
 // ---------------------------------------------------------------- 成就
+/** 深渊祭坛等级 → 统一修饰器(与成就同管道:先 add 后 pct 再截断) */
+export function altarMods(altarLv: Record<string, number>): StatMod[] {
+  const mods: StatMod[] = [];
+  for (const line of ALTAR_LINES) {
+    const lv = altarLv[line.id] ?? 0;
+    if (lv <= 0) continue;
+    mods.push({ stat: line.stat as never, op: line.op, v: line.per * lv });
+  }
+  return mods;
+}
+
 export function achievementMods(stats: Record<string, number>): StatMod[] {
   const mods: StatMod[] = [];
   for (const a of ACHIEVEMENTS) {
