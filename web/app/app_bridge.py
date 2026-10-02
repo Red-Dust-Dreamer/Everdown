@@ -239,6 +239,8 @@ def state():
         "skills": skills,
         "skill_cd": {sid: round(v, 1) for sid, v in g.skill_cd.items() if v > 0},
         "stats": dict(g.stats),
+        "tower": {"keys": g.tower.get("keys", 3),
+                  "max_floor": g.tower.get("max_floor", 0)},
         "settings": dict(g.settings),
         "reforge_stones": D.BAL["reforge_stones"],
         "pending_offline": po,

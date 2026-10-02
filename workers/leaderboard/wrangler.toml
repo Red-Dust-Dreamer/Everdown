@@ -1,0 +1,10 @@
+name = "abyss-leaderboard"
+main = "worker.js"
+compatibility_date = "2024-09-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "abyss-leaderboard"
+# database_id:部署时由 `wrangler d1 create abyss-leaderboard` 输出替换(local-dev 仅本地测试用,
+# 直接 wrangler deploy 带占位 id 会因远端库不存在而报错拦截)
+database_id = "local-dev"

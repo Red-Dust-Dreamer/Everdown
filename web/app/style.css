@@ -405,3 +405,27 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
   .cls-card .ds{text-align:left}
   #toast{bottom:calc(64px + env(safe-area-inset-bottom))}
 }
+
+/* ---------------- 排行榜页(与 src/web 同款) ---------------- */
+.lb-me-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+  background:#15152299;border:1px solid #20202f;border-radius:8px;padding:10px 12px}
+.lb-me-row .k{color:var(--dim);margin-right:4px}
+.lb-me-row b{color:#fff;font-variant-numeric:tabular-nums;margin-right:8px}
+.lb-rank-badge{margin-left:auto;font-size:12.5px;font-weight:700;color:var(--dim);
+  padding:4px 12px;border-radius:999px;background:#1b1b2a;border:1px solid var(--line2);white-space:nowrap}
+.lb-rank-badge.in{color:var(--gold);border-color:#6e5a1e;background:#2a2317;
+  box-shadow:0 0 10px rgba(255,217,74,.15)}
+.lb-rank-badge.off{font-weight:400}
+.lb-row{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;
+  background:#15152299;border:1px solid #20202f;margin-bottom:6px;font-size:13px}
+.lb-row.me{border-color:#4a3a1e;background:#241f14}
+.lb-no{width:34px;flex:none;text-align:center;font-weight:800;color:var(--dim);
+  font-variant-numeric:tabular-nums}
+.lb-name{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-weight:700}
+.lb-sub{flex:1;text-align:right;color:var(--dim);font-size:11.5px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.lb-score{flex:none;min-width:44px;text-align:right;color:var(--gold);font-size:14.5px;
+  font-variant-numeric:tabular-nums}
+.lb-input{background:#1b1b2a;color:var(--txt);border:1px solid var(--line2);
+  border-radius:6px;padding:7px 10px;font-family:inherit;font-size:13px;min-width:0;flex:1}

@@ -11,8 +11,29 @@ import { effLv, skillVal } from "../core/skills.ts";
 import { plusBonus, Item, PCT_MAINS } from "../core/items.ts";
 import type { Relic } from "../core/relics.ts";
 import confetti from "canvas-confetti";
-import { cloudState, initCloud, onCloudState, signInEmail, signUpEmail,
-         signInGitHub, signOutCloud, pullSave, pushSave } from "./cloud.ts";
+import { CLOUD_READY } from "./cloud.config.ts";
+import type { CloudState } from "./cloud.ts";
+
+// —— 云模块懒加载 ——
+// Supabase SDK 体积大(gzip 前 ~200KB+),只在真正用到时才拉取:
+// 启动时本机存有会话令牌(登录过),或玩家点登录/云操作;游客首屏零成本。
+// cloudState 是本地镜像,由 onCloudState 桥接更新,渲染层照常同步读取。
+const cloudState: CloudState = { ready: CLOUD_READY, user: null, syncing: false,
+                                 lastSyncMs: null, error: null };
+let cloudMod: typeof import("./cloud.ts") | null = null;
+async function ensureCloud(): Promise<typeof import("./cloud.ts") | null> {
+  if (!CLOUD_READY) return null;
+  if (!cloudMod) {
+    try {
+      cloudMod = await import("./cloud.ts");
+      cloudMod.onCloudState(s => {
+        Object.assign(cloudState, s);
+        if (!document.hidden) renderNow();
+      });
+    } catch { return null; }
+  }
+  return cloudMod;
+}
 
 const SAVE_KEY = "abyss_save_v2";
 const TICK = 0.1;
@@ -352,11 +373,12 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
     case "swap_keep": g.resolveSwap(false); break;
     case "cloud_login": showLoginModal(); break;
     case "cloud_logout":
-      void signOutCloud();
+      void ensureCloud().then(m => m && m.signOutCloud());
       toast("已退出云账号(本地存档保留)");
       break;
     case "cloud_push":
-      void pushSave(g.toDict()).then(err => toast(err ? "☁ 同步失败:" + err : "☁ 已上传云端"));
+      void ensureCloud().then(async m => m && m.pushSave(g.toDict()))
+        .then(err => toast(err ? "☁ 同步失败:" + err : "☁ 已上传云端"));
       break;
     case "reset":
       localStorage.removeItem(SAVE_KEY);
@@ -776,6 +798,7 @@ function renderNow(): void {
   renderSkills(st);
   renderQuest(st);
   renderTower(st);
+  renderLeaderboard(st);
   renderSettings(st);
   renderOverlays(st);
 }
@@ -1359,6 +1382,7 @@ function switchTab(name: string): void {
     n.classList.toggle("on", n.dataset.tab === name));
   document.querySelectorAll<HTMLElement>(".page").forEach(p =>
     p.classList.toggle("on", p.id === "page-" + name));
+  if (name === "leaderboard") void lbEnter();   // 进入排行榜页:拉榜 + 按需提交
 }
 
 document.addEventListener("click", (e: MouseEvent) => {
@@ -1416,8 +1440,8 @@ function togglePause(): void {
 document.addEventListener("keydown", (e: KeyboardEvent) => {
   const t = e.target as HTMLElement;
   if (t.tagName === "SELECT" || t.tagName === "INPUT") return;
-  const tabs = ["battle", "hero", "bag", "forge", "skill", "quest", "tower", "settings"];
-  if (e.key >= "1" && e.key <= "8") {
+  const tabs = ["battle", "hero", "bag", "forge", "skill", "quest", "tower", "leaderboard", "settings"];
+  if (e.key >= "1" && e.key <= "9") {
     const item = document.querySelector(`.nav-item[data-tab="${tabs[+e.key - 1]}"]`) as HTMLElement | null;
     if (item) item.click();
   } else if (e.key === "f" || e.key === "F") { doCmd("mode"); renderNow(); }
@@ -1453,7 +1477,8 @@ function setupLoginModal(): void {
       ($("login-err") as HTMLElement).textContent = "请输入邮箱与至少 6 位密码";
       return;
     }
-    const err = await signInEmail(email, pass);
+    const m = await ensureCloud();
+    const err = m ? await m.signInEmail(email, pass) : "云功能未配置";
     if (err) { ($("login-err") as HTMLElement).textContent = err; return; }
     hideLoginModal();
   });
@@ -1464,7 +1489,8 @@ function setupLoginModal(): void {
       ($("login-err") as HTMLElement).textContent = "请输入邮箱与至少 6 位密码";
       return;
     }
-    const err = await signUpEmail(email, pass);
+    const m = await ensureCloud();
+    const err = m ? await m.signUpEmail(email, pass) : "云功能未配置";
     if (err) { ($("login-err") as HTMLElement).textContent = err; return; }
     // 项目关闭邮箱验证时直接进入会话;开启验证则提示查收邮件
     ($("login-err") as HTMLElement).textContent = cloudState.user
@@ -1472,7 +1498,8 @@ function setupLoginModal(): void {
     if (cloudState.user) hideLoginModal();
   });
   $("login-gh").addEventListener("click", async () => {
-    const err = await signInGitHub();
+    const m = await ensureCloud();
+    const err = m ? await m.signInGitHub() : "云功能未配置";
     if (err) ($("login-err") as HTMLElement).textContent = err;
   });
 }
@@ -1480,14 +1507,16 @@ function setupLoginModal(): void {
 /** 登录瞬间:拉云端比对 last_saved,新者胜(覆盖前确认,不自动合并) */
 async function syncOnLogin(): Promise<void> {
   if (!cloudState.ready || !cloudState.user) return;
-  const remote = await pullSave();
+  const m = await ensureCloud();
+  if (!m) return;
+  const remote = await m.pullSave();
   if (typeof remote === "string") { toast("☁ 云存档拉取失败:" + remote); return; }
   const localRaw = localStorage.getItem(SAVE_KEY);
   const localLast = localRaw ? Number(JSON.parse(localRaw).last_saved ?? 0) : 0;
   const ts = (s: number) => new Date(s * 1000).toLocaleString();
   if (!remote) {
     if (!localRaw || !g.classId) { toast("☁ 已登录;开始冒险后自动上云"); return; }
-    const err = await pushSave(g.toDict());
+    const err = await m.pushSave(g.toDict());
     toast(err ? "☁ 云上传失败:" + err : "☁ 云存档已创建");
     return;
   }
@@ -1500,8 +1529,8 @@ async function syncOnLogin(): Promise<void> {
     location.reload();
     return;
   }
-  const err = await pushSave(g.toDict());
-  toast(err ? "☁ 云上传失败:" + err : "☁ 本地存档已上传云端");
+  const err2 = await m.pushSave(g.toDict());
+  toast(err2 ? "☁ 云上传失败:" + err2 : "☁ 本地存档已上传云端");
 }
 
 let cloudPushTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1511,10 +1540,234 @@ function cloudPushDebounced(): void {
   if (cloudPushTimer !== undefined) clearTimeout(cloudPushTimer);
   cloudPushTimer = setTimeout(async () => {
     cloudPushTimer = undefined;
-    const err = await pushSave(g.toDict());
+    const m = await ensureCloud();
+    if (!m) return;
+    const err = await m.pushSave(g.toDict());
     if (err) toast("☁ 云同步失败:" + err);
   }, 30_000);
 }
+
+// ================================================================ 排行榜(匿名,无需登录)
+// 主线榜(最远区域)+ 等级榜;服务端只存 Top50,落榜即删,不在榜返回估算名次。
+// API:workers/leaderboard(Cloudflare Workers + D1),未配置 URL 时本页显示引导。
+const LEADERBOARD_API = "";   // TODO 部署 workers/leaderboard 后填入,如 "https://abyss-leaderboard.<account>.workers.dev"
+const LB_BOARDS: Array<"zone" | "level" | "tower"> = ["zone", "level", "tower"];
+const LB_BOARD_NAMES: Record<"zone" | "level" | "tower", string> =
+  { zone: "主线榜 · 最远区域", level: "等级榜", tower: "爬塔榜 · 深渊塔" };
+
+interface LbRow { name: string; score: number; kills: number; playtime: number;
+                  level: number; max_zone: number; updated_at: number; is_me?: boolean }
+interface LbData { board: string; top: LbRow[]; you: { rank: number; inTop: boolean;
+                  score: number; kills: number } | null }
+
+let lbBoard: "zone" | "level" | "tower" = "zone";
+const lbData: Partial<Record<"zone" | "level" | "tower", LbData>> = {};
+let lbBusy = false;
+let lbEditing = false;        // 昵称编辑中:暂停本页重建,避免输入被打断
+
+function lbUuid(): string {
+  let u = localStorage.getItem("abyss_uuid") ?? "";
+  if (!/^[a-zA-Z0-9_-]{8,40}$/.test(u)) {
+    u = ((window.crypto && (window.crypto as Crypto).randomUUID)
+      ? (window.crypto as Crypto).randomUUID!().replace(/-/g, "")
+      : Math.random().toString(36).slice(2) + Date.now().toString(36)).slice(0, 24);
+    localStorage.setItem("abyss_uuid", u);
+  }
+  return u;
+}
+function lbMyName(): string {
+  return localStorage.getItem("abyss_lbname") ?? `深渊行者#${lbUuid().slice(0, 4).toUpperCase()}`;
+}
+
+function ensureLeaderboardDom(): void {
+  if (document.querySelector('.nav-item[data-tab="leaderboard"]')) return;
+  const settingsNav = document.querySelector('.nav-item[data-tab="settings"]');
+  const nav = document.createElement("div");
+  nav.className = "nav-item";
+  nav.dataset.tab = "leaderboard";
+  nav.innerHTML = `<span class="ic">🏆</span><span class="tx">排行</span><span class="kbd">9</span>`;
+  settingsNav?.before(nav);
+  const pageSettings = document.getElementById("page-settings");
+  const page = document.createElement("div");
+  page.className = "page";
+  page.id = "page-leaderboard";
+  page.innerHTML = `<div class="card" id="lb-mine"></div>
+                    <div class="card grow" id="lb-list"></div>`;
+  pageSettings?.before(page);
+}
+
+async function lbFetch(board: "zone" | "level" | "tower"): Promise<string | null> {
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 8000);
+    const r = await fetch(`${LEADERBOARD_API}/board?b=${board}&uuid=${encodeURIComponent(lbUuid())}`,
+      { signal: ctl.signal });
+    clearTimeout(t);
+    if (!r.ok) return `HTTP ${r.status}`;
+    const d = (await r.json()) as LbData & { error?: string };
+    if (d.error) return d.error;
+    lbData[board] = d;
+    return null;
+  } catch { return "网络错误"; }
+}
+
+/** 提交两榜(匿名 UUID);成功后刷新数据。返回错误文本或 null。 */
+async function lbSubmit(): Promise<string | null> {
+  if (!LEADERBOARD_API) return "未配置";
+  if (lbBusy) return null;
+  lbBusy = true;
+  try {
+    const meta = { kills: g.stats.kills, playtime: Math.trunc(g.playtime),
+                   level: g.level, max_zone: g.stats.max_zone,
+                   max_tower: g.tower.max_floor };
+    for (const b of LB_BOARDS) {
+      if (b === "tower" && meta.max_tower < 1) continue;   // 未通塔层不上塔榜
+      const score = b === "zone" ? meta.max_zone
+                  : b === "tower" ? meta.max_tower : meta.level;
+      const body = JSON.stringify({
+        board: b, uuid: lbUuid(), name: lbMyName(), score, ...meta,
+      });
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 8000);
+      const r = await fetch(`${LEADERBOARD_API}/submit`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body, signal: ctl.signal });
+      clearTimeout(t);
+      const d = await r.json() as { error?: string; rank?: number };
+      if (d.error) return d.error;
+    }
+    localStorage.setItem("abyss_lblast", String(Date.now()));
+    await lbFetch("zone");
+    await lbFetch("level");
+    return null;
+  } catch { return "网络错误"; }
+  finally { lbBusy = false; }
+}
+
+function renderLeaderboard(st: State): void {
+  if (!st.class_id) return;
+  if (lbEditing) return;                     // 昵称编辑中不重建(防输入被打断)
+  const mine = $("lb-mine"), list = $("lb-list");
+  if (!mine || !list) return;
+
+  if (!LEADERBOARD_API) {
+    mine.innerHTML = `<h3><span class="dot"></span>🏆 排行榜</h3>`;
+    list.innerHTML = `<div style="color:var(--dim);padding:34px 10px;text-align:center;line-height:2">
+      排行榜服务未配置<br>
+      <span style="font-size:12px">部署 workers/leaderboard 后,将其地址填入<br>
+      main.ts 的 LEADERBOARD_API 即可启用(匿名上榜,无需登录)</span></div>`;
+    return;
+  }
+
+  const lastSub = Number(localStorage.getItem("abyss_lblast") ?? 0);
+  const cooldown = Math.max(0, 10 * 60_000 - (Date.now() - lastSub));
+  const d = lbData[lbBoard];
+  const you = d?.you ?? null;
+
+  // —— 我的卡:昵称 + 提交 + 我的排名
+  const myScore = lbBoard === "zone" ? st.stats.max_zone
+                : lbBoard === "tower" ? st.tower.max_floor : st.level;
+  const youLine = you
+    ? (you.inTop
+        ? `<span class="lb-rank-badge in">🏆 第 ${you.rank} 名</span>`
+        : `<span class="lb-rank-badge">我的排名:约 #${you.rank}</span>`)
+    : `<span class="lb-rank-badge off">未上榜 · 提交后显示估算名次</span>`;
+  mine.innerHTML =
+    `<h3><span class="dot"></span>🏆 排行榜 · ${lbMyName()}
+      <span class="rt">
+        <button class="btn mini" data-lb="rename">改名</button>
+        <button class="btn mini" data-lb="submit">${lbBusy ? "提交中…" :
+          cooldown > 0 ? `刷新(${Math.ceil(cooldown / 60_000)}分)` : "提交上榜"}</button>
+      </span></h3>
+    <div class="lb-me-row">
+      <div><span class="k">当前${lbBoard === "zone" ? "最远区域" : lbBoard === "tower" ? (st.tower.max_floor > 0 ? "塔层" : "塔层(未挑战)") : "等级"}</span>
+        <b>${myScore}</b>
+        <span class="k" style="margin-left:12px">击杀</span><b>${fmt(st.stats.kills)}</b></div>
+      ${youLine}
+    </div>`;
+
+  // —— 榜单
+  const segs = LB_BOARDS.map(b =>
+    `<button class="btn mini ${b === lbBoard ? "on" : ""}" data-lb="board" data-a="${b}">${LB_BOARD_NAMES[b]}</button>`).join("");
+  let rows = "";
+  if (d) {
+    rows = d.top.map((r, i) => {
+      const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}`;
+      const sub = lbBoard === "zone"
+        ? `Lv.${r.level} · 击杀 ${fmt(r.kills)}`
+        : lbBoard === "tower"
+        ? `${r.max_zone} 区 · Lv.${r.level}`
+        : `${r.max_zone} 区 · 击杀 ${fmt(r.kills)}`;
+      return `<div class="lb-row${r.is_me ? " me" : ""}">
+        <span class="lb-no">${medal}</span>
+        <span class="lb-name">${esc(r.name)}</span>
+        <span class="lb-sub">${sub}</span>
+        <b class="lb-score">${r.score}</b></div>`;
+    }).join("");
+    if (!rows) rows = `<div style="color:var(--dim);padding:26px;text-align:center">虚位以待——成为第一个上榜的深渊行者</div>`;
+  } else {
+    rows = `<div style="color:var(--dim);padding:26px;text-align:center">加载中…</div>`;
+  }
+  list.innerHTML =
+    `<h3><span class="dot"></span>${LB_BOARD_NAMES[lbBoard]}
+      <span class="rt">${segs}</span></h3>${rows}
+    <p style="color:var(--dim);font-size:11.5px;margin-top:10px">
+      匿名提交(设备标识,无需登录);仅保留每榜前 50 名,落榜数据不保留。</p>`;
+}
+
+/** 进入排行榜页时自动拉取/按需提交(10 分钟节流) */
+async function lbEnter(): Promise<void> {
+  if (!LEADERBOARD_API) return;
+  await lbFetch(lbBoard);
+  const lastSub = Number(localStorage.getItem("abyss_lblast") ?? 0);
+  if (Date.now() - lastSub > 10 * 60_000) {
+    const err = await lbSubmit();
+    if (err && err !== "未配置" && err !== "rate limited") toast("排行榜提交失败:" + err);
+    else if (err === "rate limited") toast("排行榜:提交太频繁,稍后再试");
+  }
+  if (!document.hidden) renderNow();
+}
+
+document.addEventListener("click", (e: MouseEvent) => {
+  const el = (e.target as HTMLElement).closest<HTMLElement>("[data-lb]");
+  if (!el) return;
+  const act = el.dataset.lb;
+  if (act === "board") {
+    lbBoard = (el.dataset.a === "level" ? "level" : el.dataset.a === "tower" ? "tower" : "zone");
+    void lbFetch(lbBoard).then(() => renderNow());
+    renderNow();
+  } else if (act === "submit") {
+    void lbSubmit().then(err => {
+      if (err) toast(err === "rate limited" ? "提交太频繁,稍后再试" : "提交失败:" + err);
+      else toast("已提交,排名已更新");
+      renderNow();
+    });
+    renderNow();
+  } else if (act === "rename") {
+    lbEditing = true;
+    const card = $("lb-mine");
+    card.innerHTML = `<h3><span class="dot"></span>🏆 排行榜 · 修改昵称</h3>
+      <div class="lb-me-row">
+        <input id="lb-name-input" class="lb-input" maxlength="12" placeholder="昵称(≤12字)"
+          value="${esc(localStorage.getItem("abyss_lbname") ?? "")}">
+        <button class="btn mini" data-lb="rename-save">保存</button>
+        <button class="btn mini" data-lb="rename-cancel">取消</button>
+      </div>
+      <p style="color:var(--dim);font-size:11.5px;margin-top:8px">留空则使用默认名;敏感词会被替换。</p>`;
+    const input = document.getElementById("lb-name-input") as HTMLInputElement | null;
+    input?.focus();
+  } else if (act === "rename-save") {
+    const input = document.getElementById("lb-name-input") as HTMLInputElement | null;
+    if (input) localStorage.setItem("abyss_lbname", input.value.trim().slice(0, 12));
+    lbEditing = false;
+    renderNow();
+  } else if (act === "rename-cancel") {
+    lbEditing = false;
+    renderNow();
+  }
+});
+// 切到排行榜页时触发拉取(委托里 nav 分支之后仍会冒泡到这里?不会——nav 分支 return 了)
+// 改在 switchTab 钩子:见下方对 switchTab 的包装。
 
 function boot(): void {
   installSaveHooks({
@@ -1525,13 +1778,16 @@ function boot(): void {
   g.towerRefreshKeys();   // 每日钥匙刷新(登录时一次)
 
   ensureTowerDom();   // 注入第 8 个「塔」tab 与页面容器
+  ensureLeaderboardDom();   // 注入第 9 个「排行」tab 与页面容器
   $("loading").classList.add("hide");
   renderNow();
 
   // 云账号:恢复会话 + 登录时同步;状态变化即时刷新设置页(未配置时全部 no-op)
   setupLoginModal();
-  void initCloud(syncOnLogin);
-  onCloudState(() => { if (!document.hidden) renderNow(); });
+  // 启动:仅当本机存有 Supabase 会话令牌(sb- 前缀,登录过)才加载 SDK 恢复会话;
+  // 游客(绝大多数)首屏不为 ~200KB 的 SDK 买单。点登录时由 ensureCloud 按需加载。
+  if (CLOUD_READY && Object.keys(localStorage).some(k => k.startsWith("sb-")))
+    void ensureCloud().then(m => { if (m) void m.initCloud(syncOnLogin); });
 
   // 主循环:setInterval 驱动 0.1s 固定步进(与 CLI 一致)。
   // 页面隐藏时不步进(定时器被节流),回切时用 resolve() 懒结算补算。

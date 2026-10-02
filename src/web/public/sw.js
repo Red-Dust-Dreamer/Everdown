@@ -4,7 +4,7 @@
  * 或自定义域名根路径),SHELL 相对路径按 SW 脚本所在 URL 解析。
  * 改动任何资源后 sw.js 字节变化即触发更新(bump VERSION 强制全刷)。
  */
-const VERSION = "v10";
+const VERSION = "v11";
 const CACHE = `abyss-idle-${VERSION}`;
 const SHELL = [
   "./",

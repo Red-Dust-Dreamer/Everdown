@@ -8,7 +8,7 @@ const VENDOR = "../legacy/vendor/pyodide/";
 const CDN = "https://unpkg.com/pyodide@0.26.4/";
 let PYODIDE_URL = VENDOR + "pyodide.mjs";
 let PYODIDE_INDEX = VENDOR;
-const MODULES = ["__init__", "ansi", "data", "items", "skills",
+const MODULES = ["__init__", "ansi", "data", "items", "skills", "relics", "tower",
                  "combat", "systems", "game"];
 
 const $ = (id) => document.getElementById(id);
@@ -289,6 +289,7 @@ function renderNow() {
   renderForge(st);
   renderSkills(st);
   renderQuest(st);
+  renderLeaderboard(st);
   renderSettings(st);
   renderOverlays(st);
   dirty = false;
@@ -713,6 +714,179 @@ function renderOverlays(st) {
   }
 }
 
+// ---------------------------------------------------------------- 排行榜(匿名,与 src/web 同规则)
+// 三榜:主线(最远区域)/ 等级 / 爬塔(深渊塔最高层);服务端只存 Top50,
+// 落榜即删,不在榜返回估算名次。API 未配置时本页显示引导,不影响游戏。
+const LEADERBOARD_API = "";   // TODO 部署 workers/leaderboard 后填入,如 "https://abyss-leaderboard.<account>.workers.dev"
+const LB_BOARDS = ["zone", "level", "tower"];
+const LB_BOARD_NAMES = { zone: "主线榜 · 最远区域", level: "等级榜", tower: "爬塔榜 · 深渊塔" };
+let lbBoard = "zone";
+const lbData = {};
+let lbBusy = false;
+let lbEditing = false;
+
+function lbUuid() {
+  let u = localStorage.getItem("abyss_uuid") || "";
+  if (!/^[a-zA-Z0-9_-]{8,40}$/.test(u)) {
+    u = (crypto.randomUUID ? crypto.randomUUID().replace(/-/g, "")
+          : Math.random().toString(36).slice(2) + Date.now().toString(36)).slice(0, 24);
+    localStorage.setItem("abyss_uuid", u);
+  }
+  return u;
+}
+function lbMyName() {
+  return localStorage.getItem("abyss_lbname") || "深渊行者#" + lbUuid().slice(0, 4).toUpperCase();
+}
+async function lbFetch(board) {
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 8000);
+    const r = await fetch(LEADERBOARD_API + "/board?b=" + board + "&uuid=" + encodeURIComponent(lbUuid()),
+      { signal: ctl.signal });
+    clearTimeout(t);
+    if (!r.ok) return "HTTP " + r.status;
+    const d = await r.json();
+    if (d.error) return d.error;
+    lbData[board] = d;
+    return null;
+  } catch (e) { return "网络错误"; }
+}
+async function lbSubmit() {
+  if (!LEADERBOARD_API || lbBusy) return null;
+  lbBusy = true;
+  try {
+    const st = ST || JSON.parse(py.state());
+    const meta = { kills: st.stats.kills, playtime: Math.trunc(st.playtime),
+                   level: st.level, max_zone: st.stats.max_zone,
+                   max_tower: (st.tower && st.tower.max_floor) || 0 };
+    for (const b of LB_BOARDS) {
+      if (b === "tower" && meta.max_tower < 1) continue;   // 未通塔层不上塔榜
+      const score = b === "zone" ? meta.max_zone
+                  : b === "tower" ? meta.max_tower : meta.level;
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), 8000);
+      const r = await fetch(LEADERBOARD_API + "/submit", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ board: b, uuid: lbUuid(), name: lbMyName(), score, ...meta }),
+        signal: ctl.signal });
+      clearTimeout(t);
+      const d = await r.json();
+      if (d.error) return d.error;
+    }
+    localStorage.setItem("abyss_lblast", String(Date.now()));
+    await lbFetch("zone");
+    await lbFetch("level");
+    await lbFetch("tower");
+    return null;
+  } catch (e) { return "网络错误"; }
+  finally { lbBusy = false; }
+}
+function renderLeaderboard(st) {
+  if (!st.class_id || lbEditing) return;
+  const mine = $("lb-mine"), list = $("lb-list");
+  if (!mine || !list) return;
+  if (!LEADERBOARD_API) {
+    list.innerHTML = '<div style="color:var(--dim);padding:34px 10px;text-align:center;line-height:2">' +
+      "排行榜服务未配置<br>" +
+      '<span style="font-size:12px">部署 workers/leaderboard 后,将地址填入<br>' +
+      "app.js 与 src/web/main.ts 的 LEADERBOARD_API 即可启用</span></div>";
+    mine.innerHTML = "";
+    return;
+  }
+  const cooldown = Math.max(0, 10 * 60_000 - (Date.now() - Number(localStorage.getItem("abyss_lblast") || 0)));
+  const d = lbData[lbBoard], you = d && d.you;
+  const myScore = lbBoard === "zone" ? st.stats.max_zone
+                : lbBoard === "tower" ? ((st.tower && st.tower.max_floor) || 0) : st.level;
+  const youLine = you
+    ? (you.inTop ? '<span class="lb-rank-badge in">🏆 第 ' + you.rank + " 名</span>"
+                 : '<span class="lb-rank-badge">我的排名:约 #' + you.rank + "</span>")
+    : '<span class="lb-rank-badge off">未上榜 · 提交后显示估算名次</span>';
+  mine.innerHTML =
+    '<h3><span class="dot"></span>🏆 排行榜 · ' + esc(lbMyName()) +
+      '<span class="rt">' +
+        '<button class="btn mini" data-lb="rename">改名</button>' +
+        '<button class="btn mini" data-lb="submit">' + (lbBusy ? "提交中…" :
+          cooldown > 0 ? "刷新(" + Math.ceil(cooldown / 60_000) + "分)" : "提交上榜") + "</button>" +
+      "</span></h3>" +
+    '<div class="lb-me-row"><div><span class="k">当前' +
+      (lbBoard === "zone" ? "最远区域" : lbBoard === "tower" ? "塔层" : "等级") + "</span>" +
+      "<b>" + myScore + '</b><span class="k" style="margin-left:12px">击杀</span><b>' + fmt(st.stats.kills) +
+      "</b></div>" + youLine + "</div>";
+  const segs = LB_BOARDS.map(b =>
+    '<button class="btn mini' + (b === lbBoard ? " on" : "") + '" data-lb="board" data-a="' + b + '">' +
+    LB_BOARD_NAMES[b] + "</button>").join("");
+  let rows;
+  if (d && d.top && d.top.length) {
+    rows = d.top.map((r, i) => {
+      const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : String(i + 1);
+      const sub = lbBoard === "zone" ? "Lv." + r.level + " · 击杀 " + fmt(r.kills)
+                : lbBoard === "tower" ? r.max_zone + " 区 · Lv." + r.level
+                : r.max_zone + " 区 · 击杀 " + fmt(r.kills);
+      return '<div class="lb-row' + (r.is_me ? " me" : "") + '">' +
+        '<span class="lb-no">' + medal + "</span>" +
+        '<span class="lb-name">' + esc(r.name) + "</span>" +
+        '<span class="lb-sub">' + sub + "</span>" +
+        '<b class="lb-score">' + r.score + "</b></div>";
+    }).join("");
+  } else if (d) {
+    rows = '<div style="color:var(--dim);padding:26px;text-align:center">虚位以待——成为第一个上榜的深渊行者</div>';
+  } else {
+    rows = '<div style="color:var(--dim);padding:26px;text-align:center">加载中…</div>';
+  }
+  list.innerHTML =
+    '<h3><span class="dot"></span>' + LB_BOARD_NAMES[lbBoard] +
+      '<span class="rt">' + segs + "</span></h3>" + rows +
+    '<p style="color:var(--dim);font-size:11.5px;margin-top:10px">' +
+    "匿名提交(设备标识,无需登录);仅保留每榜前 50 名,落榜数据不保留。</p>";
+}
+async function lbEnter() {
+  if (!LEADERBOARD_API) return;
+  await lbFetch(lbBoard);
+  if (Date.now() - Number(localStorage.getItem("abyss_lblast") || 0) > 10 * 60_000) {
+    const err = await lbSubmit();
+    if (err === "rate limited") toast("排行榜:提交太频繁,稍后再试");
+  }
+  if (!document.hidden) renderNow();
+}
+document.addEventListener("click", (e) => {
+  const el = e.target.closest("[data-lb]");
+  if (!el || !running) return;
+  const act = el.dataset.lb;
+  if (act === "board") {
+    lbBoard = LB_BOARDS.includes(el.dataset.a) ? el.dataset.a : "zone";
+    lbFetch(lbBoard).then(() => renderNow());
+    renderNow();
+  } else if (act === "submit") {
+    lbSubmit().then(err => {
+      toast(err ? (err === "rate limited" ? "提交太频繁,稍后再试" : "提交失败:" + err)
+                : "已提交,排名已更新");
+      renderNow();
+    });
+    renderNow();
+  } else if (act === "rename") {
+    lbEditing = true;
+    $("lb-mine").innerHTML =
+      '<h3><span class="dot"></span>🏆 排行榜 · 修改昵称</h3>' +
+      '<div class="lb-me-row">' +
+        '<input id="lb-name-input" class="lb-input" maxlength="12" placeholder="昵称(≤12字)" value="' +
+          esc(localStorage.getItem("abyss_lbname") || "") + '">' +
+        '<button class="btn mini" data-lb="rename-save">保存</button>' +
+        '<button class="btn mini" data-lb="rename-cancel">取消</button>' +
+      "</div>" +
+      '<p style="color:var(--dim);font-size:11.5px;margin-top:8px">留空则使用默认名;敏感词会被替换。</p>';
+    const input = $("lb-name-input");
+    if (input) input.focus();
+  } else if (act === "rename-save") {
+    const input = $("lb-name-input");
+    if (input) localStorage.setItem("abyss_lbname", input.value.trim().slice(0, 12));
+    lbEditing = false;
+    renderNow();
+  } else if (act === "rename-cancel") {
+    lbEditing = false;
+    renderNow();
+  }
+});
+
 // ---------------------------------------------------------------- 交互
 document.addEventListener("click", (e) => {
   const nav = e.target.closest(".nav-item");
@@ -721,6 +895,7 @@ document.addEventListener("click", (e) => {
     document.querySelectorAll(".nav-item").forEach(n => n.classList.toggle("on", n === nav));
     document.querySelectorAll(".page").forEach(p =>
       p.classList.toggle("on", p.id === "page-" + curTab));
+    if (curTab === "leaderboard") lbEnter();
     return;
   }
   const el = e.target.closest("[data-cmd]");
