@@ -459,9 +459,13 @@ select.sel{background:#1b1b2a;color:var(--txt);border:1px solid var(--line2);
 .overlay.show{display:flex}
 .modal{background:linear-gradient(180deg,#181826,#10101a);border:1px solid var(--line2);
   border-radius:14px;padding:22px 26px;max-width:430px;width:92%;
-  max-height:86vh;overflow-y:auto;
+  max-height:86vh;overflow-y:auto;position:relative;
   display:flex;flex-direction:column;gap:14px;box-shadow:0 20px 60px rgba(0,0,0,.6)}
 .modal.wide{max-width:640px}
+/* 弹窗右上角 ✕:与 ESC/点遮罩同为"稍后处理",不锁死整屏 */
+.modal-x{position:absolute;top:6px;right:8px;background:none;border:none;
+  color:var(--dim);font-size:17px;cursor:pointer;padding:6px 10px;line-height:1;font-family:inherit}
+.modal-x:hover{color:#fff}
 .modal h2{font-size:17px;color:#fff}
 .modal .dim{color:var(--dim);font-size:13px;margin-top:-8px}
 .off-row{display:flex;justify-content:space-between;font-size:14px;gap:12px;
@@ -610,6 +614,9 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
 .lb-input{background:#1b1b2a;color:var(--txt);border:1px solid var(--line2);
   border-radius:6px;padding:7px 10px;font-family:inherit;font-size:13px;min-width:0;
   flex:1}
+.lb-err{margin-top:8px;font-size:12.5px;color:#ff8a8a;line-height:1.6}   /* 提交失败常驻提示 */
+.lb-fail{padding:26px 10px;text-align:center;color:#ff8a8a;line-height:2.2;font-size:13px}
+.lb-fail .btn{margin-top:4px}
 
 /* ---------------- 祭坛页(金币消耗) ---------------- */
 .potion-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px}

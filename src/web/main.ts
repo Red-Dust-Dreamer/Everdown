@@ -1547,6 +1547,12 @@ function togglePause(): void {
 document.addEventListener("keydown", (e: KeyboardEvent) => {
   const t = e.target as HTMLElement;
   if (t.tagName === "SELECT" || t.tagName === "INPUT") return;
+  // ESC:关闭换装对比弹窗(视为稍后处理,物品留在背包)
+  if (e.key === "Escape" && document.querySelector("#swap-modal")?.classList.contains("show")) {
+    g.resolveSwap(false);
+    renderNow();
+    return;
+  }
   const tabs = ["battle", "hero", "bag", "forge", "skill", "quest", "tower",
                  "leaderboard", "altar", "settings"];
   const idx = e.key === "0" ? 9 : (e.key >= "1" && e.key <= "9" ? +e.key - 1 : -1);
@@ -1673,6 +1679,8 @@ interface LbData { board: string; top: LbRow[]; you: { rank: number; inTop: bool
 
 let lbBoard: "zone" | "level" | "tower" | "power" = "zone";
 const lbData: Partial<Record<"zone" | "level" | "tower" | "power", LbData>> = {};
+const lbErr: Partial<Record<"zone" | "level" | "tower" | "power", string>> = {};
+let lbSubmitErr: string | null = null;  // 最近一次提交错误:常驻显示,不靠一闪而过的 toast
 let lbBusy = false;
 let lbEditing = false;        // 昵称编辑中:暂停本页重建,避免输入被打断
 
@@ -1768,15 +1776,22 @@ async function lbFetch(board: "zone" | "level" | "tower" | "power"): Promise<str
     const r = await fetch(`${LEADERBOARD_API}/board?b=${board}&uuid=${encodeURIComponent(lbUuid())}`,
       { signal: ctl.signal });
     clearTimeout(t);
-    if (!r.ok) return `HTTP ${r.status}`;
+    if (!r.ok) return lbFail(board, `HTTP ${r.status}`);
     const d = (await r.json()) as LbData & { error?: string };
-    if (d.error) return d.error;
+    if (d.error) return lbFail(board, d.error);
     lbData[board] = d;
+    delete lbErr[board];
     return null;
-  } catch { return "网络错误"; }
+  } catch { return lbFail(board, "网络错误"); }
 }
 
-/** 提交两榜(匿名 UUID);成功后刷新数据。返回错误文本或 null。 */
+/** 拉榜失败:记到常驻错误态(UI 显示失败原因 + 重试按钮,不再永远「加载中」) */
+function lbFail(board: "zone" | "level" | "tower" | "power", msg: string): string {
+  lbErr[board] = msg;
+  return msg;
+}
+
+/** 提交各榜(匿名 UUID,四榜并行);成功后刷新数据。返回错误文本或 null。 */
 async function lbSubmit(): Promise<string | null> {
   if (!LEADERBOARD_API) return "未配置";
   if (lbBusy) return null;
@@ -1786,36 +1801,48 @@ async function lbSubmit(): Promise<string | null> {
                    level: g.level, max_zone: g.stats.max_zone,
                    max_tower: g.tower.max_floor };
     const basePower = heroPower(g, false).total;   // 排行榜口径:不含临时 buff
-    for (const b of LB_BOARDS) {
-      if (b === "tower" && meta.max_tower < 1) continue;   // 未通塔层不上塔榜
+    // 四榜并行提交:最坏耗时 = 单榜超时 8s(串行曾是 4×8s)
+    const errs = await Promise.all(LB_BOARDS.map(async b => {
+      if (b === "tower" && meta.max_tower < 1) return null;   // 未通塔层不上塔榜
       const score = b === "zone" ? meta.max_zone
                   : b === "tower" ? meta.max_tower
                   : b === "power" ? basePower : meta.level;
       const body = JSON.stringify({
         board: b, uuid: lbUuid(), name: lbMyName(), score, ...meta,
       });
-      const ctl = new AbortController();
-      const t = setTimeout(() => ctl.abort(), 8000);
-      const r = await fetch(`${LEADERBOARD_API}/submit`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body, signal: ctl.signal });
-      clearTimeout(t);
-      const d = await r.json() as { error?: string; rank?: number };
-      if (d.error) return d.error;
-    }
+      try {
+        const ctl = new AbortController();
+        const t = setTimeout(() => ctl.abort(), 8000);
+        const r = await fetch(`${LEADERBOARD_API}/submit`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body, signal: ctl.signal });
+        clearTimeout(t);
+        const d = await r.json() as { error?: string; rank?: number };
+        return d.error ?? null;
+      } catch { return "网络错误"; }
+    }));
+    const err = errs.find(e => e) ?? null;
+    if (err) return err;
     localStorage.setItem("abyss_lblast", String(Date.now()));
-    await lbFetch("zone");
-    await lbFetch("level");
+    await Promise.all([lbFetch("zone"), lbFetch("level"), lbFetch("power")]);
     return null;
   } catch { return "网络错误"; }
   finally { lbBusy = false; }
 }
 
 function renderLeaderboard(st: State): void {
-  if (!st.class_id) return;
-  if (lbEditing) return;                     // 昵称编辑中不重建(防输入被打断)
   const mine = $("lb-mine"), list = $("lb-list");
   if (!mine || !list) return;
+  if (!st.class_id) {
+    // 无职业档:给出明确引导而不是静默空白(排行榜所有内容都依赖职业)
+    mine.innerHTML = "";
+    list.innerHTML =
+      `<div style="color:var(--dim);padding:34px 10px;text-align:center;line-height:2">
+       ⚔ 还没有选择职业<br>
+       <span style="font-size:12px">选择职业后即可查看排行榜与提交上榜</span></div>`;
+    return;
+  }
+  if (lbEditing) return;                     // 昵称编辑中不重建(防输入被打断)
 
   if (!LEADERBOARD_API) {
     mine.innerHTML = `<h3><span class="dot"></span>🏆 排行榜</h3>`;
@@ -1857,7 +1884,10 @@ function renderLeaderboard(st: State): void {
         <b>${lbBoard === "power" ? fmt(myScore) : myScore}</b>
         <span class="k" style="margin-left:12px">击杀</span><b>${fmt(st.stats.kills)}</b></div>
       ${youLine}
-    </div>`;
+    </div>` +
+    (lbSubmitErr
+      ? `<div class="lb-err">⚠ 上次提交失败:${esc(lbSubmitErr)} — 点「${cooldown > 0 ? "刷新" : "提交上榜"}」重试</div>`
+      : "");
 
   // —— 榜单
   const segs = LB_BOARDS.map(b =>
@@ -1880,6 +1910,10 @@ function renderLeaderboard(st: State): void {
         <b class="lb-score">${lbBoard === "power" ? fmt(r.score) : r.score}</b></div>`;
     }).join("");
     if (!rows) rows = `<div style="color:var(--dim);padding:26px;text-align:center">虚位以待——成为第一个上榜的深渊行者</div>`;
+  } else if (lbErr[lbBoard]) {
+    // 拉取失败:明确展示失败原因与重试入口,不再永远「加载中…」
+    rows = `<div class="lb-fail">⚠ ${LB_BOARD_NAMES[lbBoard]}加载失败:${esc(lbErr[lbBoard]!)}` +
+      `<br><button class="btn mini" data-lb="retry">重试</button></div>`;
   } else {
     rows = `<div style="color:var(--dim);padding:26px;text-align:center">加载中…</div>`;
   }
@@ -1897,6 +1931,7 @@ async function lbEnter(): Promise<void> {
   const lastSub = Number(localStorage.getItem("abyss_lblast") ?? 0);
   if (Date.now() - lastSub > 10 * 60_000) {
     const err = await lbSubmit();
+    lbSubmitErr = err && err !== "未配置" ? err : null;
     if (err && err !== "未配置" && err !== "rate limited") toast("排行榜提交失败:" + err);
     else if (err === "rate limited") toast("排行榜:提交太频繁,稍后再试");
   }
@@ -1912,8 +1947,12 @@ document.addEventListener("click", (e: MouseEvent) => {
       : el.dataset.a === "power" ? "power" : "zone");
     void lbFetch(lbBoard).then(() => renderNow());
     renderNow();
+  } else if (act === "retry") {
+    void lbFetch(lbBoard).then(() => renderNow());
+    renderNow();
   } else if (act === "submit") {
     void lbSubmit().then(err => {
+      lbSubmitErr = err && err !== "未配置" ? err : null;
       if (err) toast(err === "rate limited" ? "提交太频繁,稍后再试" : "提交失败:" + err);
       else toast("已提交,排名已更新");
       renderNow();
@@ -1961,6 +2000,11 @@ function boot(): void {
 
   // 云账号:恢复会话 + 登录时同步;状态变化即时刷新设置页(未配置时全部 no-op)
   setupLoginModal();
+  // 换装对比弹窗逃生通道:✕ 与点遮罩 = 稍后处理(物品留在背包),不再整屏锁死
+  $("swap-close").addEventListener("click", () => { g.resolveSwap(false); renderNow(); });
+  $("swap-modal").addEventListener("click", (e: Event) => {
+    if (e.target === e.currentTarget) { g.resolveSwap(false); renderNow(); }
+  });
   // 启动:仅当本机存有 Supabase 会话令牌(sb- 前缀,登录过)才加载 SDK 恢复会话;
   // 游客(绝大多数)首屏不为 ~200KB 的 SDK 买单。点登录时由 ensureCloud 按需加载。
   if (CLOUD_READY && Object.keys(localStorage).some(k => k.startsWith("sb-")))

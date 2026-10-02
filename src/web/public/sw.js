@@ -4,7 +4,7 @@
  * 或自定义域名根路径),SHELL 相对路径按 SW 脚本所在 URL 解析。
  * 改动任何资源后 sw.js 字节变化即触发更新(bump VERSION 强制全刷)。
  */
-const VERSION = "v13";
+const VERSION = "v14";
 const CACHE = `abyss-idle-${VERSION}`;
 const SHELL = [
   "./",
@@ -59,7 +59,8 @@ self.addEventListener("fetch", (e) => {
     const cache = await caches.open(CACHE);
     if (isEntry) {
       try {
-        const fresh = await fetch(req);
+        // no-store:绕过 HTTP/CDN 缓存取入口页,否则发版后最长 10 分钟仍开旧版
+        const fresh = await fetch(req, { cache: "no-store" });
         cache.put(req, fresh.clone());
         return fresh;
       } catch {
