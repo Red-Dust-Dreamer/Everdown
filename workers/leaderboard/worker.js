@@ -1,15 +1,17 @@
 // 深渊挂机 · 匿名排行榜 API(Cloudflare Workers + D1)
-// 规则(2026-10-02 与用户确认):
-//   - 三个榜:主线榜 zone(最远区域)/ 等级榜 level / 爬塔榜 tower(深渊塔最高层);
-//     平局次序键 = 击杀数 → 先到者
+// 规则(2026-10-02 与用户确认;2026-10-02 战力系统上线,开放 power 榜):
+//   - 四个榜:主线榜 zone(最远区域)/ 等级榜 level / 爬塔榜 tower(深渊塔最高层)/
+//     战力榜 power(综合战力,客户端折算,不含临时 buff);平局次序键 = 击杀数 → 先到者
 //   - 每榜只保留 Top 50,匿名不落榜不留数据(落榜即删)
 //   - 不在榜也返回估算名次(COUNT 比我高者 + 1)
 //   - 防线:结构校验(数值范围/格式/自洽)+ 昵称过滤 + UUID 小时限流
-//   - 战力榜(power)为预留枚举,战力系统上线后开放
-const BOARDS = ["zone", "level", "tower"];
+const BOARDS = ["zone", "level", "tower", "power"];
 const TOP_N = 50;
 const RATE_PER_HOUR = 12;               // 每 UUID 每小时提交上限
 const NAME_MAX = 12;
+// power 榜分数为客户端派生量(DPS+EHP+功能加权),服务端无主数据可复核,
+// 上限放宽到 1 亿拦离谱值;其余三榜 10 万
+const SCORE_MAX = { power: 100_000_000, default: 100_000 };
 // 基础敏感词(可按需扩充;命中则改用默认名)
 const BAD_WORDS = ["外挂", "代练", "加群", "vx", "wechat", "http", "www", ".com", "fuck", "shit"];
 
@@ -103,7 +105,7 @@ async function submit(env, body) {
   if (!UUID_RE.test(uuid)) return { body: { error: "bad uuid" }, status: 400 };
 
   // 结构校验:宽范围硬上限,拦"物理不可能"的离谱值(第一版;seed 重放复核为后续项)
-  const score = intOrNull(body.score, 1, 100_000);
+  const score = intOrNull(body.score, 1, board === "power" ? SCORE_MAX.power : SCORE_MAX.default);
   const kills = intOrNull(body.kills, 0, 1_000_000_000);
   const playtime = intOrNull(body.playtime, 0, 3.2e10);        // ≤1000 年
   const level = intOrNull(body.level, 1, 5_000);
@@ -111,7 +113,8 @@ async function submit(env, body) {
   const max_tower = intOrNull(body.max_tower ?? 0, 0, 100_000);
   if ([score, kills, playtime, level, max_zone, max_tower].some(v => v === null))
     return { body: { error: "bad values" }, status: 400 };
-  // 自洽:score 与对应主数据一致(tower 榜要求 max_tower ≥ 1,即已通至少一层)
+  // 自洽:score 与对应主数据一致(tower 榜要求 max_tower ≥ 1,即已通至少一层);
+  // power 榜为客户端派生量,无主数据可对,仅靠上限+限流防线
   if ((board === "zone" && score !== max_zone) ||
       (board === "level" && score !== level) ||
       (board === "tower" && score !== max_tower))

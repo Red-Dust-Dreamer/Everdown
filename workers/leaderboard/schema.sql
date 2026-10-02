@@ -1,10 +1,10 @@
 -- 深渊挂机 · 排行榜 D1 表结构
 -- 每榜仅存 Top50(提交时裁剪),匿名不留落榜数据;rate 表为 UUID 小时限流计数。
 CREATE TABLE IF NOT EXISTS entries (
-  board      TEXT    NOT NULL,          -- 'zone' | 'level' | 'tower'('power' 预留)
+  board      TEXT    NOT NULL,          -- 'zone' | 'level' | 'tower' | 'power'(战力榜,2026-10-02 开放)
   uuid       TEXT    NOT NULL,          -- 客户端匿名 UUID(localStorage)
   name       TEXT    NOT NULL,          -- 昵称(服务端已过滤,≤12字)
-  score      INTEGER NOT NULL,          -- zone=最远区域 / level=等级
+  score      INTEGER NOT NULL,          -- zone=最远区域 / level=等级 / power=综合战力
   kills      INTEGER NOT NULL DEFAULT 0,-- 平局次序键
   playtime   INTEGER NOT NULL DEFAULT 0,
   level      INTEGER NOT NULL DEFAULT 1,

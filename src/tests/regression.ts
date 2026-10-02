@@ -22,6 +22,7 @@ import { pyRound, Item } from "../core/items.ts";
 import { Relic, rollRelic } from "../core/relics.ts";
 import { fmt, dwidth } from "../core/ansi.ts";
 import { buffPct, atkNow } from "../core/skills.ts";
+import { heroPower, powerWithEquip, powerWithRelic } from "../core/power.ts";
 import type { ResolveReport } from "../core/systems.ts";
 
 // ================================================================ 断言工具
@@ -598,6 +599,65 @@ function testSaveDefenseAndRelicRoll(): void {
   eq(buffPct(g4, "gold"), 30, "贪婪药剂挂 gold buff");
 }
 
+// ================================================================ 12. 战力系统
+function testPower(): void {
+  memHooks();
+  const g = newGame(94);
+  // 未选职业:默认面板可算不崩,分项非负
+  const p0 = heroPower(g);
+  ok(p0.total > 0 && p0.offense > 0 && p0.defense > 0 && p0.utility >= 0,
+    `新档战力为正(实际 ${p0.total})`);
+  eq(heroPower(g).total, p0.total, "战力计算确定性(两次一致)");
+
+  g.chooseClass("warrior");
+  const p1 = heroPower(g);
+
+  // 装备预览:换武器战力上升,且预览完全还原(血量/装备/背包/战力)
+  const it = new Item("weapon", "rare", 5, 30, [{ id: "atk", val: 4 }], 0, "测试之刃", undefined, "atk");
+  const hpBefore = g.hero.hp;
+  const bagBefore = g.bag.length;
+  const pEquip = powerWithEquip(g, "weapon", it);
+  ok(pEquip.total > p1.total, "预览换上武器战力上升");
+  eq(g.hero.hp, hpBefore, "预览不改变当前血量");
+  eq(g.equip.weapon, undefined, "预览不留装备在身上");
+  eq(g.bag.length, bagBefore, "预览不动背包");
+  eq(heroPower(g).total, p1.total, "预览后战力还原");
+
+  g.equipItem(it);
+  const p2 = heroPower(g);
+  ok(p2.total > p1.total, "真装备后战力上升");
+  const pUneq = powerWithEquip(g, "weapon", null);
+  ok(pUneq.total < p2.total, "预览卸下战力下降");
+  eq(heroPower(g).total, p2.total, "卸下预览后还原");
+
+  // 遗物预览:cd_reduce 必进技能 DPS(装配的 w_strike),装上必改变战力,卸下还原
+  const relic = new Relic("rare", 10, [{ id: "cd_reduce", val: 8 }], "测试遗物");
+  const pRelic = powerWithRelic(g, 0, relic);
+  ok(pRelic.total > p2.total, "预览装 cd_reduce 遗物战力上升");
+  eq(heroPower(g).total, p2.total, "遗物预览后还原");
+  g.relics[0] = relic;
+  g.recalcHero();
+  ok(heroPower(g).total > p2.total, "遗物真装备战力上升");
+  g.relics[0] = null;
+  g.recalcHero();
+  eq(heroPower(g).total, p2.total, "卸下遗物战力还原");
+
+  // buff 口径:药剂增益抬高"当前战力",基础口径(排行榜/对比用)不受影响
+  g.buffs.atk = { pct: 20, until: g.time + 60 };
+  ok(heroPower(g, true).total > p2.total, "atk buff 提升当前战力");
+  eq(heroPower(g, false).total, p2.total, "基础口径不受临时 buff 影响");
+  delete g.buffs.atk;
+
+  // 强化/升级单调性:金币到位强化武器,战力不降
+  const p3 = heroPower(g);
+  g.gold = 1e9;
+  g.enhance("weapon");
+  ok(heroPower(g).total > p3.total, "强化后战力上升");
+
+  // 存档往返不序列化战力(纯派生):toDict 无 power 字段
+  ok(!("power" in g.toDict()), "存档不含战力字段");
+}
+
 // ================================================================ runner
 const TESTS: [string, () => void][] = [
   ["1.RNG(MT19937 与 CPython 对拍)", testRng],
@@ -611,6 +671,7 @@ const TESTS: [string, () => void][] = [
   ["9.遗物背包(容量/升级/收纳/存档)", testRelicBag],
   ["10.手动模式换装对比(装备/遗物)", testPendingSwap],
   ["11.存档防御+遗物roll修正(损坏/luck/空装配)", testSaveDefenseAndRelicRoll],
+  ["12.战力系统(计算/预览还原/buff口径)", testPower],
 ];
 
 let failed = 0;

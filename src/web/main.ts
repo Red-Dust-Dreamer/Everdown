@@ -8,6 +8,8 @@ import { Game, installSaveHooks, migrateSave } from "../core/game.ts";
 import * as D from "../core/data.ts";
 import * as systems from "../core/systems.ts";
 import { effLv, skillVal, buffPct, atkNow } from "../core/skills.ts";
+import { heroPower, powerWithEquip, powerWithRelic } from "../core/power.ts";
+import type { PowerBreakdown } from "../core/power.ts";
 import { plusBonus, Item, PCT_MAINS } from "../core/items.ts";
 import type { Relic } from "../core/relics.ts";
 import confetti from "canvas-confetti";
@@ -124,6 +126,7 @@ interface State {
   zone_name: string; zone_boss: string; zone_cycle: number;
   respawn: number; ema_kill: number;
   hero: Record<string, number>;
+  power: PowerBreakdown | null;
   monster: { id: string; name: string; art: string[]; hp: number; max_hp: number; tier: number;
              boss: boolean; elite: boolean; atk: number; def: number; color: string;
              skill?: string } | null;
@@ -166,6 +169,7 @@ interface State {
     new_item: ItemUI | null;
     old_relic: RelicUI | null;
     new_relic: RelicUI | null;
+    power_delta: number | null;   // 换新后的战力变化(基础口径,无临时 buff)
   } | null;
 }
 
@@ -233,6 +237,9 @@ function relicUI(r: Relic): RelicUI {
   };
 }
 
+/** 换装对比战力差的单条缓存:src=待确认的新装备/新遗物引用(引用变=新对比) */
+let swapDeltaCache: { src: object; delta: number } | null = null;
+
 function buildState(g: Game): State {
   const h = g.hero;
   const cls = g.classId && D.CLASSES[g.classId]
@@ -289,6 +296,27 @@ function buildState(g: Game): State {
     items: g.pendingOffline.items.map((i: Item) => itemUI(i)),
   } : null;
 
+  // 换装对比的战力差:预览要临时换装重算,按新件引用缓存(每帧 buildState 不重复算)
+  let swapDelta: number | null = null;
+  if (g.pendingSwap?.kind === "item" && g.pendingSwap.item && g.pendingSwap.slot) {
+    if (swapDeltaCache?.src === g.pendingSwap.item) {
+      swapDelta = swapDeltaCache.delta;
+    } else {
+      const after = powerWithEquip(g, g.pendingSwap.slot, g.pendingSwap.item);
+      swapDelta = after.total - heroPower(g, false).total;
+      swapDeltaCache = { src: g.pendingSwap.item, delta: swapDelta };
+    }
+  } else if (g.pendingSwap?.kind === "relic" && g.pendingSwap.newRelic
+             && g.pendingSwap.relicSlot !== undefined) {
+    if (swapDeltaCache?.src === g.pendingSwap.newRelic) {
+      swapDelta = swapDeltaCache.delta;
+    } else {
+      const after = powerWithRelic(g, g.pendingSwap.relicSlot, g.pendingSwap.newRelic);
+      swapDelta = after.total - heroPower(g, false).total;
+      swapDeltaCache = { src: g.pendingSwap.newRelic, delta: swapDelta };
+    }
+  }
+
   const psw = g.pendingSwap ? {
     kind: g.pendingSwap.kind,
     slot_name: g.pendingSwap.kind === "item"
@@ -301,6 +329,7 @@ function buildState(g: Game): State {
       ? (g.relics[g.pendingSwap.relicSlot ?? 0] ? relicUI(g.relics[g.pendingSwap.relicSlot ?? 0]!) : null)
       : null,
     new_relic: g.pendingSwap.newRelic ? relicUI(g.pendingSwap.newRelic) : null,
+    power_delta: swapDelta,
   } : null;
 
   return {
@@ -314,6 +343,7 @@ function buildState(g: Game): State {
     zone_cycle: g.zone > D.THEMES.length ? cycle : 0,
     respawn: g.respawnTimer, ema_kill: g.emaKill,
     hero, monster, buffs,
+    power: g.classId ? heroPower(g) : null,
     equip: Object.fromEntries(Object.entries(g.equip).map(([k, v]) => [k, itemUI(v)])),
     bag: g.bag.map(itemUI),
     bag_size: D.BAL.bag_size,
@@ -857,6 +887,9 @@ function renderTop(st: State): void {
   speedBtn.title = st.max_speed > st.speed
     ? `游戏速度 ×${st.speed}(下一档 Lv${st.speed_unlock[st.speed]}解锁)`
     : `游戏速度 ×${st.speed}(已满档)`;
+  const sfxBtn = $("sfx-btn") as HTMLButtonElement;
+  sfxBtn.textContent = sfxOn ? "🔊" : "🔇";
+  sfxBtn.title = sfxOn ? "音效:开(快捷键 M 静音)" : "已静音(按 M 恢复)";
   $("res-lv").innerHTML = `Lv.<span class="v">${st.level}</span>`;
   $("res-gold").innerHTML = `◈ <span class="v">${fmt(st.gold)}</span>`;
   $("res-stone").innerHTML = `✦ <span class="v">${fmt(st.stones)}</span>`;
@@ -899,6 +932,7 @@ function renderBattle(st: State): void {
     `<div class="num">${fmt(h.hp)} / ${fmt(h.max_hp)}` +
       (shield > 0 ? ` (🛡${fmt(shield)})` : "") + `</div></div>` +
     `<div class="stat-grid" style="margin-top:9px">` +
+      kv("战力", fmt(st.power?.total ?? 0), dpsUp ? "up" : "") +
       kv("攻击", fmt(h.atk), atkUp ? "up" : "") + kv("防御", fmt(h.def)) +
       kv("攻速", "+" + pctTxt(h.haste), hasteUp ? "up" : "") + kv("暴击", pctTxt(h.crit)) +
       kv("暴伤", "+" + pctTxt(h.crit_dmg)) + kv("幸运", "+" + fmt(h.luck ?? 0)) +
@@ -1017,12 +1051,14 @@ function renderHeroPage(st: State): void {
       `</div></div>`;
   }
   const xpPct = Math.min(100, st.xp / st.xp_req * 100);
+  const pw = st.power;
   $("hero-detail").innerHTML =
     `<h3><span class="dot"></span>${st.cls.icon} ${esc(st.cls.name)} · Lv.${st.level}</h3>` +
     `<div style="color:var(--dim);font-size:12.5px;margin:-6px 0 10px">${esc(st.cls.desc)}</div>` +
     `<div class="bar xp lg" style="margin-bottom:12px"><div class="fill" style="width:${xpPct}%"></div>` +
       `<div class="num">经验 ${fmt(st.xp)} / ${fmt(st.xp_req)}</div></div>` +
-    `<div class="stat-grid wide" style="margin-bottom:14px">` +
+    `<div class="stat-grid wide" style="margin-bottom:6px">` +
+      kv("⚔ 战力", pw ? fmt(pw.total) : "—") +
       kv("生命", fmt(h.max_hp)) + kv("攻击", fmt(h.atk)) + kv("防御", fmt(h.def)) +
       kv("攻速", "+" + pctTxt(h.haste)) + kv("暴击率", pctTxt(h.crit)) +
       kv("暴击伤害", "+" + pctTxt(h.crit_dmg)) + kv("吸血", pctTxt(h.lifesteal)) +
@@ -1030,7 +1066,11 @@ function renderHeroPage(st: State): void {
       kv("无视防御", pctTxt(h.armor_pierce ?? 0)) + kv("技能伤害", "+" + pctTxt(h.skill_dmg ?? 0)) +
       kv("冷却缩减", pctTxt(h.cd_reduce ?? 0)) + kv("经验加成", "+" + pctTxt(h.xp_pct ?? 0)) +
       kv("全技能等级", "+" + numTxt(h.skill_lv ?? 0)) + kv("理论 DPS", fmt(h.dps)) +
-    `</div>` + slots;
+    `</div>` +
+    (pw ? `<div style="color:var(--dim);font-size:11.5px;margin:0 0 12px">` +
+      `战力构成:输出 ${fmt(pw.offense)} · 生存 ${fmt(pw.defense)} · 功能 ${fmt(pw.utility)}` +
+      `(按第 ${Math.max(1, st.stats.max_zone)} 区假人折算,含生效增益)</div>` : "") +
+    slots;
 }
 
 function renderBag(st: State): void {
@@ -1316,7 +1356,7 @@ function renderSettings(st: State): void {
       kv("累计金币", fmt(s.gold_earned)) + kv("悬赏完成", fmt(s.quest_done)) +
       kv("暴击次数", fmt(s.crit_hits ?? 0)) + kv("游玩时长", fmtTime(st.playtime)) +
     `</div>` +
-    `<p style="color:var(--dim);font-size:12px;margin-top:14px">快捷键:1-8 切页 · F 推进/挂机 · P 暂停 · S 存档</p>`;
+    `<p style="color:var(--dim);font-size:12px;margin-top:14px">快捷键:1-8 切页 · F 推进/挂机 · P 暂停 · S 存档 · M 静音</p>`;
 }
 
 function renderOverlays(st: State): void {
@@ -1367,13 +1407,21 @@ function renderOverlays(st: State): void {
   }
 }
 
-/** 换装对比弹窗:左边当前件,右边新掉落;装备按评分、遗物按效果条数供玩家判断 */
+/** 换装对比弹窗:左边当前件,右边新掉落;装备按评分、遗物按效果条数供玩家判断,
+ *  并附「战力变化」——按实战折算(输出+生存+功能),比单件评分更能反映换装影响 */
 function renderSwapModal(p: NonNullable<State["pending_swap"]>): void {
   const isItem = p.kind === "item";
   $("swap-title").textContent = isItem ? "⚔ 发现更强的装备" : "◆ 获得更强的遗物";
   $("swap-sub").textContent = isItem
     ? `自动换装已关闭 — 「${p.slot_name}」的新掉落更强,用哪个?`
     : `遗物槽已满 — 新遗物效果更多,要替换「${p.slot_name}」吗?`;
+  const pd = p.power_delta;
+  const powerLine = pd === null ? "" :
+    `<div class="sw-pow">战力变化 ` +
+    (pd >= 0
+      ? `<span class="sw-up">+${fmt(pd)}</span>`
+      : `<span style="color:#ff8a8a;font-weight:700">−${fmt(Math.abs(pd))}</span>`) +
+    `</div>`;
 
   let cols: string;
   if (isItem) {
@@ -1382,7 +1430,8 @@ function renderSwapModal(p: NonNullable<State["pending_swap"]>): void {
       if (!it) {
         return `<div class="swap-col"><div class="sw-tag">${tag}</div>` +
           `<div class="nm eq-empty">— 空 —</div>` +
-          `<div class="af" style="color:var(--dim)">当前部位没有装备</div></div>`;
+          `<div class="af" style="color:var(--dim)">当前部位没有装备</div>` +
+          (isNew ? powerLine : "") + `</div>`;
       }
       const affixes = it.affixes.map(a =>
         `<div>◈ ${a.name} +${a.val}${a.pct ? "%" : ""}</div>`).join("");
@@ -1394,7 +1443,7 @@ function renderSwapModal(p: NonNullable<State["pending_swap"]>): void {
         `<div class="af"><div>主属性 ${it.main.name} +${it.main.val}${it.main.pct ? "%" : ""}</div>${innate}${affixes}</div>` +
         `<div class="sw-score">评分 ${fmt(it.score)}` +
         (isNew && o ? ` <span class="sw-up">(新 ${delta >= 0 ? "+" : ""}${fmt(delta)})</span>` : "") +
-        `</div></div>`;
+        `</div>` + (isNew ? powerLine : "") + `</div>`;
     };
     cols = itemCol(o, "当前装备", false) + itemCol(n, "新掉落", true);
   } else {
@@ -1407,7 +1456,7 @@ function renderSwapModal(p: NonNullable<State["pending_swap"]>): void {
       return `<div class="swap-col${isNew ? " new" : ""}"><div class="sw-tag">${tag}</div>` +
         `<div class="nm c-${r.rcolor}">${esc(r.name)}</div>` +
         `<div class="sw-line">${r.rname} · T${r.tier} · ${r.effects.length} 条效果</div>` +
-        `<div class="af">${effs}</div></div>`;
+        `<div class="af">${effs}</div>` + (isNew ? powerLine : "") + `</div>`;
     };
     cols = relicCol(o, "当前遗物", false) + relicCol(n, "新掉落", true);
   }
@@ -1509,6 +1558,7 @@ document.addEventListener("keydown", (e: KeyboardEvent) => {
   else if (e.key === "j" || e.key === "J") { doCmd("cycle_sell"); renderNow(); }
   else if (e.key === "p" || e.key === "P") togglePause();
   else if (e.key === "s" || e.key === "S") localCmd("save");
+  else if (e.key === "m" || e.key === "M") { toggleSfx(); renderNow(); }
 });
 
 // ---------------------------------------------------------------- 启动
@@ -1611,17 +1661,18 @@ function cloudPushDebounced(): void {
 // 主线榜(最远区域)+ 等级榜;服务端只存 Top50,落榜即删,不在榜返回估算名次。
 // API:workers/leaderboard(Cloudflare Workers + D1),未配置 URL 时本页显示引导。
 const LEADERBOARD_API = "https://abyss-leaderboard.a-red6108.workers.dev";   // Cloudflare Worker(2026-10-02 上线)
-const LB_BOARDS: Array<"zone" | "level" | "tower"> = ["zone", "level", "tower"];
-const LB_BOARD_NAMES: Record<"zone" | "level" | "tower", string> =
-  { zone: "主线榜 · 最远区域", level: "等级榜", tower: "爬塔榜 · 深渊塔" };
+const LB_BOARDS: Array<"zone" | "level" | "tower" | "power"> = ["zone", "level", "tower", "power"];
+const LB_BOARD_NAMES: Record<"zone" | "level" | "tower" | "power", string> =
+  { zone: "主线榜 · 最远区域", level: "等级榜", tower: "爬塔榜 · 深渊塔",
+    power: "战力榜 · 综合强度" };
 
 interface LbRow { name: string; score: number; kills: number; playtime: number;
                   level: number; max_zone: number; updated_at: number; is_me?: boolean }
 interface LbData { board: string; top: LbRow[]; you: { rank: number; inTop: boolean;
                   score: number; kills: number } | null }
 
-let lbBoard: "zone" | "level" | "tower" = "zone";
-const lbData: Partial<Record<"zone" | "level" | "tower", LbData>> = {};
+let lbBoard: "zone" | "level" | "tower" | "power" = "zone";
+const lbData: Partial<Record<"zone" | "level" | "tower" | "power", LbData>> = {};
 let lbBusy = false;
 let lbEditing = false;        // 昵称编辑中:暂停本页重建,避免输入被打断
 
@@ -1710,7 +1761,7 @@ function ensureLeaderboardDom(): void {
   pageSettings?.before(page);
 }
 
-async function lbFetch(board: "zone" | "level" | "tower"): Promise<string | null> {
+async function lbFetch(board: "zone" | "level" | "tower" | "power"): Promise<string | null> {
   try {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 8000);
@@ -1734,10 +1785,12 @@ async function lbSubmit(): Promise<string | null> {
     const meta = { kills: g.stats.kills, playtime: Math.trunc(g.playtime),
                    level: g.level, max_zone: g.stats.max_zone,
                    max_tower: g.tower.max_floor };
+    const basePower = heroPower(g, false).total;   // 排行榜口径:不含临时 buff
     for (const b of LB_BOARDS) {
       if (b === "tower" && meta.max_tower < 1) continue;   // 未通塔层不上塔榜
       const score = b === "zone" ? meta.max_zone
-                  : b === "tower" ? meta.max_tower : meta.level;
+                  : b === "tower" ? meta.max_tower
+                  : b === "power" ? basePower : meta.level;
       const body = JSON.stringify({
         board: b, uuid: lbUuid(), name: lbMyName(), score, ...meta,
       });
@@ -1780,7 +1833,13 @@ function renderLeaderboard(st: State): void {
 
   // —— 我的卡:昵称 + 提交 + 我的排名
   const myScore = lbBoard === "zone" ? st.stats.max_zone
-                : lbBoard === "tower" ? st.tower.max_floor : st.level;
+                : lbBoard === "tower" ? st.tower.max_floor
+                : lbBoard === "power" ? (st.power ? heroPower(g, false).total : 0)
+                : st.level;
+  const myLabel = lbBoard === "zone" ? "当前最远区域"
+                : lbBoard === "tower" ? (st.tower.max_floor > 0 ? "塔层" : "塔层(未挑战)")
+                : lbBoard === "power" ? "当前战力(不含增益)"
+                : "等级";
   const youLine = you
     ? (you.inTop
         ? `<span class="lb-rank-badge in">🏆 第 ${you.rank} 名</span>`
@@ -1794,8 +1853,8 @@ function renderLeaderboard(st: State): void {
           cooldown > 0 ? `刷新(${Math.ceil(cooldown / 60_000)}分)` : "提交上榜"}</button>
       </span></h3>
     <div class="lb-me-row">
-      <div><span class="k">当前${lbBoard === "zone" ? "最远区域" : lbBoard === "tower" ? (st.tower.max_floor > 0 ? "塔层" : "塔层(未挑战)") : "等级"}</span>
-        <b>${myScore}</b>
+      <div><span class="k">${myLabel}</span>
+        <b>${lbBoard === "power" ? fmt(myScore) : myScore}</b>
         <span class="k" style="margin-left:12px">击杀</span><b>${fmt(st.stats.kills)}</b></div>
       ${youLine}
     </div>`;
@@ -1811,12 +1870,14 @@ function renderLeaderboard(st: State): void {
         ? `Lv.${r.level} · 击杀 ${fmt(r.kills)}`
         : lbBoard === "tower"
         ? `${r.max_zone} 区 · Lv.${r.level}`
+        : lbBoard === "power"
+        ? `Lv.${r.level} · ${r.max_zone} 区 · 击杀 ${fmt(r.kills)}`
         : `${r.max_zone} 区 · 击杀 ${fmt(r.kills)}`;
       return `<div class="lb-row${r.is_me ? " me" : ""}">
         <span class="lb-no">${medal}</span>
         <span class="lb-name">${esc(r.name)}</span>
         <span class="lb-sub">${sub}</span>
-        <b class="lb-score">${r.score}</b></div>`;
+        <b class="lb-score">${lbBoard === "power" ? fmt(r.score) : r.score}</b></div>`;
     }).join("");
     if (!rows) rows = `<div style="color:var(--dim);padding:26px;text-align:center">虚位以待——成为第一个上榜的深渊行者</div>`;
   } else {
@@ -1847,7 +1908,8 @@ document.addEventListener("click", (e: MouseEvent) => {
   if (!el) return;
   const act = el.dataset.lb;
   if (act === "board") {
-    lbBoard = (el.dataset.a === "level" ? "level" : el.dataset.a === "tower" ? "tower" : "zone");
+    lbBoard = (el.dataset.a === "level" ? "level" : el.dataset.a === "tower" ? "tower"
+      : el.dataset.a === "power" ? "power" : "zone");
     void lbFetch(lbBoard).then(() => renderNow());
     renderNow();
   } else if (act === "submit") {

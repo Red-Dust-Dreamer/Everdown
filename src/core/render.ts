@@ -7,6 +7,7 @@ import {
   STAT_NAMES, BAL, CLASSES, ACTIVE_SKILLS, PASSIVE_SKILLS, ACTIVE_DEF, PASSIVE_DEF, TOWER,
 } from "./data.ts";
 import { achievementTiers, questDesc } from "./systems.ts";
+import { heroPower } from "./power.ts";
 import { plusBonus } from "./items.ts";
 import * as S from "./skills.ts";
 import type { Game } from "./game.ts";
@@ -221,7 +222,10 @@ function tabBattle(g: Game): string[] {
   const kt = g.emaKill || 0;
   const t = tierOf(g.zone, g.stage);
   const gph = kt ? mobGold(t) * (1 + h.goldfind / 100) * 3600 / Math.max(0.5, kt) : 0;
-  rows.push(pad("  " + c("⚡ 理论DPS ", "bright_black") + c(fmt(dps), "bright_white", "", true)
+  const pw = heroPower(g);
+  // 战力并入本行(页面 26 行排满,不另起一行)
+  rows.push(pad("  " + c("⚔ 战力 ", "bright_black") + c(fmt(pw.total), "bright_yellow", "", true)
+    + c("  ⚡ 理论DPS ", "bright_black") + c(fmt(dps), "bright_white", "", true)
     + c("   ⏱ 击杀用时 ", "bright_black") + c(`~${(kt || 0).toFixed(1)}s`, "bright_white")
     + c("   ◈ 预计 ", "bright_black") + c(fmt(gph) + "/小时", "bright_yellow") + " ", W));
 
@@ -268,6 +272,9 @@ function tabChar(g: Game): string[] {
   }
   const h = g.hero;
   left.push(" " + c("▌属性总览", "bright_white", "", true));
+  const pw = heroPower(g);
+  left.push(pad("  " + c("战力 ", "bright_black") + c(fmt(pw.total), "bright_yellow", "", true)
+    + c(` (输出${fmt(pw.offense)}·生存${fmt(pw.defense)}·功能${fmt(pw.utility)})`, "bright_black"), leftW));
   left.push(pad("  " + [kv("攻击", fmt(h.atk)), kv("防御", fmt(h.def)), kv("生命", fmt(h.max_hp))].join("  "), leftW));
   left.push(pad("  " + [kv("暴击", `${h.crit.toFixed(0)}%`), kv("暴伤", `+${h.crit_dmg.toFixed(0)}%`),
     kv("攻速", `+${h.haste.toFixed(0)}%`)].join("  "), leftW));
