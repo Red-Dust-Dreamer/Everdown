@@ -304,6 +304,9 @@ function renderTop(st) {
     '<span style="color:var(--dim)">' + esc(theme) + "</span>";
   const modeBtn = $("mode-btn");
   modeBtn.textContent = st.mode === "push" ? "推进▶" : "挂机◎";
+  var sfxBtn = $("sfx-btn");
+  sfxBtn.textContent = sfxOn ? "🔊" : "🔇";
+  sfxBtn.title = sfxOn ? "音效:开(快捷键 M 静音)" : "已静音(按 M 恢复)";
   $("res-lv").innerHTML = 'Lv.<span class="v">' + st.level + "</span>";
   $("res-gold").innerHTML = '◈ <span class="v">' + fmt(st.gold) + "</span>";
   $("res-stone").innerHTML = '✦ <span class="v">' + fmt(st.stones) + "</span>";
@@ -686,7 +689,7 @@ function renderSettings(st) {
       kv("累计金币", fmt(stats.gold_earned)) + kv("悬赏完成", fmt(stats.quest_done)) +
       kv("暴击次数", fmt(stats.crit_hits || 0)) + kv("游玩时长", fmtTime(st.playtime)) +
     "</div>" +
-    '<p style="color:var(--dim);font-size:12px;margin-top:14px">快捷键:1-7 切页 · F 推进/挂机 · P 暂停 · S 存档</p>';
+    '<p style="color:var(--dim);font-size:12px;margin-top:14px">快捷键:1-7 切页 · F 推进/挂机 · P 暂停 · S 存档 · M 静音</p>';
 }
 
 // -------- 弹窗
@@ -1008,6 +1011,7 @@ document.addEventListener("keydown", (e) => {
   } else if (e.key === "f" || e.key === "F") { py.cmd("mode"); renderNow(); }
   else if (e.key === "p" || e.key === "P") togglePause();
   else if (e.key === "s" || e.key === "S") localCmd("save");
+  else if (e.key === "m" || e.key === "M") localCmd("sfx");
 });
 
 // ---------------------------------------------------------------- go
