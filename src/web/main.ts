@@ -1700,7 +1700,12 @@ function cloudPushDebounced(): void {
 // ================================================================ 排行榜(匿名,无需登录)
 // 主线榜(最远区域)+ 等级榜;服务端只存 Top50,落榜即删,不在榜返回估算名次。
 // API:workers/leaderboard(Cloudflare Workers + D1),未配置 URL 时本页显示引导。
-const LEADERBOARD_API = "https://abyss-leaderboard.a-red6108.workers.dev";   // Cloudflare Worker(2026-10-02 上线)
+// 排行榜端点:默认 Cloudflare Worker(海外/HTTPS 网页版);
+// 国内/TapTap APK 构建时注入 ECS 地址:VITE_LB_API=http://<IP>:8787 npx vite build
+// (HTTPS 页面不能拉 http 接口——混合内容限制;APK 内 native WebView 无此限制)
+const LEADERBOARD_API: string = (import.meta as unknown as {
+  env?: Record<string, string | undefined> }).env?.VITE_LB_API
+  ?? "https://abyss-leaderboard.a-red6108.workers.dev";
 const LB_BOARDS: Array<"zone" | "level" | "tower" | "power"> = ["zone", "level", "tower", "power"];
 const LB_BOARD_NAMES: Record<"zone" | "level" | "tower" | "power", string> =
   { zone: "主线榜 · 最远区域", level: "等级榜", tower: "爬塔榜 · 深渊塔",
