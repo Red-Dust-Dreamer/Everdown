@@ -507,7 +507,7 @@ BAL = {
     "quest_daily_limit": 10,  # 每日完成悬赏上限(本地 0 点重置;与 TS 主实现同构)
     "altar_cost0": 200, "altar_cost_lv": 80, "altar_cost_lv2": 10, "altar_cost_t": 3,
     "potion_cost_k": 300,        # 药剂价格 = k × 当前层击杀金(30 分钟)
-    "tower_key_extra": 2,        # 每日可加购钥匙数(免费 3 把之外)
+    "tower_key_extra": 10,       # 每日可加购钥匙数(免费 3 把之外)
     "tower_key_cost_k": 150,     # 第 n 把加购价格 = k × n × 击杀金
     "bag_expand_step": 10,       # 背包每次扩容格数
     "bag_expand_max": 100,       # 背包容量上限
