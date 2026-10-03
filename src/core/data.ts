@@ -218,9 +218,11 @@ export const THEMES: ThemeDef[] = [
   { name: "幽暗森林", mobs: ["slime", "wolf", "goblin"], boss: "巨型史莱姆王", color: "green" },
   { name: "废弃矿坑", mobs: ["bat", "skeleton", "golem"], boss: "骷髅领主", color: "bright_black" },
   { name: "熔岩地狱", mobs: ["imp", "hound", "elemental"], boss: "炎魔男爵", color: "bright_red" },
-  { name: "寒冰冻土", mobs: ["wolf", "golem", "elemental"], boss: "霜暴巨兽", color: "bright_cyan" },
+  { name: "寒冰冻土", mobs: ["wolf", "golem", "elemental", "drake"], boss: "霜暴巨兽", color: "bright_cyan" },
+  { name: "毒雾沼泽", mobs: ["mushroom", "spider", "snake"], boss: "沼泽蛛后", color: "green" },
+  { name: "白骨王座", mobs: ["husk", "wight", "scarab"], boss: "白骨君王", color: "white" },
   { name: "腐沼墓地", mobs: ["slime", "skeleton", "bat"], boss: "亡灵大祭司", color: "magenta" },
-  { name: "虚空裂隙", mobs: ["imp", "goblin", "hound"], boss: "虚空吞噬者", color: "bright_magenta" },
+  { name: "虚空裂隙", mobs: ["imp", "goblin", "hound", "eye"], boss: "虚空吞噬者", color: "bright_magenta" },
 ];
 
 export interface MobSkill {
@@ -248,6 +250,24 @@ export const MONSTERS: Record<string, MobDef> = {
     skill: { name: "三头撕咬", icon: "🐺", cd: 9, mult: 0.85, hits: 3 } },
   elemental: { name: "元素灵", color: "bright_cyan", power: 1.05,
     skill: { name: "元素风暴", icon: "⚡", cd: 14, mult: 2.8, hits: 1 } },
+  // ---- 毒雾沼泽 / 白骨王座(CC0 立绘:public/mon/<id>.png) ----
+  mushroom: { name: "毒蘑菇", color: "green", power: 0.95,
+    skill: { name: "孢子毒云", icon: "☣", cd: 11, mult: 1.3, hits: 1, atkdown: [0.2, 5] } },
+  spider: { name: "红背毒蛛", color: "red", power: 1.0,
+    skill: { name: "缠丝连蛰", icon: "🕸", cd: 9, mult: 0.55, hits: 3, defdown: [0.25, 4] } },
+  snake: { name: "黑曼巴蛇", color: "bright_black", power: 1.05,
+    skill: { name: "毒牙速咬", icon: "🦷", cd: 9, mult: 0.7, hits: 3 } },
+  husk: { name: "肿胀腐尸", color: "magenta", power: 0.95,
+    skill: { name: "尸毒喷发", icon: "☠", cd: 11, mult: 1.6, hits: 1, atkdown: [0.2, 4] } },
+  wight: { name: "白骨武士", color: "white", power: 1.15,
+    skill: { name: "幽冥斩", icon: "⚔", cd: 10, mult: 2.3, hits: 1 } },
+  scarab: { name: "噬骨甲虫", color: "yellow", power: 1.0,
+    skill: { name: "甲群啃噬", icon: "🐜", cd: 9, mult: 0.45, hits: 4 } },
+  // ---- 散怪:强化既有主题 ----
+  drake: { name: "霜翼幼龙", color: "bright_cyan", power: 1.15,
+    skill: { name: "寒霜吐息", icon: "❄", cd: 13, mult: 2.4, hits: 1, atkdown: [0.25, 5] } },
+  eye: { name: "辉光邪眼", color: "bright_magenta", power: 1.1,
+    skill: { name: "疯狂凝视", icon: "👁", cd: 12, mult: 1.9, hits: 1, stun: 1.0 } },
 };
 
 export const ART: Record<string, string[]> = {
@@ -260,6 +280,14 @@ export const ART: Record<string, string[]> = {
   imp: ["  \\|/        ", " (>v<)       ", " </_\\>       ", "  | |        ", " _/ \\_       "],
   hound: [" ^   ^      ", " (◉ ω ◉)~,  ", "   /|\\       ", "  / | \\      ", "    ‾        "],
   elemental: ["   (  )      ", "  ( ◉ )     ", "   )  (      ", "  ( ⚡ )     ", "   \\  /      "],
+  mushroom: ["    ____     ", "   / @@ \\    ", "   \\____/    ", "   _|  |_    ", "  /|    |\\    "],
+  spider: ["  \\ _||_ /   ", "    (oo)     ", "   /##\\      ", "  //  \\\\     ", " _/    \\_    "],
+  snake: ["    ____     ", "   / o \\     ", "   \\    \\,   ", "  < ~~  /    ", "   \\___/     "],
+  husk: ["   .----.    ", "  ( x  x )   ", "  | ~~~~ |   ", " /|      |\\  ", "  _|____|_   "],
+  wight: ["   [====]    ", "   |-o o|    ", "  <|    |>   ", "   |    |    ", "  _/    \\_   "],
+  scarab: ["    ____     ", "   /o^^o\\    ", "  |@ @@ @|   ", "   \\====/    ", "  _/    \\_   "],
+  drake: ["  \\  /\\  /   ", "   ( oo )    ", "  --/  \\--   ", "  /|    |\\   ", "   |____|    "],
+  eye: ["   .----.    ", "  / ---- \\   ", " |  (OO)  |  ", "  \\ ---- /   ", "   \\____/    "],
 };
 
 // ---------------------------------------------------------------- 成就

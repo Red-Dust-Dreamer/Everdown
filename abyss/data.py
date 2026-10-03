@@ -305,9 +305,11 @@ THEMES = [
     ("幽暗森林", ["slime", "wolf", "goblin"], "巨型史莱姆王", "green"),
     ("废弃矿坑", ["bat", "skeleton", "golem"], "骷髅领主", "bright_black"),
     ("熔岩地狱", ["imp", "hound", "elemental"], "炎魔男爵", "bright_red"),
-    ("寒冰冻土", ["wolf", "golem", "elemental"], "霜暴巨兽", "bright_cyan"),
+    ("寒冰冻土", ["wolf", "golem", "elemental", "drake"], "霜暴巨兽", "bright_cyan"),
+    ("毒雾沼泽", ["mushroom", "spider", "snake"], "沼泽蛛后", "green"),
+    ("白骨王座", ["husk", "wight", "scarab"], "白骨君王", "white"),
     ("腐沼墓地", ["slime", "skeleton", "bat"], "亡灵大祭司", "magenta"),
-    ("虚空裂隙", ["imp", "goblin", "hound"], "虚空吞噬者", "bright_magenta"),
+    ("虚空裂隙", ["imp", "goblin", "hound", "eye"], "虚空吞噬者", "bright_magenta"),
 ]
 CN_NUM = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十"]
 
@@ -333,6 +335,24 @@ MONSTERS = {
                   dict(name="三头撕咬", icon="🐺", cd=9, mult=0.85, hits=3)),
     "elemental": ("元素灵", "bright_cyan", 1.05,
                   dict(name="元素风暴", icon="⚡", cd=14, mult=2.8, hits=1)),
+    # ---- 毒雾沼泽 / 白骨王座(CC0 立绘:public/mon/<id>.png) ----
+    "mushroom": ("毒蘑菇", "green", 0.95,
+                 dict(name="孢子毒云", icon="☣", cd=11, mult=1.3, hits=1, atkdown=(0.20, 5))),
+    "spider":   ("红背毒蛛", "red", 1.0,
+                 dict(name="缠丝连蛰", icon="🕸", cd=9, mult=0.55, hits=3, defdown=(0.25, 4))),
+    "snake":    ("黑曼巴蛇", "bright_black", 1.05,
+                 dict(name="毒牙速咬", icon="🦷", cd=9, mult=0.7, hits=3)),
+    "husk":     ("肿胀腐尸", "magenta", 0.95,
+                 dict(name="尸毒喷发", icon="☠", cd=11, mult=1.6, hits=1, atkdown=(0.20, 4))),
+    "wight":    ("白骨武士", "white", 1.15,
+                 dict(name="幽冥斩", icon="⚔", cd=10, mult=2.3, hits=1)),
+    "scarab":   ("噬骨甲虫", "yellow", 1.0,
+                 dict(name="甲群啃噬", icon="🐜", cd=9, mult=0.45, hits=4)),
+    # ---- 散怪:强化既有主题 ----
+    "drake":    ("霜翼幼龙", "bright_cyan", 1.15,
+                 dict(name="寒霜吐息", icon="❄", cd=13, mult=2.4, hits=1, atkdown=(0.25, 5))),
+    "eye":      ("辉光邪眼", "bright_magenta", 1.1,
+                 dict(name="疯狂凝视", icon="👁", cd=12, mult=1.9, hits=1, stun=1.0)),
 }
 
 ART = {
@@ -405,6 +425,62 @@ ART = {
         r"   )  (      ",
         r"  ( ⚡ )     ",
         r"   \  /      ",
+    ],
+    "mushroom": [
+        r"    ____     ",
+        r"   / @@ \    ",
+        r"   \____/    ",
+        r"   _|  |_    ",
+        r"  /|    |\    ",
+    ],
+    "spider": [
+        r"  \ _||_ /   ",
+        r"    (oo)     ",
+        r"   /##\      ",
+        r"  //  \\     ",
+        r" _/    \_    ",
+    ],
+    "snake": [
+        r"    ____     ",
+        r"   / o \     ",
+        r"   \    \,   ",
+        r"  < ~~  /    ",
+        r"   \___/     ",
+    ],
+    "husk": [
+        r"   .----.    ",
+        r"  ( x  x )   ",
+        r"  | ~~~~ |   ",
+        r" /|      |\  ",
+        r"  _|____|_   ",
+    ],
+    "wight": [
+        r"   [====]    ",
+        r"   |-o o|    ",
+        r"  <|    |>   ",
+        r"   |    |    ",
+        r"  _/    \_   ",
+    ],
+    "scarab": [
+        r"    ____     ",
+        r"   /o^^o\    ",
+        r"  |@ @@ @|   ",
+        r"   \====/    ",
+        r"  _/    \_   ",
+    ],
+    "drake": [
+        r"  \  /\  /   ",
+        r"   ( oo )    ",
+        r"  --/  \--   ",
+        r"  /|    |\   ",
+        r"   |____|    ",
+    ],
+    "eye": [
+        r"   .----.    ",
+        r"  / ---- \   ",
+        r" |  (OO)  |  ",
+        r"  \ ---- /   ",
+        r"   \____/    ",
     ],
 }
 BOSS_CROWN = " ♛"

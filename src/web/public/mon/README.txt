@@ -15,3 +15,13 @@ golem      <- nonliving/stone_golem.png      <- nonliving/iron_golem.png
 imp        <- demons/imp.png                 <- demons/iron_imp_new.png
 hound      <- animals/hell_hound_new.png     <- animals/raiju.png
 elemental  <- nonliving/fire_elemental_new.png <- nonliving/air_elemental_new.png
+
+mushroom  <- fungi_plants/deathcap.png      <- fungi_plants/burstshroom.png
+spider    <- animals/redback.png            <- animals/orb_spider.png
+snake     <- animals/black_mamba.png        <- animals/anaconda.png
+husk      <- undead/bloated_husk.png        <- undead/necrophage.png
+wight     <- undead/wight.png               <- undead/ancient_champion.png
+scarab    <- undead/death_scarab.png        <- animals/emperor_scorpion.png
+drake     <- dragons/rime_drake.png         <- dragons/ice_dragon.png
+eye       <- eyes/shining_eye.png           <- eyes/great_orb_of_eyes.png
+(以上 8 怪取自 crawl/crawl 仓库 rltiles,同属 DCSS CC0 素材集;路径为 rltiles/mon/ 下)
