@@ -21,3 +21,23 @@ CREATE TABLE IF NOT EXISTS rate (
   bucket INTEGER NOT NULL,
   n      INTEGER NOT NULL
 );
+
+-- uuid 首见时刻(语义包络:playtime ≤ 首见至今墙钟 + 离线宽限)
+CREATE TABLE IF NOT EXISTS first_seen (
+  uuid TEXT    NOT NULL PRIMARY KEY,
+  ts   INTEGER NOT NULL
+);
+
+-- 存档周期上云(玩家端整份存档快照,每 uuid 仅存最新一版;/save-sync)
+CREATE TABLE IF NOT EXISTS save_sync (
+  uuid       TEXT    NOT NULL PRIMARY KEY,
+  name       TEXT    NOT NULL,
+  save_json  TEXT    NOT NULL,        -- 整份存档 JSON(≤60KB)
+  playtime   INTEGER NOT NULL DEFAULT 0,
+  level      INTEGER NOT NULL DEFAULT 1,
+  kills      INTEGER NOT NULL DEFAULT 0,
+  max_zone   INTEGER NOT NULL DEFAULT 1,
+  max_tower  INTEGER NOT NULL DEFAULT 0,
+  bytes      INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL
+);

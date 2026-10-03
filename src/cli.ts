@@ -13,12 +13,15 @@ import { View } from "./core/view.ts";
 import { renderFrame } from "./core/render.ts";
 import { handleKey } from "./core/host.ts";
 import { c } from "./core/ansi.ts";
+import { applyOverrides, parseOverrideFile } from "./core/overrides.ts";
 
 const TICK = 0.1;
 const FRAME_MS = 100;          // 主循环节流:约 10fps
 const MAX_CATCHUP = 10;        // 最多补 10 个固定步长(对齐 Python)
 const SAVE_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)), "..", "save.json");
+const OVR_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)), "..", "overrides.json");
 
 const HIDE_CURSOR = "\x1b[?25l";
 const SHOW_CURSOR = "\x1b[?25h";
@@ -65,8 +68,31 @@ function mapChunk(s: string, queue: string[]): void {
   }
 }
 
+// ================================================================ 数值覆盖
+/** 启动时加载仓库根 overrides.json(docs/admin-panel.md §4.4):在第一次 Game.load()/
+ *  new Game() 之前应用;applied/rejected 打 stderr(TUI 占用 stdout);文件格式非法
+ *  (OverrideFormatError)时提示后按默认数值继续。对拍(sim.ts)不经过本入口。 */
+function loadOverridesFile(): void {
+  if (!fs.existsSync(OVR_PATH)) return;
+  try {
+    const result = applyOverrides(parseOverrideFile(fs.readFileSync(OVR_PATH, "utf8")));
+    if (result.applied.length || result.rejected.length) {
+      process.stderr.write(
+        `[overrides] ${OVR_PATH}:应用 ${result.applied.length} 项,拒绝 ${result.rejected.length} 项\n`);
+      for (const r of result.rejected) {
+        process.stderr.write(`[overrides] 拒绝 ${r.path}(${r.reason})\n`);
+      }
+    }
+  } catch (err) {
+    process.stderr.write(
+      `[overrides] overrides.json 解析失败:${err instanceof Error ? err.message : String(err)}\n` +
+      "[overrides] 已忽略覆盖,按默认数值继续\n");
+  }
+}
+
 // ================================================================ 交互主循环
 function runInteractive(): void {
+  loadOverridesFile();
   enableVtMode();
   installSaveHooks({
     write: g => fs.writeFileSync(SAVE_PATH, JSON.stringify(g.toDict()), "utf8"),

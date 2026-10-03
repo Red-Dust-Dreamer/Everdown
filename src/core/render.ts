@@ -79,7 +79,7 @@ const HINTS: Record<number, string> = {
   4: "↑↓ 选择 │ ←→ 装配区/主动池/被动池 │ E 装配/卸下 │ U 升级 │ H 帮助",
   5: "↑↓ 查看 │ 悬赏完成自动领取并刷新 │ H 帮助",
   6: "T 自动换装 │ J 自动出售档次 │ F 推进/挂机 │ ←→ 挂机层位 │ S 存档 │ R 重置 │ Q 退出",
-  7: "←→ 选层 │ Enter 进塔 │ ↑↓ 选槽 │ E 卸遗物 │ H 帮助",
+  7: "Enter 爬塔 │ ↑↓ 选槽/背包 │ E 卸遗物·装备 │ D 分解 │ H 帮助",
 };
 const hintsRow = (g: Game) => pad(" " + c(HINTS[g.view.ui.tab] ?? "", "bright_black"), W);
 
@@ -620,8 +620,7 @@ function tabSettings(g: Game): string[] {
 function tabTower(g: Game): string[] {
   const ui = g.view.ui;
   const rows: string[] = [];
-  const reach = g.tower.max_floor + 1;          // 最高可挑战层
-  const selFloor = Math.max(1, Math.min(g.towerFloorSel, reach));
+  const reach = g.tower.max_floor + 1;          // 下一层(爬塔起点)
   const bagShow = Math.min(g.relicBag.length, 4);          // 背包前 4 件可选(与 host.ts 一致)
   const selTotal = 4 + bagShow;
   const slotSel = (ui.tower_sel ?? 0) % selTotal;
@@ -632,27 +631,25 @@ function tabTower(g: Game): string[] {
     + c(" │ ", "bright_black")
     + c(`最高第${g.tower.max_floor}层`, "bright_cyan", "", true)
     + c(" │ ", "bright_black")
-    + c("←→ 选层 Enter 进塔", "bright_black")
-    + (g.inTower ? c(` │ 挑战中·第${g.towerFloorSel}层`, "bright_magenta", "", true) : ""));
+    + c("Enter 爬塔(连胜连爬)", "bright_black")
+    + (g.inTower ? c(` │ 爬塔中·第${g.towerFloorSel}层`, "bright_magenta", "", true) : ""));
   rows.push(" " + c("─".repeat(64), "bright_black"));
   rows.push("");
 
-  const boss = selFloor % TOWER.boss_every === 0;
-  rows.push(" " + c("[←→] ", "bright_black")
-    + c(`第 ${selFloor} 层`, "bright_white", "", true)
+  const boss = reach % TOWER.boss_every === 0;
+  rows.push(" " + c("[下一层] ", "bright_black")
+    + c(`第 ${reach} 层`, "bright_white", "", true)
     + (boss ? c(" 头目!", "bright_yellow", "", true) : "")
-    + c(` (每${TOWER.boss_every}层一个头目)`, "bright_black")
-    + c("  │  ", "bright_black")
-    + c(`最高可达: 第${reach}层`, "bright_cyan", "", true));
+    + c(` (每${TOWER.boss_every}层一个头目)`, "bright_black"));
   rows.push(" " + c("第1层 ", "bright_black")
-    + bar(selFloor, reach, 44, "cyan")
+    + bar(g.tower.max_floor, Math.max(reach, 1), 44, "cyan")
     + c(` 第${reach}层`, "bright_black")
-    + c(`  ▸ 选中 第${selFloor}层`, "bright_cyan", "", true));
+    + c(`  ▸ 已爬到 第${g.tower.max_floor}层`, "bright_cyan", "", true));
   rows.push("");
 
   rows.push(" " + c("▌遗物", "bright_white", "", true)
     + c(" 通关必得 · 空槽优先装满", "bright_black")
-    + c("  │  ↑↓ 选槽/背包 E 卸下·装备", "bright_black"));
+    + c("  │  ↑↓ 选槽/背包 E 卸下·装备 D 分解", "bright_black"));
   for (let i = 0; i < 4; i++) {
     const r: Relic | null = g.relics[i] ?? null;
     const marker = i === slotSel ? c("▸", "bright_yellow") : " ";
@@ -691,7 +688,8 @@ function tabTower(g: Game): string[] {
   rows.push(" " + c("▌规则", "bright_white", "", true));
   rows.push("  " + c(`· 每日 0 点刷新钥匙(每天 ${TOWER.keys_per_day} 把,可囤积,上限 ${TOWER.keys_cap})`,
     "bright_black"));
-  rows.push("  " + c("· 进塔消耗 1 把钥匙:胜利必得遗物与金币,战败仅耗钥匙", "bright_black"));
+  rows.push("  " + c("· Enter 从最高层+1 开始爬,连胜连爬,每层消耗 1 把钥匙", "bright_black"));
+  rows.push("  " + c("· 通关必得遗物与金币,战败仅耗钥匙;分解背包遗物 +1 重铸石", "bright_black"));
   rows.push("  " + c(`· 首次到达新高度 +${TOWER.new_height_stones} 重铸石;头目层遗物保底稀有`,
     "bright_black"));
   while (rows.length < BODY_ROWS) rows.push(" ".repeat(W));
@@ -745,8 +743,8 @@ function modalHelp(): string[] {
     "  F    推进/挂机模式切换(挂机=停在当前层反复刷)",
     "",
     c("塔页(8)", "bright_cyan"),
-    "  ←→ 选层  Enter 进塔(消耗1把钥匙,每日0点刷新3把)",
-    "  ↑↓ 选遗物槽  E 卸下 · 通关必得遗物,战败仅耗钥匙",
+    "  Enter 爬塔:从最高层+1 开始,连胜连爬(每层1把钥匙)",
+    "  ↑↓ 选遗物槽/背包  E 卸下·装备  D 分解背包遗物(+1重铸石)",
     "",
     c("背包页", "bright_cyan"),
     "  E 装备选中物品   D 分解(金币,史诗+额外重铸石)",

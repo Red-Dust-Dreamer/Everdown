@@ -251,19 +251,14 @@ def handle_key(g, key):
             ui["confirm_reset"] = False
         elif key == "y" and ui["confirm_reset"]:
             return "reset"
-    elif tab == 7:  # 塔:←→ 选层 / Enter 进塔 / ↑↓ 选遗物槽 / E 卸遗物
-        reach = g.tower["max_floor"] + 1
-        if key == "left":
-            g.tower_floor_sel = max(1, g.tower_floor_sel - 1)
-        elif key == "right":
-            g.tower_floor_sel = min(reach, g.tower_floor_sel + 1)
-        elif key == "up":
+    elif tab == 7:  # 塔:Enter 爬塔 / ↑↓ 选遗物槽 / E 卸遗物
+        if key == "up":
             ui["tower_sel"] = (ui.get("tower_sel", 0) - 1) % 4
         elif key == "down":
             ui["tower_sel"] = (ui.get("tower_sel", 0) + 1) % 4
         elif key == "enter":
-            g.tower_enter(g.tower_floor_sel)
-            if g.in_tower:           # 进塔成功:切回战斗页看战斗
+            g.tower_enter()
+            if g.in_tower:           # 进塔成功:切回战斗页看爬塔
                 ui["tab"] = 0
         elif key == "e":
             g.unequip_relic(ui.get("tower_sel", 0))
@@ -438,12 +433,7 @@ def _autopilot(g, sim=False):
             if g.gold > g.skill_cost(sid) * 4:
                 g.skill_up(sid)
                 break
-    if sim and g.mode == "farm" and (g.time - g.last_death_time) > 30:
-        # 装备等级接近当前层才回推进(门槛:装备tier >= 层tier - 12)
-        eq_t = max((it.tier for it in g.equip.values()), default=0)
-        cur_t = g.zone * 10 + g.stage - 1
-        if eq_t >= cur_t - 12:
-            g.set_mode("push")
+    # farm→push 自动切回已内置于 Game.tick(maybe_auto_push),autopilot 不再重复
 
 
 def run_sim(seconds=1800.0, verbose=True, seed=DEFAULT_SEED, cls="warrior"):

@@ -61,12 +61,14 @@ export function achievementTiers(aid: string, val: number): [number, number] {
 }
 
 // ---------------------------------------------------------------- 自动换装
-export function autoEquipCheck(g: Game, item: any): void {
-  if (!g.settings.auto_equip) return;
+export function autoEquipCheck(g: Game, item: any): boolean {
+  if (!g.settings.auto_equip) return false;
   const cur = g.equip[item.slot];
   if (!cur || item.score() > cur.score() * 1.05) {
     g.equipItem(item, true);
+    return true;
   }
+  return false;
 }
 
 // ---------------------------------------------------------------- 懒结算
@@ -176,7 +178,10 @@ export function resolve(g: Game, elapsed: number): ResolveReport {
       if (g.respawnTimer <= 0) g.hero.hp = g.hero.max_hp;
       continue;
     }
-    const mon = spawnMonster(g.zone, g.stage, g.rng);
+    // 与实时 spawn 同口径:传入最高装备 tier,离线补算同样吃等级压制
+    let eqT = 0;
+    for (const it of Object.values(g.equip)) eqT = Math.max(eqT, it.tier);
+    const mon = spawnMonster(g.zone, g.stage, g.rng, eqT);
     const [dps, perBase, effHp] = heroDps(g, mon.def_, mon.hp, mon.boss || mon.elite);
     const swing = g.hero.interval / (1 + g.hero.haste / 100);
     let killT: number;
@@ -195,10 +200,13 @@ export function resolve(g: Game, elapsed: number): ResolveReport {
     const net = netIncoming(g, mon.atk, mon.interval, dps, mon.skill);
     const ttd = net > 0 ? g.hero.hp / net : 1e9;
     if (killT > ttd) {
+      // 打不过:按存活时间死亡。推进态走完整退层/自动挂机;
+      // 挂机层位是离线下限,原地复活再战,不被补算模型的近似误差逐次磨低
       remaining -= ttd + BAL.respawn_sec;
       g.hero.hp = 0;
       g.respawnTimer = BAL.respawn_sec;
-      g.retreatStage();
+      if (g.mode === "push") g.retreatStage();
+      else g.stats.deaths += 1;
       rep.deaths++;
       continue;
     }

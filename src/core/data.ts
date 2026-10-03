@@ -410,6 +410,7 @@ export const BAL = {
   // 游戏倍速档位(等级门槛):1x 始终可用,Lv10 解锁 2x,Lv30 解锁 3x
   speed_unlock: [1, 10, 30],
   death_row_to_farm: 2,
+  farm_stuck_row: 5,   // 挂机层位连续战败 N 次:视为层位过高,退 3 层止损
 } as const;
 
 export const VIRTUAL_STATS = ["skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct"] as const;

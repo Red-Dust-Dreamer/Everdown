@@ -28,7 +28,6 @@
 <header id="topbar">
   <span class="logo">⚔ 深渊挂机</span>
   <span class="zone-chip" id="zone-chip"></span>
-  <button class="btn mode-btn" id="mode-btn" data-cmd="mode">推进▶</button>
   <button class="btn mode-btn" id="speed-btn" data-cmd="speed" title="游戏速度(10级解锁×2,30级×3)">×1</button>
   <span class="sp"></span>
   <span class="res res-lv" id="res-lv"></span>
@@ -36,7 +35,6 @@
   <span class="res res-stone" id="res-stone"></span>
   <span class="res res-time" id="res-time"></span>
   <button class="btn" data-local="save">存档</button>
-  <button class="btn" id="sfx-btn" data-local="sfx" title="音效开关(快捷键 M)">🔊</button>
   <button class="btn warn" id="pause-btn" data-local="pause">暂停</button>
 </header>
 
@@ -46,10 +44,9 @@
     <div class="nav-item on" data-tab="battle"><span class="ic">⚔</span><span class="tx">战斗</span><span class="kbd">1</span></div>
     <div class="nav-item" data-tab="hero"><span class="ic">🧙</span><span class="tx">角色</span><span class="kbd">2</span></div>
     <div class="nav-item" data-tab="bag"><span class="ic">🎒</span><span class="tx">背包</span><span class="kbd">3</span></div>
-    <div class="nav-item" data-tab="forge"><span class="ic">🔨</span><span class="tx">锻造</span><span class="kbd">4</span></div>
-    <div class="nav-item" data-tab="skill"><span class="ic">✦</span><span class="tx">技能</span><span class="kbd">5</span></div>
-    <div class="nav-item" data-tab="quest"><span class="ic">📜</span><span class="tx">悬赏</span><span class="kbd">6</span></div>
-    <div class="nav-item" data-tab="settings"><span class="ic">⚙</span><span class="tx">设置</span><span class="kbd">7</span></div>
+    <div class="nav-item" data-tab="skill"><span class="ic">✦</span><span class="tx">技能</span><span class="kbd">4</span></div>
+    <div class="nav-item" data-tab="quest"><span class="ic">📜</span><span class="tx">悬赏</span><span class="kbd">5</span></div>
+    <div class="nav-item" data-tab="settings"><span class="ic">⚙</span><span class="tx">设置</span><span class="kbd">9</span></div>
   </nav>
 
   <!-- 内容区:各页容器由 main.ts 填充 -->
@@ -83,7 +80,6 @@
 
     <div class="page" id="page-hero"><div class="card grow" id="hero-detail"></div></div>
     <div class="page" id="page-bag"><div class="card grow" id="bag-list"></div></div>
-    <div class="page" id="page-forge"><div class="card grow" id="forge-list"></div></div>
     <div class="page" id="page-skill">
       <div class="card" id="loadout-card"></div>
       <div class="card grow" id="skill-pools"></div>

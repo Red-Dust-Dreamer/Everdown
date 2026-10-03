@@ -3,8 +3,10 @@
 // 结构:Game.load() → setInterval 0.1s 步进 → buildState() 快照渲染
 //      + g.events 事件流(日志/飘字/toast/动画)→ doCmd() 指令分发。
 /// <reference lib="dom" />
+/// <reference types="vite/client" />
 
 import { Game, installSaveHooks, migrateSave } from "../core/game.ts";
+import { applyOverrides, parseOverrideFile, resetOverrides } from "../core/overrides.ts";
 import * as D from "../core/data.ts";
 import * as systems from "../core/systems.ts";
 import { effLv, skillVal, buffPct, atkNow } from "../core/skills.ts";
@@ -38,6 +40,8 @@ async function ensureCloud(): Promise<typeof import("./cloud.ts") | null> {
 }
 
 const SAVE_KEY = "abyss_save_v2";
+/** 数值覆盖 localStorage 键(契约 §7.E:面板写、本页只读;与 admin-dom.ts OVR_KEY 同名) */
+const OVR_KEY = "abyss_admin_overrides_v1";
 const TICK = 0.1;
 const MAX_STEPS = 10;
 const AUTOSAVE_MS = 10_000;
@@ -407,18 +411,14 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
     case "equip_skill": if (a) g.equipSkill(a, (b ?? "active") as "active" | "passive"); break;
     case "unequip_skill": if (a) g.unequipSkill(a); break;
     case "skill_up": if (a) g.skillUp(a); break;
-    case "tower_sel": {
-      const dir = a === "1" ? 1 : -1;
-      g.towerFloorSel = Math.max(1, Math.min(g.tower.max_floor + 1, g.towerFloorSel + dir));
-      break;
-    }
     case "tower_enter": {
-      g.towerEnter(Number(a ?? g.towerFloorSel));
-      if (g.inTower) switchTab("battle");   // 进塔后切回战斗页看战斗
+      g.towerEnter();
+      if (g.inTower) switchTab("battle");   // 进塔后切回战斗页看爬塔
       break;
     }
-    case "tower_exit": g.towerExit(false); break;   // 撤退:视作战败,仅耗钥匙
+    case "tower_exit": g.towerExit(false); break;   // 撤退:视作战败,仅耗已用的钥匙
     case "altar_up": if (a) g.altarUp(a); break;
+    case "altar_up_multi": if (a) g.altarUpMulti(a); break;
     case "potion": if (a) g.usePotion(a); break;
     case "tower_key": g.buyTowerKey(); break;
     case "quest_reroll": g.rerollQuests(); break;
@@ -426,6 +426,7 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
     case "enhance_multi": if (a) g.enhanceMulti(a); break;
     case "unequip_relic": g.unequipRelic(Number(a)); break;
     case "relic_equip": g.equipRelicFromBag(Number(a)); break;
+    case "relic_dismantle": g.relicDismantle(Number(a)); break;
     case "relic_bag_up": g.upgradeRelicBag(); break;
     case "auto_equip":
       g.settings.auto_equip = !g.settings.auto_equip;
@@ -867,7 +868,6 @@ function renderNow(): void {
   renderBattle(st);
   renderHeroPage(st);
   renderBag(st);
-  renderForge(st);
   renderSkills(st);
   renderQuest(st);
   renderTower(st);
@@ -884,17 +884,12 @@ function renderTop(st: State): void {
       `<span class="theme" style="color:#e06bff">塔层挑战中</span>`
     : `<span>第${st.zone}区 · ${st.stage}层</span>` +
       `<span class="theme" style="color:var(--dim)">${esc(theme)}</span>`;
-  const modeBtn = $("mode-btn") as HTMLButtonElement;
-  modeBtn.textContent = st.mode === "push" ? "推进▶" : "挂机◎";
   const speedBtn = $("speed-btn") as HTMLButtonElement;
   speedBtn.textContent = `×${st.speed}`;
   speedBtn.style.color = st.speed > 1 ? "var(--green)" : "";
   speedBtn.title = st.max_speed > st.speed
     ? `游戏速度 ×${st.speed}(下一档 Lv${st.speed_unlock[st.speed]}解锁)`
     : `游戏速度 ×${st.speed}(已满档)`;
-  const sfxBtn = $("sfx-btn") as HTMLButtonElement;
-  sfxBtn.textContent = sfxOn ? "🔊" : "🔇";
-  sfxBtn.title = sfxOn ? "音效:开(快捷键 M 静音)" : "已静音(按 M 恢复)";
   $("res-lv").innerHTML = `Lv.<span class="v">${st.level}</span>`;
   $("res-gold").innerHTML = `◈ <span class="v">${fmt(st.gold)}</span>`;
   $("res-stone").innerHTML = `✦ <span class="v">${fmt(st.stones)}</span>`;
@@ -1070,6 +1065,7 @@ function renderHeroPage(st: State): void {
         `<div class="af">${esc(itemAffixLine(it) || "无词缀")}</div></div>` +
       `<div class="slot-r">` +
         `<button class="btn mini" data-cmd="enhance" data-a="${s}">强化 ◈${fmt(it.ecost)}</button>` +
+        `<button class="btn mini" data-cmd="enhance_multi" data-a="${s}" title="连续强化10次(钱不够自动停)">⚒×10</button>` +
         `<button class="btn mini" data-cmd="reforge" data-a="${s}" title="按品质洗词条">洗✦${st.reforge_stones}</button>` +
         `<button class="btn mini" data-cmd="unequip" data-a="${s}">卸下</button>` +
       `</div></div>`;
@@ -1132,34 +1128,6 @@ function renderBag(st: State): void {
            : `<div style="color:var(--dim);padding:30px;text-align:center">背包空空如也</div>`);
 }
 
-
-function renderForge(st: State): void {
-  if (!st.class_id) { $("forge-list").innerHTML = ""; return; }
-  let rows = "";
-  for (const s of ["weapon", "helmet", "armor", "boots", "amulet", "ring"]) {
-    const it = st.equip[s];
-    if (!it) {
-      rows += `<div class="slot-card"><div class="slot-l"><div class="sl">${slotName(s)}</div>` +
-        `<div class="nm eq-empty">— 空 —</div></div>` +
-        `<div class="slot-m" style="color:var(--dim)">击败怪物以获取装备</div></div>`;
-      continue;
-    }
-    rows +=
-      `<div class="slot-card"><div class="slot-l"><div class="sl">${slotName(s)} · 评分 ${fmt(it.score)}</div>` +
-        `<div class="nm c-${it.rcolor}">${esc(it.name)} <span style="color:#5adfff">+${it.plus}</span></div>` +
-        `<div class="sub">当前全属性 +${pctTxt(it.pb)},下一级 +${pctTxt(it.pb_next)}</div></div>` +
-      `<div class="slot-m"><div>${itemMainLine(it)}</div>` +
-        `<div class="af">${esc(itemAffixLine(it) || "无词缀")}</div></div>` +
-      `<div class="slot-r">` +
-        `<div class="cost">◈${fmt(it.ecost)}</div>` +
-        `<button class="btn" data-cmd="enhance" data-a="${s}">⚒ 强化</button>` +
-        `<button class="btn mini" data-cmd="enhance_multi" data-a="${s}" title="连续强化10次(钱不够自动停)">⚒×10</button>` +
-        `<button class="btn" data-cmd="reforge" data-a="${s}" title="按品质洗词条(幸运提升值域)">✦ 洗练(${st.reforge_stones}石)</button>` +
-      `</div></div>`;
-  }
-  $("forge-list").innerHTML =
-    `<h3><span class="dot"></span>锻造 · 强化费用随层数与等级上涨(软上限)</h3>` + rows;
-}
 
 function renderSkills(st: State): void {
   if (!st.class_id) { $("loadout-card").innerHTML = ""; $("skill-pools").innerHTML = ""; return; }
@@ -1265,10 +1233,9 @@ function renderTower(st: State): void {
   const panel = $("tower-panel");
   if (!st.class_id) { panel.innerHTML = ""; return; }
   const tw = st.tower;
-  const reach = tw.max_floor + 1;
-  const sel = Math.max(1, Math.min(st.tower_floor_sel, reach));
-  const boss = sel % D.TOWER.boss_every === 0;
-  const p = Math.min(100, sel / reach * 100);
+  const reach = tw.max_floor + 1;   // 下一层(爬塔起点)
+  const boss = reach % D.TOWER.boss_every === 0;
+  const p = Math.min(100, tw.max_floor / reach * 100);
   const nRelics = st.relics.filter(Boolean).length;
 
   let html =
@@ -1279,19 +1246,17 @@ function renderTower(st: State): void {
         : `<span style="color:var(--dim);font-size:11px">今日加购已满</span>`) +
       `<span style="color:var(--dim)">最高 第${tw.max_floor}层</span></span></h3>` +
     `<div class="stage-lbl" style="margin:2px 0 8px;flex-wrap:wrap;gap:8px"><span>` +
-      `<button class="btn mini" data-cmd="tower_sel" data-a="-1">−</button>` +
-      `<span class="mono" style="font-size:16px;font-weight:800;margin:0 8px">第 ${sel} 层</span>` +
+      `<span class="mono" style="font-size:16px;font-weight:800;margin:0 8px">下一层 第 ${reach} 层</span>` +
       (boss ? `<span style="color:var(--gold);font-weight:700">头目!</span>` : "") +
-      `<button class="btn mini" data-cmd="tower_sel" data-a="1">+</button>` +
-      `<span style="color:var(--dim);margin-left:10px">最高可达 第${reach}层 · 每${D.TOWER.boss_every}层头目(保底稀有)</span>` +
+      `<span style="color:var(--dim);margin-left:10px">每${D.TOWER.boss_every}层头目(保底稀有)</span>` +
     `</span><span class="act">` +
       (st.in_tower
-        ? `<span style="color:#ff9c9c;font-weight:700">挑战中 · 第${st.tower_floor_sel}层</span>` +
+        ? `<span style="color:#ff9c9c;font-weight:700">爬塔中 · 第${st.tower_floor_sel}层</span>` +
           `<button class="btn warn" data-cmd="tower_exit">撤退(钥匙已消耗)</button>`
-        : `<button class="btn" data-cmd="tower_enter" data-a="${sel}">⚔ 进入第${sel}层(消耗1钥匙)</button>`) +
+        : `<button class="btn" data-cmd="tower_enter">⚔ 从第${reach}层开始爬(每层1钥匙,连胜连爬)</button>`) +
     `</span></div>` +
     `<div class="bar q lg"><div class="fill" style="width:${p}%"></div>` +
-      `<div class="num">第1层 → 第${reach}层 · 选中 第${sel}层</div></div>` +
+      `<div class="num">第1层 → 第${tw.max_floor}层 · 下一层 第${reach}层</div></div>` +
     `<h3 style="margin-top:16px"><span class="dot"></span>遗物 · ${nRelics}/4 槽(通关必得,空槽优先装满)</h3>`;
 
   st.relics.forEach((r, i) => {
@@ -1310,16 +1275,15 @@ function renderTower(st: State): void {
       `<div class="slot-r"><button class="btn mini" data-cmd="unequip_relic" data-a="${i}">卸下</button></div></div>`;
   });
 
-  // ---- 遗物背包(满槽收纳 + 容量升级) ----
+  // ---- 遗物背包(换装/分解/扩容;满槽装备=替换效果最少的一件) ----
   const nBag = st.relic_bag.length;
   const bagFull = nBag >= st.relic_bag_cap;
-  const slotsFull = st.relics.every(Boolean);
   const upCost = st.relic_bag_cost;
   const nextCap = Math.min(st.relic_bag_cap * 2, D.BAL.relic_bag_cap);
   html += `<h3 style="margin-top:16px"><span class="dot"></span>遗物背包 · ${nBag}/${st.relic_bag_cap} 格` +
     `<span class="rt">${upCost !== null
       ? `<button class="btn mini" data-cmd="relic_bag_up" style="${st.gold < upCost ? "opacity:.55" : "border-color:#3a6a4a;color:#6bff8f"}">` +
-        `扩容 ${nextCap} 格 · ◈${fmt(upCost)}${st.gold < upCost ? "(金币不足)" : ""}</button>`
+          `扩容 ${nextCap} 格 · ◈${fmt(upCost)}${st.gold < upCost ? "(金币不足)" : ""}</button>`
       : `<span style="color:var(--dim)">已满级 ${st.relic_bag_cap} 格</span>`}</span></h3>`;
   if (!nBag) {
     html += `<div class="slot-card"><div class="slot-m" style="color:var(--dim)">` +
@@ -1334,8 +1298,11 @@ function renderTower(st: State): void {
       html += `<div class="slot-card"><div class="slot-l"><div class="sl">背包${i + 1} · ${r.rname} T${r.tier}</div>` +
         `<div class="nm c-${r.rcolor}">${esc(r.name)}</div></div>` +
         `<div class="slot-m"><div class="af">${effs}</div></div>` +
-        `<div class="slot-r"><button class="btn mini" data-cmd="relic_equip" data-a="${i}"` +
-        `${slotsFull ? ` disabled title="遗物槽已满,请先卸下"` : ""}>装备</button></div></div>`;
+        `<div class="slot-r">` +
+        `<button class="btn mini" data-cmd="relic_equip" data-a="${i}"` +
+          ` title="装上;4槽全满时自动替换效果最少的一件">装备</button>` +
+        `<button class="btn mini" data-cmd="relic_dismantle" data-a="${i}" title="分解得 1 颗重铸石(洗练用)">分解✦1</button>` +
+        `</div></div>`;
     });
   }
   panel.innerHTML = html;
@@ -1353,7 +1320,7 @@ function renderSettings(st: State): void {
       (autoSellIdx < 0
         ? `<button class="btn sell-off" data-cmd="cycle_sell" style="min-width:130px;text-align:center">已关闭</button>`
         : `<button class="btn sell-on" data-cmd="cycle_sell" style="min-width:130px;text-align:center">开 · 出售 ≤${AUTO_SELL_TIERS[autoSellIdx]}</button>`) + `</div>` +
-    `<div class="set-row"><div class="lbl">战斗模式<div class="d">推进:击败敌人深入;挂机:停留指定层</div></div>` +
+    `<div class="set-row"><div class="lbl">战斗模式<div class="d">推进:击败敌人深入;挂机:停留指定层。受阻自动转挂机,装备跟上自动回推(手动挂机不切)</div></div>` +
       `<button class="btn" data-cmd="mode">${st.mode === "push" ? "切换为挂机" : "切换为推进"}</button></div>` +
     (st.mode === "farm"
       ? `<div class="set-row"><div class="lbl">挂机层位<div class="d">当前 ${st.farm_stage} 层</div></div>` +
@@ -1390,7 +1357,7 @@ function renderSettings(st: State): void {
       kv("累计金币", fmt(s.gold_earned)) + kv("悬赏完成", fmt(s.quest_done)) +
       kv("暴击次数", fmt(s.crit_hits ?? 0)) + kv("游玩时长", fmtTime(st.playtime)) +
     `</div>` +
-    `<p style="color:var(--dim);font-size:12px;margin-top:14px">快捷键:1-8 切页 · F 推进/挂机 · P 暂停 · S 存档 · M 静音</p>`;
+    `<p style="color:var(--dim);font-size:12px;margin-top:14px">快捷键:1-9 切页 · F 推进/挂机 · P 暂停 · S 存档 · M 静音</p>`;
 }
 
 function renderOverlays(st: State): void {
@@ -1500,14 +1467,14 @@ function renderSwapModal(p: NonNullable<State["pending_swap"]>): void {
 // ---------------------------------------------------------------- 交互
 let paused = false;
 
-/** 塔 tab 与页面容器:index.html 保持 7 tab 静态结构,这里动态补第 8 个。 */
+/** 塔 tab 与页面容器:index.html 保持 6 tab 静态结构,这里按解锁动态补。 */
 function ensureTowerDom(): void {
   if (document.querySelector('.nav-item[data-tab="tower"]')) return;
   const settingsNav = document.querySelector('.nav-item[data-tab="settings"]');
   const towerNav = document.createElement("div");
   towerNav.className = "nav-item";
   towerNav.dataset.tab = "tower";
-  towerNav.innerHTML = `<span class="ic">🗼</span><span class="tx">塔</span><span class="kbd">8</span>`;
+  towerNav.innerHTML = `<span class="ic">🗼</span><span class="tx">塔</span><span class="kbd">6</span>`;
   settingsNav?.before(towerNav);
   const pageSettings = document.getElementById("page-settings");
   const towerPage = document.createElement("div");
@@ -1587,9 +1554,9 @@ document.addEventListener("keydown", (e: KeyboardEvent) => {
     renderNow();
     return;
   }
-  const tabs = ["battle", "hero", "bag", "forge", "skill", "quest", "tower",
+  const tabs = ["battle", "hero", "bag", "skill", "quest", "tower",
                  "leaderboard", "altar", "settings"];
-  const idx = e.key === "0" ? 9 : (e.key >= "1" && e.key <= "9" ? +e.key - 1 : -1);
+  const idx = e.key >= "1" && e.key <= "9" ? +e.key - 1 : -1;
   if (idx >= 0) {
     const item = document.querySelector(`.nav-item[data-tab="${tabs[idx]}"]`) as HTMLElement | null;
     if (item) item.click();
@@ -1706,6 +1673,10 @@ function cloudPushDebounced(): void {
 const LEADERBOARD_API: string = (import.meta as unknown as {
   env?: Record<string, string | undefined> }).env?.VITE_LB_API
   ?? "https://abyss-leaderboard.a-red6108.workers.dev";
+/** dev 构建标志:vite dev server 为 true,任何 vite build(含 taptap mode)为 false。
+ *  数值覆盖键仅 dev 读取(boot),线上/TapTap 构建不认——防排行榜作弊面。
+ *  用裸 import.meta.env.DEV(非类型断言形式)保证 vite define 精确替换。 */
+const IS_DEV: boolean = import.meta.env.DEV;
 const LB_BOARDS: Array<"zone" | "level" | "tower" | "power"> = ["zone", "level", "tower", "power"];
 const LB_BOARD_NAMES: Record<"zone" | "level" | "tower" | "power", string> =
   { zone: "主线榜 · 最远区域", level: "等级榜", tower: "爬塔榜 · 深渊塔",
@@ -1743,7 +1714,7 @@ function ensureAltarDom(): void {
   const nav = document.createElement("div");
   nav.className = "nav-item";
   nav.dataset.tab = "altar";
-  nav.innerHTML = `<span class="ic">🕯</span><span class="tx">祭坛</span><span class="kbd">0</span>`;
+  nav.innerHTML = `<span class="ic">🕯</span><span class="tx">祭坛</span><span class="kbd">8</span>`;
   settingsNav?.before(nav);
   const pageSettings = document.getElementById("page-settings");
   const page = document.createElement("div");
@@ -1786,8 +1757,9 @@ function renderAltar(st: State): void {
         <span class="lv">Lv.${l.lv}</span>
         <span class="cur">${cur}</span>
         <span class="nx">(下一级 ${next})</span>
-        <button class="btn mini" data-cmd="altar_up" data-a="${l.id}">献祭 ◈${fmt(l.cost)}</button>
-      </div>`;
+        <button class="btn mini" data-cmd="altar_up" data-a="${l.id}">献祭 ◈${fmt(l.cost)}</button>` +
+        `<button class="btn mini" data-cmd="altar_up_multi" data-a="${l.id}" title="连续献祭10次(金币不够自动停)">献祭×10</button>` +
+      `</div>`;
     }).join("");
 }
 
@@ -1797,7 +1769,7 @@ function ensureLeaderboardDom(): void {
   const nav = document.createElement("div");
   nav.className = "nav-item";
   nav.dataset.tab = "leaderboard";
-  nav.innerHTML = `<span class="ic">🏆</span><span class="tx">排行</span><span class="kbd">9</span>`;
+  nav.innerHTML = `<span class="ic">🏆</span><span class="tx">排行</span><span class="kbd">7</span>`;
   settingsNav?.before(nav);
   const pageSettings = document.getElementById("page-settings");
   const page = document.createElement("div");
@@ -1867,6 +1839,27 @@ async function lbSubmit(): Promise<string | null> {
     return null;
   } catch { return "网络错误"; }
   finally { lbBusy = false; }
+}
+
+// ================================================================ 存档周期上云(匿名 save-sync)
+// 每 10 分钟随自动存档节流上传整份存档 + 关页 sendBeacon 兜底;仅生产构建(线上/
+// TapTap)——dev 会话不上传,避免污染远端数据。监控型上行:失败静默,不影响游戏。
+// 收集范围与用途见 docs/privacy-policy.md(TapTap 隐私声明);服务端限流+语义包络。
+let lastSyncPush = 0;
+const SAVE_SYNC_MS = 10 * 60_000;
+function saveSyncPush(beacon = false): void {
+  if (IS_DEV || !LEADERBOARD_API || g.classId === null) return;   // dev/未开局不传
+  const payload = JSON.stringify({ uuid: lbUuid(), name: lbMyName(), save: g.toDict() });
+  lastSyncPush = Date.now();
+  if (beacon && navigator.sendBeacon) {
+    // text/plain:sendBeacon 走 no-cors,非简单 Content-Type 会预检失败;服务端不校验头
+    navigator.sendBeacon(`${LEADERBOARD_API}/save-sync`,
+      new Blob([payload], { type: "text/plain" }));
+    return;
+  }
+  void fetch(`${LEADERBOARD_API}/save-sync`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: payload,
+  }).catch(() => { /* 监控型上行:失败不打扰玩家 */ });
 }
 
 function renderLeaderboard(st: State): void {
@@ -2024,11 +2017,73 @@ document.addEventListener("click", (e: MouseEvent) => {
 // 改在 switchTab 钩子:见下方对 switchTab 的包装。
 
 function boot(): void {
+  // 数值覆盖(管理面板写、游戏页只读,docs/admin-panel.md §4.4/§7.E):读 localStorage
+  // 覆盖键,值 = serializeOverrideFile 输出原文(完整文件 JSON),用 parseOverrideFile
+  // 解析后在一切游戏状态构造之前应用;失败仅 console.warn,按默认数值运行。
+  // 仅 dev 构建读取:线上/TapTap 构建不认该键,堵"改 localStorage 即改数值"
+  // 的排行榜作弊面(docs/admin-panel.md §10 R9)。
+  if (IS_DEV) {
+    try {
+      const t = localStorage.getItem(OVR_KEY);
+      if (t) {
+        const r = applyOverrides(parseOverrideFile(t));
+        if (r.applied.length) console.info(`[overrides] 已应用 ${r.applied.length} 项数值覆盖`);
+        if (r.rejected.length) console.warn("[overrides] 已拒绝:", r.rejected);
+      }
+    } catch (err) {
+      console.warn("[overrides] 覆盖加载失败,按默认数值运行:", err);
+    }
+  }
   installSaveHooks({
     write: (game) => localStorage.setItem(SAVE_KEY, JSON.stringify(game.toDict())),
     readRaw: () => localStorage.getItem(SAVE_KEY),
   });
   g = Game.load();   // 读档(含离线结算)或开新档
+
+  // —— 面板热通道(仅 dev;storage 事件只在其他同源标签页写入时触发,正好是面板写)——
+  // A 覆盖热生效:面板「保存覆盖」→ 实时应用(英雄侧字段下次 recalcHero 生效,怪物/
+  //   技能参数下次生成/施放生效,docs/admin-panel.md §4.4);键被删除 → 恢复默认数值。
+  // B 存档热重载:面板「写入本浏览器存档」→ 下一拍安全重载(面板写、游戏页自己读,
+  //   不存在"写完被 10s 自动存档覆盖"的竞态)。
+  if (IS_DEV) {
+    let hotReloading = false;
+    window.addEventListener("storage", (ev) => {
+      if (ev.storageArea !== localStorage) return;
+      if (ev.key === OVR_KEY) {
+        try {
+          if (ev.newValue === null) {
+            resetOverrides();
+            g.recalcHero();
+            toast("数值已恢复默认");
+          } else {
+            const r = applyOverrides(parseOverrideFile(ev.newValue));
+            g.recalcHero();
+            toast(`已热应用 ${r.applied.length} 项数值覆盖` +
+                  (r.rejected.length ? `(拒绝 ${r.rejected.length} 项)` : ""));
+          }
+        } catch (err) {
+          console.warn("[overrides] 热应用失败,保持当前数值:", err);
+        }
+        return;
+      }
+      if (ev.key === SAVE_KEY && !hotReloading) {
+        hotReloading = true;
+        setTimeout(() => {
+          hotReloading = false;
+          try {
+            const raw = localStorage.getItem(SAVE_KEY);
+            if (!raw) return;
+            g = Game.fromDict(migrateSave(JSON.parse(raw)));
+            g.recalcHero();
+            renderNow();
+            toast("已热重载面板写入的存档");
+          } catch (err) {
+            console.warn("[save] 热重载失败,保持当前状态:", err);
+          }
+        }, 200);
+      }
+    });
+  }
   g.towerRefreshKeys();   // 每日钥匙刷新(登录时一次)
 
   ensureTowerDom();   // 注入第 8 个「塔」tab 与页面容器
@@ -2068,7 +2123,9 @@ function boot(): void {
     drainEvents();
   }, 100);
   setInterval(() => { if (!document.hidden) renderNow(); }, RENDER_MS);
-  setInterval(() => { if (!document.hidden) { g.save(); cloudPushDebounced(); } }, AUTOSAVE_MS);
+  setInterval(() => { if (!document.hidden) { g.save(); cloudPushDebounced();
+    if (Date.now() - lastSyncPush >= SAVE_SYNC_MS) saveSyncPush(); } }, AUTOSAVE_MS);
+  addEventListener("pagehide", () => { if (Date.now() - lastSyncPush >= 60_000) saveSyncPush(true); });
 
   document.addEventListener("visibilitychange", () => {
     if (document.hidden) {

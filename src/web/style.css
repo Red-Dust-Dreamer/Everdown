@@ -550,8 +550,8 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
   .logo{display:none}
   #topbar .btn{padding:6px 10px;font-size:12px}
   #topbar [data-local="save"]{display:none}          /* 手机收进设置页 */
-  /* 单行溢出裁剪会把排在资源条后的按钮裁出屏:静音/暂停提前到资源条之前,保证可达 */
-  #topbar #sfx-btn, #topbar #pause-btn{order:1;flex:none}
+  /* 单行溢出裁剪会把排在资源条后的按钮裁出屏:暂停提前到资源条之前,保证可达 */
+  #topbar #pause-btn{order:1;flex:none}
   #topbar .sp{order:2}
   #topbar .res{order:3}
   .zone-chip{max-width:none;font-size:12px;padding:3px 9px;flex:1 1 auto;
@@ -584,7 +584,9 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
   .slot-l{width:auto;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
   .slot-r{flex-direction:row;flex-wrap:wrap}
   .slot-r .btn{flex:1;min-height:42px}
-  .sk-ops{flex-direction:row;align-items:center}
+  /* 技能卡:操作区换行沉底右对齐,介绍独占整行宽度 */
+  .sk-card{flex-wrap:wrap}
+  .sk-ops{flex:1 1 100%;flex-direction:row;justify-content:flex-end;align-items:center;margin-top:2px}
   .sk-ops .btn{min-height:42px}
   .item .ops .btn{min-height:40px}
   .cls-grid{grid-template-columns:1fr}

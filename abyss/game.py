@@ -49,6 +49,8 @@ class Game:
         self.stage = 1
         self.stage_kills = 0
         self.deaths_row = 0
+        self.death_tier = -1       # 最近一次战败发生地的 tier(推进超过它才算真新进度)
+        self.auto_farm = False     # 当前挂机是否为"受阻自动转入"(仅此状态会自动回推进)
         self.mode = "push"         # push / farm
         self.farm_stage = 1
         self.equip = {}            # slot -> Item
@@ -80,7 +82,7 @@ class Game:
         # ---- 遗物 & 塔 ----
         self.relics = [None, None, None, None]   # 4 槽
         self.tower = {"keys": 3, "max_floor": 0, "last_refresh": None}
-        self.tower_floor_sel = 1                  # UI:当前选中要打的层
+        self.tower_floor_sel = 1                  # 爬塔中当前挑战的层(进塔固定为 max_floor+1)
         self.in_tower = False                     # 当前在塔战斗中
         self.monster = None        # 瞬态:不存档,加载后重生
         self.respawn_timer = 0.0
@@ -282,6 +284,9 @@ class Game:
             self.log("自动出售 %s (+%s 金币)" % (item.display(), fmt(price)), "bright_black")
             return
         if len(self.bag) >= self.bag_cap():
+            # 背包满仍允许自动换装:长挂机背包必然满,若不换装装备将永久冻结、深度停滞
+            if systems.auto_equip_check(self, item):
+                return
             price = item.sell_price()
             self.gold += price
             self.stats["gold_earned"] += price
@@ -505,40 +510,56 @@ class Game:
     def _advance_zone_stage(self):
         """击杀成功后的推进状态迁移(纯状态,不生成怪物;resolve 共用)。"""
         self.stage_kills += 1
-        self.deaths_row = 0
+        if self.mode == "farm":
+            # 挂机态任意击杀即清零"卡层"计数:偶发胜负交替的层位是健康挂机位
+            self.deaths_row = 0
         if self.mode == "push":
             if self.stage >= 10:  # 头目已死,进入新区域
                 self.zone += 1
                 self.stage = 1
                 self.stage_kills = 0
+                # 只有推过死亡高水位才算真新进度并清零受阻计数;
+                # "死→退层→杀满→推回原层"的原地震荡不再清零
+                if tier_of(self.zone, self.stage) > self.death_tier:
+                    self.deaths_row = 0
                 self.stats["max_zone"] = max(self.stats["max_zone"], self.zone)
                 self.toast("进入第 %d 区" % self.zone)
             elif self.stage_kills >= BAL["kills_per_stage"]:
                 self.stage += 1
                 self.stage_kills = 0
+                if tier_of(self.zone, self.stage) > self.death_tier:
+                    self.deaths_row = 0
 
     def advance_stage(self):
         self._advance_zone_stage()
         self.spawn()
 
     def retreat_stage(self):
-        """英雄死亡后的退层;连续死亡自动转挂机防止死亡循环"""
+        """英雄死亡后的退层;推进受阻(连续战败未能深入)自动转挂机"""
         self.stats["deaths"] += 1
         self.deaths_row += 1
         self.last_death_time = self.time
+        self.death_tier = tier_of(self.zone, self.stage)   # 记在退层前:战败发生地
         if self.mode == "push":
             self.stage = max(1, self.stage - 1)
             if self.stage == 1 and self.zone > 1:
                 self.zone -= 1
                 self.stage = 10
-        else:  # 挂机模式也退层,避免在打不过的层死锁
-            self.stage = max(1, self.stage - 1)
-            if self.stage == 1 and self.zone > 1:
-                self.zone -= 1
-                self.stage = 10
-            self.farm_stage = self.stage
+        else:
+            # 挂机层位是锚点:偶发战败原地复活再战,不被逐次战败磨低;
+            # 连续 N 败(一次都赢不了)才是层位过高,退 3 层止损
+            if self.deaths_row >= BAL["farm_stuck_row"]:
+                safe = self.stage - 3
+                if safe < 1 and self.zone > 1:
+                    self.zone -= 1
+                    safe += 7
+                self.stage = max(1, min(10, safe))
+                self.farm_stage = self.stage
+                self.deaths_row = 0
+                self.log("挂机层位连续战败,退至 第%d区·%d层" % (self.zone, self.stage), "bright_cyan")
         if self.deaths_row >= BAL["death_row_to_farm"] and self.mode == "push":
             self.mode = "farm"
+            self.auto_farm = True
             # 退到低3层的安全层挂机,避免原地反复战败
             safe = self.stage - 3
             if safe < 1 and self.zone > 1:
@@ -546,54 +567,65 @@ class Game:
                 safe += 7
             self.stage = max(1, min(10, safe))
             self.farm_stage = self.stage
-            self.log("连续战败,已自动切换为挂机模式(第%d区·%d层)。提升装备后按 F 继续推进。" % (
-                self.zone, self.stage), "bright_cyan")
+            self.log("推进受阻(连续%d次战败未能深入),自动转入挂机模式(第%d区·%d层);装备提升后自动恢复推进。" % (
+                BAL["death_row_to_farm"], self.zone, self.stage), "bright_cyan")
 
     def set_mode(self, mode):
         if mode == "farm":
             self.farm_stage = self.stage
             self.mode = "farm"
+            self.auto_farm = False   # 手动挂机:尊重玩家选择,不自动回推进
             self.log("切换为挂机模式:停留在 第%d区·%d层" % (self.zone, self.stage), "bright_cyan")
         else:
             self.mode = "push"
+            self.deaths_row = 0      # 手动回推:受阻计数与死亡高水位重置,重整旗鼓
+            self.death_tier = -1
+            self.auto_farm = False
             self.log("切换为推进模式:击败敌人继续深入", "bright_cyan")
         self.spawn()
 
+    def maybe_auto_push(self):
+        """挂机自恢复:仅"受阻自动转入"的挂机会在 30 秒无死亡且装备追上层级
+        (最高装备 tier ≥ 当前层 tier − 12)时自动回推进,挂机-推进形成闭环;
+        手动选择的挂机层位不受影响。"""
+        if not self.auto_farm or self.mode != "farm" or self.in_tower:
+            return
+        if self.time - self.last_death_time <= 30:
+            return
+        eq_t = max((it.tier for it in self.equip.values()), default=0)
+        if eq_t >= tier_of(self.zone, self.stage) - 12:
+            self.set_mode("push")
+
     def set_farm_stage(self, delta):
         self.farm_stage = min(10, max(1, self.farm_stage + delta))
+        self.auto_farm = False     # 手动调整挂机层位 = 接管该模式,停止自动回推
         if self.mode == "farm":
             self.stage = self.farm_stage
             self.spawn()
         self.toast("挂机层位:%d层" % self.farm_stage)
 
     # ================================================================ 塔 & 遗物
-    def tower_enter(self, floor):
-        """进入塔层:消耗 1 把钥匙,切换到塔战斗"""
+    def tower_enter(self):
+        """爬塔:从最高层+1 开始爬,连胜连爬(每层 1 把钥匙),钥匙耗尽/战败/撤退时离塔"""
         if self.in_tower:
             self.toast("正在塔中")
-            return
-        if floor < 1:
             return
         if self.tower["keys"] < 1:
             self.toast("钥匙不足(每天送3把)")
             return
-        # 新高才限层?不限,可选任意 ≤ max_floor+1 的层
-        if floor > self.tower["max_floor"] + 1:
-            self.toast("需先通过第 %d 层" % self.tower["max_floor"])
-            return
+        floor = self.tower["max_floor"] + 1
         self.tower["keys"] -= 1
         self.in_tower = True
         self.tower_floor_sel = floor
         self.monster = TW.tower_monster(floor, self.rng)
         self.last_spawn_time = self.time
-        self.log("🔑 进入深渊塔·第%d层%s" % (floor, "(头目!)" if self.monster.boss else ""),
+        self.log("🔑 进入深渊塔·第%d层%s,胜利后连爬" % (floor, "(头目!)" if self.monster.boss else ""),
                  "bright_cyan")
 
     def tower_exit(self, won=False):
-        """离开塔(胜利结算或战败退出)"""
+        """离开塔(胜利结算/战败退出/手动撤退);胜利且还有钥匙时继续爬下一层"""
         if not self.in_tower:
             return
-        self.in_tower = False
         if won:
             floor = self.tower_floor_sel
             mon = self.monster
@@ -612,8 +644,21 @@ class Game:
                 self.log("★ 新高度!第%d层 +%d重铸石" % (floor, TOWER["new_height_stones"]),
                          "bright_yellow")
             self.log("✔ 塔第%d层通关!获得 %s" % (floor, relic.display()), "bright_cyan")
+            if self.tower["keys"] >= 1:
+                # 连爬:钥匙逐层消耗,直到钥匙耗尽/战败/手动撤退
+                self.tower["keys"] -= 1
+                self.tower_floor_sel = floor + 1
+                self.monster = TW.tower_monster(self.tower_floor_sel, self.rng)
+                self.last_spawn_time = self.time
+                self.log("🔑 继续爬塔·第%d层%s" % (self.tower_floor_sel,
+                                                  "(头目!)" if self.monster.boss else ""),
+                         "bright_cyan")
+                return
+            self.in_tower = False
             self.monster = None
+            self.log("钥匙耗尽,离开深渊塔", "bright_cyan")
         else:
+            self.in_tower = False
             self.log("✘ 塔第%d层失败…钥匙已消耗" % self.tower_floor_sel, "bright_red")
             self.monster = None
             self.respawn_timer = BAL["respawn_sec"]
@@ -673,6 +718,30 @@ class Game:
         self.log("🕯 %s Lv.%d(+%s%s %s)" % (line[1], self.altar_lv[line_id], line[5],
                  "%" if line[4] == "pct" else " 点", line[3]), "bright_magenta")
         self.toast("%s Lv.%d" % (line[1], self.altar_lv[line_id]))
+
+    def altar_up_multi(self, line_id, times=10):
+        """献祭十次:连升 n 级,金币不够自动停"""
+        line = D_ALTAR.get(line_id)
+        if line is None:
+            self.toast("无此祭坛")
+            return
+        spent = 0
+        n = 0
+        while n < times:
+            cost = self.altar_cost(line_id)
+            if self.gold < cost:
+                break
+            self.gold -= cost
+            self.altar_lv[line_id] = self.altar_lv.get(line_id, 0) + 1
+            spent += cost
+            n += 1
+        if n > 0:
+            self.recalc_hero()
+            self.log("🕯 %s Lv.%d(十连 ×%d,共 ◈%s)" % (line[1], self.altar_lv[line_id], n, fmt(spent)),
+                     "bright_magenta")
+            self.toast("%s Lv.%d(×%d)" % (line[1], self.altar_lv[line_id], n))
+        else:
+            self.toast("金币不足 (需要 %s)" % fmt(self.altar_cost(line_id)))
 
     def potion_cost(self, pid):
         """药剂价格 = k × 当前层击杀金(30 分钟增益,同键续时不叠加)"""
@@ -808,6 +877,7 @@ class Game:
             battle_tick(self, dt)
             if self.monster is None and self.respawn_timer <= 0:
                 self.spawn()
+        self.maybe_auto_push()
         self.autosave_acc += dt  # 自动存档按真实时间计
         if self.autosave_acc > 30:
             self.autosave_acc = 0
@@ -823,6 +893,7 @@ class Game:
             "level": self.level, "xp": self.xp,
             "zone": self.zone, "stage": self.stage,
             "stage_kills": self.stage_kills, "deaths_row": self.deaths_row,
+            "death_tier": self.death_tier, "auto_farm": self.auto_farm,
             "mode": self.mode, "farm_stage": self.farm_stage,
             "class_id": self.class_id,
             "loadout": self.loadout,
@@ -867,6 +938,8 @@ class Game:
         g.stage = d.get("stage", 1)
         g.stage_kills = d.get("stage_kills", 0)
         g.deaths_row = d.get("deaths_row", 0)
+        g.death_tier = d.get("death_tier", -1)
+        g.auto_farm = d.get("auto_farm", False)
         g.mode = d.get("mode", "push")
         g.farm_stage = d.get("farm_stage", 1)
         g.equip = {s: Item.from_dict(v) for s, v in d.get("equip", {}).items()}

@@ -73,12 +73,14 @@ def achievement_tiers(aid, val):
 
 # ---------------------------------------------------------------- 自动换装
 def auto_equip_check(game, item):
-    """新掉落物品若评分明显高于当前装备则自动穿上(设置开启时)"""
+    """新掉落物品若评分明显高于当前装备则自动穿上(设置开启时);返回是否穿上"""
     if not game.settings.get("auto_equip", True):
-        return
+        return False
     cur = game.equip.get(item.slot)
     if cur is None or item.score() > cur.score() * 1.05:
         game.equip_item(item, silent_if_auto=True)
+        return True
+    return False
 
 
 # ---------------------------------------------------------------- 懒结算
@@ -193,7 +195,9 @@ def resolve(g, elapsed):
             if g.respawn_timer <= 0:
                 g.hero["hp"] = g.hero["max_hp"]
             continue
-        mon = spawn_monster(g.zone, g.stage, g.rng)
+        # 与实时 spawn 同口径:传入最高装备 tier,离线补算同样吃等级压制
+        eq_t = max((it.tier for it in g.equip.values()), default=0)
+        mon = spawn_monster(g.zone, g.stage, g.rng, eq_t)
         dps, per_base, eff_hp = _hero_dps(g, mon.def_, mon.hp, mon.boss or mon.elite)
         swing = g.hero["interval"] / (1 + g.hero["haste"] / 100.0)
         # 击杀耗时 = 掷出的刀数 × 攻击周期;瞬发技能按战斗时长预估总量后扣除
@@ -212,11 +216,15 @@ def resolve(g, elapsed):
         net = _net_incoming(g, mon.atk, mon.interval, dps, mon.skill)
         ttd = g.hero["hp"] / net if net > 0 else 1e9
         if kill_t > ttd:
-            # 打不过:按存活时间死亡退层
+            # 打不过:按存活时间死亡。推进态走完整退层/自动挂机;
+            # 挂机层位是离线下限,原地复活再战,不被补算模型的近似误差逐次磨低
             remaining -= ttd + BAL["respawn_sec"]
             g.hero["hp"] = 0.0
             g.respawn_timer = BAL["respawn_sec"]
-            g.retreat_stage()
+            if g.mode == "push":
+                g.retreat_stage()
+            else:
+                g.stats["deaths"] += 1
             rep["deaths"] += 1
             continue
         remaining -= kill_t

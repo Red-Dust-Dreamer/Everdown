@@ -10,6 +10,7 @@ echo "== 构建(base=/Everdown/,输出 dist-gh/)"
 rm -rf dist-gh src/web/dist-gh
 # MSYS_NO_PATHCONV: 防 Git Bash 把 /Everdown/ 转成本地路径
 MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*" VITE_BASE=/Everdown/ npx vite build --outDir dist-gh
+rm -rf src/web/dist-gh/admin   # 管理面板仅本地,不进 gh-pages(锚点:构建之后、cd 之前)
 
 echo "== 检查产物路径"
 grep -o '/Everdown/assets/[a-zA-Z0-9_-]*\.js' src/web/dist-gh/index.html | head -2

@@ -83,7 +83,7 @@ _HINTS = {
     4: "↑↓ 选择 │ ←→ 装配区/主动池/被动池 │ E 装配/卸下 │ U 升级 │ H 帮助",
     5: "↑↓ 查看 │ 悬赏完成自动领取并刷新 │ H 帮助",
     6: "T 自动换装 │ J 自动出售档次 │ F 推进/挂机 │ ←→ 挂机层位 │ S 存档 │ R 重置 │ Q 退出",
-    7: "←→ 选层 │ Enter 进塔 │ ↑↓ 选槽 │ E 卸遗物 │ H 帮助",
+    7: "Enter 爬塔 │ ↑↓ 选槽 │ E 卸遗物 │ H 帮助",
 }
 
 
@@ -650,11 +650,10 @@ def _tab_settings(g):
 
 # ================================================================ 塔页
 def _tab_tower(g):
-    """塔页:钥匙/最高层 / ←→ 选层 / 进塔 / 遗物4槽"""
+    """塔页:钥匙/最高层 / Enter 爬塔 / 遗物4槽"""
     ui = g.view.ui
     rows = []
-    reach = g.tower["max_floor"] + 1           # 最高可挑战层
-    sel_floor = max(1, min(g.tower_floor_sel, reach))
+    reach = g.tower["max_floor"] + 1           # 下一层(爬塔起点)
     slot_sel = ui.get("tower_sel", 0) % 4
 
     rows.append(" " + c("▌深渊塔", "bright_white", bold=True)
@@ -663,23 +662,21 @@ def _tab_tower(g):
                 + c(" │ ", "bright_black")
                 + c("最高第%d层" % g.tower["max_floor"], "bright_cyan", bold=True)
                 + c(" │ ", "bright_black")
-                + c("←→ 选层 Enter 进塔", "bright_black")
-                + (c(" │ 挑战中·第%d层" % g.tower_floor_sel, "bright_magenta", bold=True)
+                + c("Enter 爬塔(连胜连爬)", "bright_black")
+                + (c(" │ 爬塔中·第%d层" % g.tower_floor_sel, "bright_magenta", bold=True)
                    if g.in_tower else ""))
     rows.append(" " + c("─" * 64, "bright_black"))
     rows.append("")
 
-    boss = sel_floor % TOWER["boss_every"] == 0
-    rows.append(" " + c("[←→] ", "bright_black")
-                + c("第 %d 层" % sel_floor, "bright_white", bold=True)
+    boss = reach % TOWER["boss_every"] == 0
+    rows.append(" " + c("[下一层] ", "bright_black")
+                + c("第 %d 层" % reach, "bright_white", bold=True)
                 + (c(" 头目!", "bright_yellow", bold=True) if boss else "")
-                + c(" (每%d层一个头目)" % TOWER["boss_every"], "bright_black")
-                + c("  │  ", "bright_black")
-                + c("最高可达: 第%d层" % reach, "bright_cyan", bold=True))
+                + c(" (每%d层一个头目)" % TOWER["boss_every"], "bright_black"))
     rows.append(" " + c("第1层 ", "bright_black")
-                + bar(sel_floor, reach, 44, "cyan")
+                + bar(g.tower["max_floor"], max(reach, 1), 44, "cyan")
                 + c(" 第%d层" % reach, "bright_black")
-                + c("  ▸ 选中 第%d层" % sel_floor, "bright_cyan", bold=True))
+                + c("  ▸ 已爬到 第%d层" % g.tower["max_floor"], "bright_cyan", bold=True))
     rows.append("")
 
     rows.append(" " + c("▌遗物", "bright_white", bold=True)
@@ -761,7 +758,7 @@ def _modal_help(g):
         "  F    推进/挂机模式切换(挂机=停在当前层反复刷)",
         "",
         c("塔页(8)", "bright_cyan"),
-        "  ←→ 选层  Enter 进塔(消耗1把钥匙,每日0点刷新3把)",
+        "  Enter 爬塔:从最高层+1 开始,连胜连爬(每层1把钥匙)",
         "  ↑↓ 选遗物槽  E 卸下 · 通关必得遗物,战败仅耗钥匙",
         "",
         c("背包页", "bright_cyan"),

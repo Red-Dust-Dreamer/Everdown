@@ -142,24 +142,23 @@ export function handleKey(g: Game, key: string): KeyResult {
     else if (key === "n") ui.confirm_reset = false;
     else if (key === "y" && ui.confirm_reset) return "reset";
   } else if (tab === 7) {
-    // 塔:←→ 选层 / Enter 进塔 / ↑↓ 选遗物槽或背包 / E 卸下·装备 / U 扩容背包
-    const reach = g.tower.max_floor + 1;
+    // 塔:Enter 爬塔 / ↑↓ 选遗物槽或背包 / E 卸下·装备 / D 分解背包遗物 / U 扩容背包
     const selTotal = 4 + Math.min(g.relicBag.length, 4);   // 可选:4 槽 + 背包前 4 件(与渲染一致)
-    if (key === "left") {
-      g.towerFloorSel = Math.max(1, g.towerFloorSel - 1);
-    } else if (key === "right") {
-      g.towerFloorSel = Math.min(reach, g.towerFloorSel + 1);
-    } else if (key === "up") {
+    if (key === "up") {
       ui.tower_sel = ((ui.tower_sel ?? 0) - 1 + selTotal) % selTotal;
     } else if (key === "down") {
       ui.tower_sel = ((ui.tower_sel ?? 0) + 1) % selTotal;
     } else if (key === "enter") {
-      g.towerEnter(g.towerFloorSel);
+      g.towerEnter();
       if (g.inTower) ui.tab = 0;   // 进塔成功:切回战斗页看战斗
     } else if (key === "e") {
       const sel = ui.tower_sel ?? 0;
       if (sel < 4) g.unequipRelic(sel);
       else g.equipRelicFromBag(sel - 4);
+    } else if (key === "d") {
+      const sel = ui.tower_sel ?? 0;
+      if (sel >= 4) g.relicDismantle(sel - 4);
+      else g.toast("用 ↑↓ 选中背包中的遗物再分解");
     } else if (key === "u") {
       g.upgradeRelicBag();
     }
@@ -231,11 +230,5 @@ export function autopilot(g: Game, sim = false): void {
       }
     }
   }
-  if (sim && g.mode === "farm" && g.time - g.lastDeathTime > 30) {
-    // 装备等级接近当前层才回推进(门槛:装备tier >= 层tier - 12)
-    let eqT = 0;
-    for (const it of Object.values(g.equip)) eqT = Math.max(eqT, it.tier);
-    const curT = g.zone * 10 + g.stage - 1;
-    if (eqT >= curT - 12) g.setMode("push");
-  }
+  // farm→push 自动切回已内置于 Game.tick(maybeAutoPush),autopilot 不再重复
 }

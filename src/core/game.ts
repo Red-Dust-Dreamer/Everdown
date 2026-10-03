@@ -69,6 +69,8 @@ export class Game {
   stage = 1;
   stageKills = 0;
   deathsRow = 0;
+  deathTier = -1;             // 最近一次战败发生地的 tier(推进超过它才算真新进度)
+  autoFarm = false;           // 当前挂机是否为"受阻自动转入"(仅此状态会自动回推进)
   mode: "push" | "farm" = "push";
   farmStage = 1;
   equip: Record<string, Item> = {};
@@ -98,7 +100,7 @@ export class Game {
   relicBag: Relic[] = [];    // 遗物背包(4 槽满时收纳,可扩容)
   relicBagLv = 1;            // 背包容量等级(容量翻倍,封顶 BAL.relic_bag_cap)
   tower: TowerState = { keys: 3, max_floor: 0, last_refresh: null };
-  towerFloorSel = 1;         // UI:当前选中要打的层
+  towerFloorSel = 1;         // 爬塔中当前挑战的层(进塔固定为 max_floor+1)
   inTower = false;           // 当前在塔战斗中
   monster: Monster | null = null;
   respawnTimer = 0;
@@ -293,6 +295,8 @@ export class Game {
       return;
     }
     if (this.bag.length >= this.bagCap()) {
+      // 背包满仍允许自动换装:长挂机背包必然满,若不换装装备将永久冻结、深度停滞
+      if (systems.autoEquipCheck(this, item)) return;
       const price = item.sellPrice();
       this.gold += price;
       this.stats.gold_earned += price;
@@ -513,17 +517,24 @@ export class Game {
 
   advanceZoneStage(): void {
     this.stageKills += 1;
-    this.deathsRow = 0;
+    if (this.mode === "farm") {
+      // 挂机态任意击杀即清零"卡层"计数:偶发胜负交替的层位是健康挂机位
+      this.deathsRow = 0;
+    }
     if (this.mode === "push") {
       if (this.stage >= 10) {
         this.zone += 1;
         this.stage = 1;
         this.stageKills = 0;
+        // 只有推过死亡高水位才算真新进度并清零受阻计数;
+        // "死→退层→杀满→推回原层"的原地震荡不再清零
+        if (tierOf(this.zone, this.stage) > this.deathTier) this.deathsRow = 0;
         this.stats.max_zone = Math.max(this.stats.max_zone, this.zone);
         this.toast(`进入第 ${this.zone} 区`);
       } else if (this.stageKills >= BAL.kills_per_stage) {
         this.stage += 1;
         this.stageKills = 0;
+        if (tierOf(this.zone, this.stage) > this.deathTier) this.deathsRow = 0;
       }
     }
   }
@@ -537,6 +548,7 @@ export class Game {
     this.stats.deaths += 1;
     this.deathsRow += 1;
     this.lastDeathTime = this.time;
+    this.deathTier = tierOf(this.zone, this.stage);   // 记在退层前:战败发生地
     const backOne = () => {
       this.stage = Math.max(1, this.stage - 1);
       if (this.stage === 1 && this.zone > 1) {
@@ -547,11 +559,23 @@ export class Game {
     if (this.mode === "push") {
       backOne();
     } else {
-      backOne();
-      this.farmStage = this.stage;
+      // 挂机层位是锚点:偶发战败原地复活再战,不被逐次战败磨低;
+      // 连续 N 败(一次都赢不了)才是层位过高,退 3 层止损
+      if (this.deathsRow >= BAL.farm_stuck_row) {
+        let safe = this.stage - 3;
+        if (safe < 1 && this.zone > 1) {
+          this.zone -= 1;
+          safe += 7;
+        }
+        this.stage = Math.max(1, Math.min(10, safe));
+        this.farmStage = this.stage;
+        this.deathsRow = 0;
+        this.log(`挂机层位连续战败,退至 第${this.zone}区·${this.stage}层`, "bright_cyan");
+      }
     }
     if (this.deathsRow >= BAL.death_row_to_farm && this.mode === "push") {
       this.mode = "farm";
+      this.autoFarm = true;
       let safe = this.stage - 3;
       if (safe < 1 && this.zone > 1) {
         this.zone -= 1;
@@ -559,7 +583,8 @@ export class Game {
       }
       this.stage = Math.max(1, Math.min(10, safe));
       this.farmStage = this.stage;
-      this.log(`连续战败,已自动切换为挂机模式(第${this.zone}区·${this.stage}层)。提升装备后按 F 继续推进。`,
+      this.log(`推进受阻(连续${BAL.death_row_to_farm}次战败未能深入),自动转入挂机模式` +
+        `(第${this.zone}区·${this.stage}层);装备提升后自动恢复推进。`,
         "bright_cyan");
     }
   }
@@ -568,16 +593,32 @@ export class Game {
     if (mode === "farm") {
       this.farmStage = this.stage;
       this.mode = "farm";
+      this.autoFarm = false;   // 手动挂机:尊重玩家选择,不自动回推进
       this.log(`切换为挂机模式:停留在 第${this.zone}区·${this.stage}层`, "bright_cyan");
     } else {
       this.mode = "push";
+      this.deathsRow = 0;      // 手动回推:受阻计数与死亡高水位重置,重整旗鼓
+      this.deathTier = -1;
+      this.autoFarm = false;
       this.log("切换为推进模式:击败敌人继续深入", "bright_cyan");
     }
     this.spawn();
   }
 
+  /** 挂机自恢复:仅"受阻自动转入"的挂机会在 30 秒无死亡且装备追上层级
+   *  (最高装备 tier ≥ 当前层 tier − 12)时自动回推进,挂机-推进形成闭环;
+   *  手动选择的挂机层位不受影响。 */
+  maybeAutoPush(): void {
+    if (!this.autoFarm || this.mode !== "farm" || this.inTower) return;
+    if (this.time - this.lastDeathTime <= 30) return;
+    let eqT = 0;
+    for (const it of Object.values(this.equip)) eqT = Math.max(eqT, it.tier);
+    if (eqT >= tierOf(this.zone, this.stage) - 12) this.setMode("push");
+  }
+
   setFarmStage(delta: number): void {
     this.farmStage = Math.min(10, Math.max(1, this.farmStage + delta));
+    this.autoFarm = false;     // 手动调整挂机层位 = 接管该模式,停止自动回推
     if (this.mode === "farm") {
       this.stage = this.farmStage;
       this.spawn();
@@ -586,35 +627,29 @@ export class Game {
   }
 
   // ================================================================ 塔 & 遗物
-  /** 进入塔层:消耗 1 把钥匙,切换到塔战斗 */
-  towerEnter(floor: number): void {
+  /** 爬塔:从最高层+1 开始爬,连胜连爬(每层 1 把钥匙),钥匙耗尽/战败/撤退时离塔 */
+  towerEnter(): void {
     if (this.inTower) {
       this.toast("正在塔中");
       return;
     }
-    if (floor < 1) return;
     if (this.tower.keys < 1) {
       this.toast("钥匙不足(每天送3把)");
       return;
     }
-    // 新高才限层?不限,可选任意 ≤ max_floor+1 的层
-    if (floor > this.tower.max_floor + 1) {
-      this.toast(`需先通过第 ${this.tower.max_floor} 层`);
-      return;
-    }
+    const floor = this.tower.max_floor + 1;
     this.tower.keys -= 1;
     this.inTower = true;
     this.towerFloorSel = floor;
     const mon = TW.towerMonster(floor, this.rng);
     this.monster = mon;
     this.lastSpawnTime = this.time;
-    this.log(`🔑 进入深渊塔·第${floor}层${mon.boss ? "(头目!)" : ""}`, "bright_cyan");
+    this.log(`🔑 进入深渊塔·第${floor}层${mon.boss ? "(头目!)" : ""},胜利后连爬`, "bright_cyan");
   }
 
-  /** 离开塔(胜利结算或战败退出) */
+  /** 离开塔(胜利结算/战败退出/手动撤退);胜利且还有钥匙时继续爬下一层 */
   towerExit(won = false): void {
     if (!this.inTower) return;
-    this.inTower = false;
     if (won) {
       const floor = this.towerFloorSel;
       // 金币
@@ -631,8 +666,21 @@ export class Game {
         this.log(`★ 新高度!第${floor}层 +${TOWER.new_height_stones}重铸石`, "bright_yellow");
       }
       this.log(`✔ 塔第${floor}层通关!获得 ${relic.display()}`, "bright_cyan");
+      if (this.tower.keys >= 1) {
+        // 连爬:钥匙逐层消耗,直到钥匙耗尽/战败/手动撤退
+        this.tower.keys -= 1;
+        this.towerFloorSel = floor + 1;
+        const mon = TW.towerMonster(this.towerFloorSel, this.rng);
+        this.monster = mon;
+        this.lastSpawnTime = this.time;
+        this.log(`🔑 继续爬塔·第${this.towerFloorSel}层${mon.boss ? "(头目!)" : ""}`, "bright_cyan");
+        return;
+      }
+      this.inTower = false;
       this.monster = null;
+      this.log("钥匙耗尽,离开深渊塔", "bright_cyan");
     } else {
+      this.inTower = false;
       this.log(`✘ 塔第${this.towerFloorSel}层失败…钥匙已消耗`, "bright_red");
       this.monster = null;
       this.respawnTimer = BAL.respawn_sec;
@@ -750,15 +798,36 @@ export class Game {
   equipRelicFromBag(idx: number): void {
     const r = this.relicBag[idx];
     if (!r) return;
-    const i = this.relics.indexOf(null);
+    let i = this.relics.indexOf(null);
     if (i < 0) {
-      this.toast("遗物槽已满,请先卸下");
+      // 满槽:替换效果最少的一件,旧件回到背包(刚腾出的格子收纳)
+      let worstN = 99;
+      for (let k = 0; k < this.relics.length; k++) {
+        const cur = this.relics[k];
+        if (cur && cur.effects.length < worstN) { worstN = cur.effects.length; i = k; }
+      }
+      const old = this.relics[i]!;
+      this.relics[i] = r;
+      this.relicBag.splice(idx, 1);
+      this.relicBag.push(old);
+      this.recalcHero();
+      this.log(`遗物 ${r.display()} 替换槽${i + 1}的 ${old.display()}`, "bright_magenta");
       return;
     }
     this.relicBag.splice(idx, 1);
     this.relics[i] = r;
     this.recalcHero();
     this.log(`遗物 ${r.display()} 从背包装入槽${i + 1}`, "bright_magenta");
+  }
+
+  /** 分解背包中的遗物:+1 重铸石(洗练石) */
+  relicDismantle(idx: number): void {
+    const r = this.relicBag[idx];
+    if (!r) return;
+    this.relicBag.splice(idx, 1);
+    this.stones += 1;
+    this.log(`分解遗物 ${r.display()} → +1 重铸石`, "bright_magenta");
+    this.toast(`分解 ${r.name} +1✦`);
   }
 
   unequipRelic(idx: number): void {
@@ -801,6 +870,29 @@ export class Game {
     this.log(`🕯 ${line.name} Lv.${this.altarLv[lineId]}(+${line.per}${line.op === "pct" ? "%" : " 点"}${line.stat})`,
       "bright_magenta");
     this.toast(`${line.name} Lv.${this.altarLv[lineId]}`);
+  }
+
+  /** 献祭十次:连升 n 级,金币不够自动停 */
+  altarUpMulti(lineId: string, times = 10): void {
+    const line = ALTAR_LINES.find(l => l.id === lineId);
+    if (!line) { this.toast("无此祭坛"); return; }
+    let spent = 0, n = 0;
+    while (n < times) {
+      const cost = this.altarCost(lineId);
+      if (this.gold < cost) break;
+      this.gold -= cost;
+      this.altarLv[lineId] = (this.altarLv[lineId] ?? 0) + 1;
+      spent += cost;
+      n += 1;
+    }
+    if (n > 0) {
+      this.recalcHero();
+      this.log(`🕯 ${line.name} Lv.${this.altarLv[lineId]}(十连 ×${n},共 ◈${fmt(spent)})`,
+        "bright_magenta");
+      this.toast(`${line.name} Lv.${this.altarLv[lineId]}(×${n})`);
+    } else {
+      this.toast(`金币不足(需要 ${fmt(this.altarCost(lineId))})`);
+    }
   }
 
   /** 药剂价格 = k × 当前层击杀金(30 分钟增益,同键续时不叠加) */
@@ -924,6 +1016,7 @@ export class Game {
       battleTick(this, dt);
       if (!this.monster && this.respawnTimer <= 0) this.spawn();
     }
+    this.maybeAutoPush();
     this.autosaveAcc += dt;  // 自动存档按真实时间计
     if (this.autosaveAcc > 30) {
       this.autosaveAcc = 0;
@@ -941,6 +1034,7 @@ export class Game {
       level: this.level, xp: this.xp,
       zone: this.zone, stage: this.stage,
       stage_kills: this.stageKills, deaths_row: this.deathsRow,
+      death_tier: this.deathTier, auto_farm: this.autoFarm,
       mode: this.mode, farm_stage: this.farmStage,
       class_id: this.classId,
       loadout: this.loadout,
@@ -991,6 +1085,8 @@ export class Game {
     g.stage = d.stage ?? 1;
     g.stageKills = d.stage_kills ?? 0;
     g.deathsRow = d.deaths_row ?? 0;
+    g.deathTier = d.death_tier ?? -1;
+    g.autoFarm = d.auto_farm ?? false;
     g.mode = d.mode ?? "push";
     g.farmStage = d.farm_stage ?? 1;
     g.equip = Object.fromEntries(Object.entries(d.equip ?? {})

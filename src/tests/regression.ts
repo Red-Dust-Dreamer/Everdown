@@ -423,9 +423,10 @@ function testRelicBag(): void {
   g.equipRelicFromBag(0);
   eq(g.relics[0], r5, "背包装备回空槽");
   eq(g.relicBag.length, 1, "装备后移出背包");
-  g.equipRelicFromBag(0);                    // 4 槽全满:拒绝
-  eq(g.relicBag.length, 1, "槽满拒绝装备");
-  ok(toastTexts(g).some(t => t.includes("遗物槽已满")), "槽满 toast");
+  g.equipRelicFromBag(0);                    // 4 槽全满:替换效果最少的一件(并列取首个)
+  eq(g.relicBag.length, 1, "槽满装备:一进一出背包数不变");
+  eq(g.relicBag[0], r5, "槽满装备:被替换旧件回背包");
+  ok(g.relics.some(r => r && r.name === "测1"), "槽满装备:新件入槽");
 
   // ---- 新档:背包满时卸下被拒;槽+背包全满时替换效果最少的 ----
   const g2 = newGame(88);
