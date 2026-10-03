@@ -384,6 +384,10 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
   #topbar{gap:8px;padding:6px 10px;flex-wrap:nowrap;overflow:hidden;
     padding-top:max(6px, env(safe-area-inset-top))}
   .logo{display:none}
+  /* 单行溢出裁剪会把排在资源条后的按钮裁出屏:静音/暂停提前到资源条之前,保证可达 */
+  #topbar #sfx-btn, #topbar #pause-btn{order:1;flex:none}
+  #topbar .sp{order:2}
+  #topbar .res{order:3}
   .zone-chip{font-size:12px;padding:3px 9px;flex:1 1 auto;min-width:0;overflow:hidden}
   .res{font-size:12.5px;flex:none}
   .res-time{display:none}
