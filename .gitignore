@@ -19,5 +19,10 @@ qr-lan.png
 dist-gh/
 src/web/dist-gh/
 
+# TapTap 打包产物(package-taptap 脚本生成,可随时重建)
+dist-taptap/
+dist-taptap-pkg/
+abyss-idle-taptap-*.zip
+
 # wrangler 本地开发状态(miniflare 模拟 D1/KV 数据)
 .wrangler/
