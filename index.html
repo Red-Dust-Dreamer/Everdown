@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>深渊挂机 · Abyss Idle</title>
+<link rel="manifest" href="/Everdown/manifest.webmanifest">
+<link rel="icon" href="/Everdown/icons/favicon-96.png" type="image/png">
+<link rel="apple-touch-icon" href="/Everdown/icons/apple-touch-icon.png">
+<meta name="theme-color" content="#0a0a0f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="深渊挂机">
+<link rel="preload" href="/Everdown/fonts/abyss-mono.woff2" as="font" type="font/woff2" crossorigin>
+  <script type="module" crossorigin src="/Everdown/assets/main-D6SZGG73.js"></script>
+  <link rel="modulepreload" crossorigin href="/Everdown/assets/overrides-DOpA9uC9.js">
+  <link rel="stylesheet" crossorigin href="/Everdown/assets/overrides-T9TwcV5o.css">
+</head>
+<body>
+
+<!-- 加载层(TS 核心本地加载,一闪即隐) -->
+<div id="loading">
+  <div class="load-logo">⚔ 深渊挂机</div>
+  <div class="load-bar"><i></i></div>
+  <div id="loading-msg">正在编织深渊…</div>
+</div>
+
+<!-- 顶栏 -->
+<header id="topbar">
+  <span class="logo">⚔ 深渊挂机</span>
+  <span class="zone-chip" id="zone-chip"></span>
+  <button class="btn mode-btn" id="mode-btn" data-cmd="mode">推进▶</button>
+  <button class="btn mode-btn" id="speed-btn" data-cmd="speed" title="游戏速度(10级解锁×2,30级×3)">×1</button>
+  <span class="sp"></span>
+  <span class="res res-lv" id="res-lv"></span>
+  <span class="res res-gold" id="res-gold"></span>
+  <span class="res res-stone" id="res-stone"></span>
+  <span class="res res-time" id="res-time"></span>
+  <button class="btn" data-local="save">存档</button>
+  <button class="btn" id="sfx-btn" data-local="sfx" title="音效开关(快捷键 M)">🔊</button>
+  <button class="btn warn" id="pause-btn" data-local="pause">暂停</button>
+</header>
+
+<div id="main">
+  <!-- 导航(手机端变为底部标签栏) -->
+  <nav id="nav">
+    <div class="nav-item on" data-tab="battle"><span class="ic">⚔</span><span class="tx">战斗</span><span class="kbd">1</span></div>
+    <div class="nav-item" data-tab="hero"><span class="ic">🧙</span><span class="tx">角色</span><span class="kbd">2</span></div>
+    <div class="nav-item" data-tab="bag"><span class="ic">🎒</span><span class="tx">背包</span><span class="kbd">3</span></div>
+    <div class="nav-item" data-tab="forge"><span class="ic">🔨</span><span class="tx">锻造</span><span class="kbd">4</span></div>
+    <div class="nav-item" data-tab="skill"><span class="ic">✦</span><span class="tx">技能</span><span class="kbd">5</span></div>
+    <div class="nav-item" data-tab="quest"><span class="ic">📜</span><span class="tx">悬赏</span><span class="kbd">6</span></div>
+    <div class="nav-item" data-tab="settings"><span class="ic">⚙</span><span class="tx">设置</span><span class="kbd">7</span></div>
+  </nav>
+
+  <!-- 内容区:各页容器由 main.ts 填充 -->
+  <div id="content">
+    <div class="page on" id="page-battle">
+      <div id="battle-top">
+        <div class="col" id="col-hero">
+          <div class="card" id="hero-card"></div>
+          <div class="card grow" id="equip-mini"></div>
+        </div>
+        <div id="stage-wrap">
+          <div class="card" id="stage-track"></div>
+          <div id="stage">
+            <div class="aura"></div>
+            <div id="stage-inner"></div>
+            <div id="fx-layer"></div>
+            <canvas id="fx-canvas"></canvas>
+            <div id="floaters"></div>
+          </div>
+          <div class="card" id="skillbar-card"></div>
+        </div>
+        <div class="col" id="col-right">
+          <div class="card" id="quests-mini"></div>
+          <div class="card grow" id="log-card">
+            <h3><span class="dot"></span>战斗日志</h3>
+            <div id="log-body"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="page" id="page-hero"><div class="card grow" id="hero-detail"></div></div>
+    <div class="page" id="page-bag"><div class="card grow" id="bag-list"></div></div>
+    <div class="page" id="page-forge"><div class="card grow" id="forge-list"></div></div>
+    <div class="page" id="page-skill">
+      <div class="card" id="loadout-card"></div>
+      <div class="card grow" id="skill-pools"></div>
+    </div>
+    <div class="page" id="page-quest">
+      <div class="card" id="quest-list"></div>
+      <div class="card grow" id="ach-list"></div>
+    </div>
+    <div class="page" id="page-settings"><div class="card grow" id="settings-panel"></div></div>
+  </div>
+</div>
+
+<!-- 职业选择(新档) -->
+<div class="overlay" id="class-select">
+  <div class="modal wide">
+    <h2>选择你的职业</h2>
+    <p class="dim">选择将决定你的技能池与成长方向(存档内不可更换)</p>
+    <div class="cls-grid" id="cls-grid"></div>
+  </div>
+</div>
+
+<!-- 离线报告 -->
+<div class="overlay" id="offline-modal">
+  <div class="modal">
+    <h2>🌙 离线收益</h2>
+    <div id="offline-body"></div>
+    <button class="btn big" data-cmd="dismiss_offline">收下,继续冒险</button>
+  </div>
+</div>
+
+<!-- 手动模式换装对比(自动换装关闭时,更强掉落弹此框;✕/ESC/点遮罩=稍后处理,物品留在背包) -->
+<div class="overlay" id="swap-modal">
+  <div class="modal wide">
+    <button class="modal-x" id="swap-close" title="稍后处理(物品留在背包)">✕</button>
+    <h2 id="swap-title">⚔ 发现更强的装备</h2>
+    <p class="dim" id="swap-sub">自动换装已关闭 — 要换上新的吗?</p>
+    <div id="swap-body"></div>
+    <div class="swap-ops">
+      <button class="btn big sell-on" data-cmd="swap_take">✦ 换上新的</button>
+      <button class="btn big" data-cmd="swap_keep">保留旧的</button>
+    </div>
+  </div>
+</div>
+
+<!-- 云账号登录(配置齐全时启用;游客模式永远可用) -->
+<div class="overlay" id="login-modal">
+  <div class="modal">
+    <h2>☁ 云账号</h2>
+    <p class="dim">登录后存档多设备漫游;不登录照常游玩(本地存档)</p>
+    <div class="login-form">
+      <input id="login-email" type="email" placeholder="邮箱" autocomplete="email" maxlength="80">
+      <input id="login-pass" type="password" placeholder="密码(至少 6 位)" autocomplete="current-password" maxlength="72">
+      <div id="login-err" class="login-err"></div>
+      <div class="login-ops">
+        <button class="btn big sell-on" id="login-go">登录</button>
+        <button class="btn big" id="login-reg">注册</button>
+      </div>
+      <div class="login-ops">
+        <button class="btn" id="login-gh">🐙 GitHub 登录</button>
+      </div>
+    </div>
+    <button class="btn big" id="login-close" style="margin-top:10px">先不登录,继续玩</button>
+  </div>
+</div>
+
+<!-- toast -->
+<div id="toast"></div>
+
+<input type="file" id="file-input" accept=".json" style="display:none">
+</body>
+</html>
