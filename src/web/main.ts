@@ -14,6 +14,7 @@ import { heroPower, powerWithEquip, powerWithRelic } from "../core/power.ts";
 import type { PowerBreakdown } from "../core/power.ts";
 import { plusBonus, Item, PCT_MAINS } from "../core/items.ts";
 import type { Relic } from "../core/relics.ts";
+import pkg from "../../package.json";
 import confetti from "canvas-confetti";
 import { CLOUD_READY } from "./cloud.config.ts";
 import type { CloudState } from "./cloud.ts";
@@ -196,7 +197,7 @@ function itemUI(it: Item): ItemUI {
   const inn = D.SLOT_INNATE[it.slot];
   if (inn) {
     innate = { name: D.STAT_NAMES[inn[0]],
-               val: Math.round(inn[1] * rid * (1 + plusBonus(it.plus)) * 10) / 10 };
+               val: Math.round(inn[1] * rid * 10) / 10 };   // 固有不吃强化
   }
   const [dgold, dstones] = it.dismantle();
   const pb = plusBonus(it.plus);
@@ -1426,7 +1427,8 @@ function renderSettings(st: State): void {
       kv("累计金币", fmt(s.gold_earned)) + kv("悬赏完成", fmt(s.quest_done)) +
       kv("暴击次数", fmt(s.crit_hits ?? 0)) + kv("游玩时长", fmtTime(st.playtime)) +
     `</div>` +
-    `<p style="color:var(--dim);font-size:12px;margin-top:14px">快捷键:1-9 切页 · F 推进/挂机 · P 暂停 · S 存档 · M 静音</p>`;
+    `<p class="set-hint" style="color:var(--dim);font-size:12px;margin-top:14px">` +
+      `<span class="kbd-hint">快捷键:1-9 切页 · F 推进/挂机 · P 暂停 · S 存档 · M 静音 · </span>v${pkg.version}</p>`;
 }
 
 function renderOverlays(st: State): void {

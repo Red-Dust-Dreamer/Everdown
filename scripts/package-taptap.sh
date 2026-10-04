@@ -15,6 +15,7 @@ rm -rf dist-taptap src/web/dist-taptap "$OUT"
 MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*" VITE_BASE=./ npx vite build --mode taptap --outDir ../../dist-taptap
 rm -rf dist-taptap/admin   # 管理面板仅本地,不进 TapTap 包(锚点:构建之后、grep 校验之前)
 rm -f dist-taptap/assets/admin-*.js   # admin 入口的 JS chunk 一并剔除(只删目录会漏进包)
+rm -rf dist-taptap/vendor             # admin 控制台依赖(xterm 终端库),游戏本体不引用
 
 echo "== 校验:产物内不得残留根绝对路径(TapTap 托管在任意子路径)"
 if grep -qE '(href|src)="/' dist-taptap/index.html; then
@@ -25,7 +26,8 @@ if grep -rqE 'url\("/' dist-taptap/assets/*.css; then
 fi
 
 echo "== 组包:第一级唯一文件夹 abyssidle/(纯字母命名,稳妥过审)"
-rm -rf dist-taptap-pkg && mkdir -p dist-taptap-pkg/abyssidle
+# 清内层而非父目录:Windows 下父目录可能被进程占 cwd 删不掉,残留旧哈希会混进包
+rm -rf dist-taptap-pkg/abyssidle && mkdir -p dist-taptap-pkg/abyssidle
 cp -r dist-taptap/. dist-taptap-pkg/abyssidle/
 
 py - "$OUT" <<'PYEOF'

@@ -11,6 +11,8 @@ rm -rf dist-gh src/web/dist-gh
 # MSYS_NO_PATHCONV: 防 Git Bash 把 /Everdown/ 转成本地路径
 MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*" VITE_BASE=/Everdown/ npx vite build --outDir dist-gh
 rm -rf src/web/dist-gh/admin   # 管理面板仅本地,不进 gh-pages(锚点:构建之后、cd 之前)
+rm -f src/web/dist-gh/assets/admin-*.js   # admin 入口 JS chunk 一并剔除(只删目录会漏)
+rm -rf src/web/dist-gh/vendor             # admin 控制台预留素材(xterm),游戏本体不引用(与 package-taptap 同口径)
 
 echo "== 检查产物路径"
 grep -o '/Everdown/assets/[a-zA-Z0-9_-]*\.js' src/web/dist-gh/index.html | head -2

@@ -101,7 +101,7 @@ export class Item {
     if (innate) {
       const [k, per] = innate;
       const rid = RARITY_IDX[this.rarity];
-      const extra = per * rid * (1 + plusBonus(this.plus));
+      const extra = per * rid;   // 固有也不吃强化:强化只作用于主属性,彻底防膨胀
       out[k] = (out[k] ?? 0) + extra;
     }
     return out;
@@ -215,7 +215,7 @@ export class Item {
     if (innate) {
       const [k, per] = innate;
       const rid = RARITY_IDX[this.rarity];
-      const extra = per * rid * (1 + plusBonus(this.plus));
+      const extra = per * rid;   // 固有不吃强化,与 stats() 同口径
       if (!this.affixes.some(a => a.id === k)) {
         lines.push(c("├ 固有:", "bright_black") + ` ${STAT_NAMES[k]} +${pctStr(extra)}`);
       }

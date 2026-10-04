@@ -74,7 +74,7 @@ class Item:
         innate = SLOT_INNATE.get(self.slot)
         if innate:
             k, per = innate
-            extra = per * RARITY_IDX[self.rarity] * (1 + plus_bonus(self.plus))
+            extra = per * RARITY_IDX[self.rarity]   # 固有也不吃强化:强化只作用于主属性
             out[k] = out.get(k, 0) + extra
         return out
 
@@ -199,7 +199,7 @@ class Item:
         innate = SLOT_INNATE.get(self.slot)
         if innate:
             k, per = innate
-            extra = per * RARITY_IDX[self.rarity] * (1 + plus_bonus(self.plus))
+            extra = per * RARITY_IDX[self.rarity]   # 固有不吃强化,与 stats() 同口径
             if k not in [a[0] for a in self.affixes]:
                 lines.append(c("├ 固有:", "bright_black") + " %s +%s"
                              % (STAT_NAMES[k], _pct(extra)))

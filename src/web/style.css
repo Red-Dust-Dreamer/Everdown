@@ -611,6 +611,8 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
   .cls-card .ds{text-align:left}
   .modal{padding:18px 16px}
   .ach-row{flex-wrap:wrap}
+  /* 手机/APP 无键盘:快捷键提示整段隐藏,设置页脚只留版本号 */
+  .set-hint .kbd-hint{display:none}
   /* 标签占满首行,控件(开关/按钮组)换行到第二行;空 div 的 .toggle 在
      nowrap 布局里会被挤成 0 宽消失(手机端曾因此看不到音效开关) */
   .set-row{flex-wrap:wrap}
