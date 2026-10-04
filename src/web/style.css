@@ -87,6 +87,19 @@ body{
 .swap-ops{display:flex;gap:10px;justify-content:center;margin-top:12px}
 @media (max-width:560px){.swap-grid{grid-template-columns:1fr}}
 
+/* 装备框:角色页 装备6槽+遗物4槽 网格,点击槽位弹详情 */
+.gear-frame{display:grid;grid-template-columns:repeat(auto-fill,minmax(152px,1fr));gap:8px;margin-top:8px}
+.gear-slot{background:#15152299;border:1px solid #20202f;border-radius:10px;padding:9px 11px;
+  cursor:pointer;transition:border-color .15s,transform .1s;min-width:0}
+.gear-slot:hover{border-color:#3a6a4a}
+.gear-slot:active{transform:scale(.98)}
+.gear-slot .sl{font-size:11px;color:var(--dim);letter-spacing:1px}
+.gear-slot .nm{font-weight:700;font-size:13px;margin-top:3px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.gear-slot .sub{font-size:11px;color:var(--dim);margin-top:2px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.gear-slot.relic{border-style:dashed}
+
 /* 云账号登录弹窗 */
 .login-form{display:flex;flex-direction:column;gap:10px;margin-top:14px}
 .login-form input{background:#10101a;border:1px solid var(--line2);border-radius:8px;
@@ -414,7 +427,7 @@ body{
 .skill-pools{display:grid;grid-template-columns:1fr 1fr;gap:12px;flex:1;min-height:0}
 .pool{overflow:auto;min-height:0}
 .pool h4{font-size:13px;color:var(--dim);margin-bottom:8px;font-weight:600}
-.sk-card{display:flex;gap:10px;background:#15152299;border:1px solid #20202f;
+.sk-card{display:flex;flex-wrap:wrap;gap:10px;background:#15152299;border:1px solid #20202f;
   border-radius:10px;padding:10px 12px;margin-bottom:8px;align-items:flex-start}
 .sk-card.locked{opacity:.45}
 .sk-card:last-child{margin-bottom:0}
@@ -423,12 +436,16 @@ body{
   font-size:19px;flex:none}
 .sk-body{flex:1;min-width:0}
 .sk-body .nm{font-weight:700;font-size:14px}
-.sk-body .nm .lv{color:#5adfff;font-size:12px;font-weight:400;margin-left:6px}
+.sk-body .nm .lv{color:#5adfff;font-size:12px;font-weight:400;margin-left:6px;
+  font-variant-numeric:tabular-nums;display:inline-block;min-width:5.2em}
 .sk-body .nm .eq{color:#ffd94a;font-size:11px;margin-left:6px}
 .sk-body .ds{color:#9a9ab0;font-size:12.5px;margin:3px 0}
 .sk-body .cd{color:var(--dim);font-size:11.5px}
-.sk-ops{display:flex;flex-direction:column;gap:5px;flex:none}
-.sk-ops .cost{font-size:10.5px;color:var(--dim);text-align:center;white-space:nowrap}
+/* 操作行沉底右对齐:介绍独占整行,升级/装配按钮固定在右下角,数值变化不引起回流 */
+.sk-ops{display:flex;flex-direction:row;align-items:center;justify-content:flex-end;
+  gap:5px;flex:1 1 100%;margin-top:2px;flex-wrap:wrap}
+.sk-ops .cost{font-size:10.5px;color:var(--dim);white-space:nowrap;margin-right:auto;
+  font-variant-numeric:tabular-nums}
 .sk-ops .btn{min-width:58px}
 
 /* ---------------- 悬赏 / 成就页 ---------------- */
@@ -585,8 +602,6 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
   .slot-r{flex-direction:row;flex-wrap:wrap}
   .slot-r .btn{flex:1;min-height:42px}
   /* 技能卡:操作区换行沉底右对齐,介绍独占整行宽度 */
-  .sk-card{flex-wrap:wrap}
-  .sk-ops{flex:1 1 100%;flex-direction:row;justify-content:flex-end;align-items:center;margin-top:2px}
   .sk-ops .btn{min-height:42px}
   .item .ops .btn{min-height:40px}
   .cls-grid{grid-template-columns:1fr}
@@ -595,7 +610,11 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
   .cls-card .ds{text-align:left}
   .modal{padding:18px 16px}
   .ach-row{flex-wrap:wrap}
+  /* 标签占满首行,控件(开关/按钮组)换行到第二行;空 div 的 .toggle 在
+     nowrap 布局里会被挤成 0 宽消失(手机端曾因此看不到音效开关) */
+  .set-row{flex-wrap:wrap}
   .set-row .lbl{min-width:100%}
+  .set-row .toggle{flex:none;margin-left:auto}
   #toast{bottom:calc(64px + env(safe-area-inset-bottom))}
 }
 
@@ -650,13 +669,14 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
 .altar-row{display:flex;align-items:center;gap:10px;padding:9px 11px;border-radius:8px;
   background:#15152299;border:1px solid #20202f;margin-bottom:7px;font-size:13px;flex-wrap:wrap}
 .altar-row .ic{font-size:17px}
-.altar-row .nm{font-weight:700;min-width:64px}
-.altar-row .lv{color:#5adfff;font-variant-numeric:tabular-nums;min-width:52px}
-.altar-row .cur{color:#6bff8f;font-variant-numeric:tabular-nums}
-.altar-row .nx{color:var(--dim);font-size:11.5px;flex:1;min-width:80px}
-.altar-row .btn{margin-left:auto}
+/* 字段全部定宽不换行:数值位数变化(多一个字)不引起行内回流/折行 */
+.altar-row .nm{font-weight:700;min-width:70px;white-space:nowrap}
+.altar-row .lv{color:#5adfff;font-variant-numeric:tabular-nums;min-width:56px;white-space:nowrap}
+.altar-row .cur{color:#6bff8f;font-variant-numeric:tabular-nums;min-width:118px;white-space:nowrap}
+.altar-row .nx{color:var(--dim);font-size:11.5px;min-width:96px;white-space:nowrap}
+.altar-row .btn{margin-left:auto;white-space:nowrap}
 @media (max-width:768px){
-  .altar-row .nx{flex-basis:100%;order:5;margin-left:74px}
-  .altar-row .btn{margin-left:0}
+  .altar-row .nx{order:4;flex:1 1 100%;margin-left:0;white-space:nowrap}
+  .altar-row .btn{margin-left:0;flex:1;min-height:42px}
   .potion-row{grid-template-columns:repeat(auto-fill,minmax(140px,1fr))}
 }

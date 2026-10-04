@@ -362,7 +362,7 @@ function onMonsterKilled(g: Game, mon: Monster): void {
   if (g.rng.random() < dropChance) {
     const minIdx = mon.boss ? 2 : 0;
     const boost = mon.boss ? 0.6 : mon.elite ? 0.25 : 0;
-    const item = rollItem(mon.tier, g.rng, h.luck ?? 0, minIdx, boost);
+    const item = rollItem(mon.tier, g.rng, h.luck ?? 0, minIdx, boost, g.classId);
     g.addItem(item);
     if (RARITY_IDX[item.rarity] >= 2) g.questProgress("loot", 1);
   }

@@ -70,6 +70,7 @@ class Game:
         self.quest_reroll_count = 0  # 今日悬赏刷新次数(上限 BAL["quest_reroll_max"])
         self.tower_keys_bought = 0   # 今日已加购塔钥匙数(上限 BAL["tower_key_extra"])
         self.altar_lv = {}           # 深渊祭坛各线等级(金币→永久属性)
+        self.potion_bought = {}      # 药剂已购次数(价格翻倍阶梯,按种类独立)
         self.bag_exp_lv = 0          # 背包扩容次数(每 +1 扩 10 格,至 100)
         self.quest_daily_date = ""   # 本地日期 %Y-%m-%d,跨日重置计数
         self.events = []           # [(kind, text, color)] 宿主 drain
@@ -744,8 +745,9 @@ class Game:
             self.toast("金币不足 (需要 %s)" % fmt(self.altar_cost(line_id)))
 
     def potion_cost(self, pid):
-        """药剂价格 = k × 当前层击杀金(30 分钟增益,同键续时不叠加)"""
-        return int(round(BAL["potion_cost_k"] * mob_gold(tier_of(self.zone, self.stage))))
+        """药剂价格:初始价 × 2^已购次数,单次封顶(每种药剂独立计价)"""
+        n = self.potion_bought.get(pid, 0)
+        return int(min(BAL["potion_cost0"] * 2 ** n, BAL["potion_cost_cap"]))
 
     def use_potion(self, pid):
         d = D_POTION.get(pid)
@@ -757,6 +759,7 @@ class Game:
             self.toast("金币不足 (需要 %s)" % fmt(cost))
             return
         self.gold -= cost
+        self.potion_bought[pid] = self.potion_bought.get(pid, 0) + 1
         S.add_buff(self, d[3], d[4], d[5])
         what = {"atk": "攻击", "xp": "经验", "gold": "金币"}[d[3]]
         self.log("%s 饮下%s:30 分钟内%s +%d%%" % (d[2], d[1], what, d[4]), "bright_green")
@@ -909,6 +912,7 @@ class Game:
             "quest_reroll_count": self.quest_reroll_count,
             "tower_keys_bought": self.tower_keys_bought,
             "altar_lv": self.altar_lv,
+            "potion_bought": self.potion_bought,
             "bag_exp_lv": self.bag_exp_lv,
             "relics": [r.to_dict() if r else None for r in self.relics],
             "tower": self.tower,
@@ -974,6 +978,7 @@ class Game:
         g.quest_reroll_count = d.get("quest_reroll_count", 0)
         g.tower_keys_bought = d.get("tower_keys_bought", 0)
         g.altar_lv = d.get("altar_lv") or {}
+        g.potion_bought = d.get("potion_bought") or {}
         g.bag_exp_lv = d.get("bag_exp_lv", 0)
         g.ema_kill = d.get("ema_kill", 0.0)
         g.recalc_hero()

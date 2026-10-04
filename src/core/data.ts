@@ -6,12 +6,12 @@ export interface RarityDef {
   key: string; name: string; color: Color; affixes: number; mainMul: number; weight: number;
 }
 export const RARITIES: RarityDef[] = [
-  { key: "common", name: "普通", color: "bright_black", affixes: 1, mainMul: 1.0, weight: 55.0 },
-  { key: "fine", name: "精良", color: "green", affixes: 2, mainMul: 1.12, weight: 25.0 },
-  { key: "rare", name: "稀有", color: "bright_blue", affixes: 2, mainMul: 1.28, weight: 12.0 },
-  { key: "epic", name: "史诗", color: "bright_magenta", affixes: 3, mainMul: 1.48, weight: 5.5 },
-  { key: "legendary", name: "传说", color: "bright_yellow", affixes: 3, mainMul: 1.75, weight: 2.0 },
-  { key: "mythic", name: "神话", color: "bright_red", affixes: 4, mainMul: 2.1, weight: 0.5 },
+  { key: "common", name: "普通", color: "bright_black", affixes: 1, mainMul: 1.0, weight: 58.0 },
+  { key: "fine", name: "精良", color: "green", affixes: 2, mainMul: 1.12, weight: 25.5 },
+  { key: "rare", name: "稀有", color: "bright_blue", affixes: 2, mainMul: 1.28, weight: 11.0 },
+  { key: "epic", name: "史诗", color: "bright_magenta", affixes: 3, mainMul: 1.48, weight: 4.2 },
+  { key: "legendary", name: "传说", color: "bright_yellow", affixes: 3, mainMul: 1.75, weight: 1.4 },
+  { key: "mythic", name: "神话", color: "bright_red", affixes: 4, mainMul: 2.1, weight: 0.07 },
 ];
 export const RARITY_IDX: Record<string, number> =
   Object.fromEntries(RARITIES.map((r, i) => [r.key, i]));
@@ -78,7 +78,9 @@ export const AFFIXES: AffixDef[] = [
   { id: "crit_dmg", name: "暴击伤害", lo: 8.0, hi: 16.0, k: 0, pct: true, weight: 2.8, step: 10 },
   { id: "lifesteal", name: "吸血", lo: 1.0, hi: 2.5, k: 0, pct: true, weight: 7.0, step: 1 },
   { id: "goldfind", name: "金币加成", lo: 5.0, hi: 12.0, k: 0, pct: true, weight: 1.8, step: 6 },
-  { id: "skill_lv", name: "全技能等级", lo: 0.3, hi: 0.8, k: 0, pct: false, weight: 11.0 },
+  { id: "skill_lv", name: "全技能等级", lo: 1.0, hi: 1.0, k: 0, pct: false, weight: 11.0 },
+  // ↑ 新掉落 roll 时随机绑定当前职业一个技能(主动/被动池),词缀名显示为技能名,
+  //   只加该技能且不推过 skill_lv_max;name 仅作旧存档未绑定词条的回显(全技能聚合)
   { id: "luck", name: "幸运", lo: 2.0, hi: 5.0, k: 0, pct: true, weight: 5.0, step: 3 },
 ];
 export const AFFIX_DEF: Record<string, AffixDef> = Object.fromEntries(AFFIXES.map(a => [a.id, a]));
@@ -88,7 +90,7 @@ export const AFFIX_SUFFIX: Record<string, string> = {
   goldfind: "贪婪", skill_lv: "大师", luck: "天命",
 };
 export const CAPS: Partial<Record<StatKey, number>> = {
-  haste: 150, crit: 75, lifesteal: 25, luck: 200,
+  haste: 150, crit: 75, lifesteal: 25, luck: 50,
   skill_dmg: 300, cd_reduce: 40, dodge: 40,
   armor_pierce: 50, xp_pct: 200,
 };
@@ -323,12 +325,12 @@ export interface AltarLine {
   stat: string; op: "pct" | "add"; per: number;   // pct=百分比乘区 / add=点数
 }
 export const ALTAR_LINES: AltarLine[] = [
-  { id: "power",  name: "力量祭坛", icon: "⚔", stat: "atk",      op: "pct", per: 1.0 },
-  { id: "vigor",  name: "生命祭坛", icon: "❤", stat: "hp",       op: "pct", per: 2.0 },
-  { id: "guard",  name: "守护祭坛", icon: "🛡", stat: "def",      op: "pct", per: 2.0 },
-  { id: "edge",   name: "锋锐祭坛", icon: "🗡", stat: "crit_dmg", op: "add", per: 1.0 },
-  { id: "swift",  name: "迅捷祭坛", icon: "💨", stat: "haste",    op: "add", per: 0.5 },
-  { id: "greed",  name: "贪婪祭坛", icon: "◈", stat: "goldfind", op: "add", per: 1.5 },
+  { id: "power",  name: "力量祭坛", icon: "⚔", stat: "atk",      op: "pct", per: 0.4 },
+  { id: "vigor",  name: "生命祭坛", icon: "❤", stat: "hp",       op: "pct", per: 1.0 },
+  { id: "guard",  name: "守护祭坛", icon: "🛡", stat: "def",      op: "pct", per: 1.0 },
+  { id: "edge",   name: "锋锐祭坛", icon: "🗡", stat: "crit_dmg", op: "add", per: 0.5 },
+  { id: "swift",  name: "迅捷祭坛", icon: "💨", stat: "haste",    op: "add", per: 0.3 },
+  { id: "greed",  name: "贪婪祭坛", icon: "◈", stat: "goldfind", op: "add", per: 0.5 },
 ];
 
 // ---------------------------------------------------------------- 临时药剂(30 分钟增益,buff 管道)
@@ -386,7 +388,8 @@ export const BAL = {
   relic_bag_cost_k: 5.0,
   quest_daily_limit: 10,      // 每日完成悬赏上限(本地 0 点重置)
   altar_cost0: 200, altar_cost_lv: 80, altar_cost_lv2: 10, altar_cost_t: 3,
-  potion_cost_k: 300,        // 药剂价格 = k × 当前层击杀金(30 分钟)
+  potion_cost0: 10_000,        // 药剂初始价;每购买一次价格翻倍(30 分钟增益)
+  potion_cost_cap: 1_000_000,  // 药剂单次购买价格上限
   tower_key_extra: 10,       // 每日可加购钥匙数(免费 3 把之外)
   tower_key_cost_k: 150,     // 第 n 把加购价格 = k × n × 击杀金
   bag_expand_step: 10,       // 背包每次扩容格数

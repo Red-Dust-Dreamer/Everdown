@@ -366,7 +366,7 @@ def _on_monster_killed(game, mon):
         min_idx = 2 if mon.boss else 0
         boost = 0.6 if mon.boss else (0.25 if mon.elite else 0.0)
         item = roll_item(mon.tier, rng=game.rng, luck=h.get("luck", 0.0),
-                         min_idx=min_idx, boost=boost)
+                         min_idx=min_idx, boost=boost, cls=game.class_id)
         game.add_item(item)
         from .data import RARITY_IDX
         if RARITY_IDX[item.rarity] >= 2:

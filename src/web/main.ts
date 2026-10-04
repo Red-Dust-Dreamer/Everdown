@@ -184,6 +184,11 @@ function itemUI(it: Item): ItemUI {
   const mstat = it.mainStat();
   const st = it.stats();
   const affixes = it.affixes.map(a => {
+    // 单技能词缀:词条名=绑定的技能名,整级显示(不进通用属性聚合)
+    if (a.id === "skill_lv" && it.skillSid) {
+      const nm = it.boundSkillName() ?? "单技能";
+      return { name: nm, val: Math.trunc(a.val), pct: false };
+    }
     const def = D.AFFIX_DEF[a.id];
     return { name: def.name, val: Math.round((st[a.id] ?? 0) * 10) / 10, pct: def.pct };
   });
@@ -427,6 +432,32 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
     case "unequip_relic": g.unequipRelic(Number(a)); break;
     case "relic_equip": g.equipRelicFromBag(Number(a)); break;
     case "relic_dismantle": g.relicDismantle(Number(a)); break;
+    case "gear_cmp_item": {
+      const i = Number(a);
+      if (i >= 0 && i < g.bag.length) gearView = { mode: "cmp-item", item: g.bag[i] };
+      break;
+    }
+    case "gear_cmp_relic": {
+      const i = Number(a);
+      if (i >= 0 && i < g.relicBag.length) gearView = { mode: "cmp-relic", relic: g.relicBag[i] };
+      break;
+    }
+    case "gear_take_item": {
+      if (gearView?.mode === "cmp-item" && gearView.item && g.bag.includes(gearView.item)) {
+        g.equipItem(gearView.item);
+      }
+      gearView = null;
+      break;
+    }
+    case "gear_take_relic": {
+      if (gearView?.mode === "cmp-relic" && gearView.relic) {
+        const i = g.relicBag.indexOf(gearView.relic);
+        if (i >= 0) g.equipRelicFromBag(i);
+      }
+      gearView = null;
+      break;
+    }
+    case "gear_close": gearView = null; break;
     case "relic_bag_up": g.upgradeRelicBag(); break;
     case "auto_equip":
       g.settings.auto_equip = !g.settings.auto_equip;
@@ -468,7 +499,9 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
 const BASE_URL = (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL || "/";
 const SFX_KEY = "abyss_sfx";
 const SFX_FILES = ["attack-hit", "skill-heavy", "skill-magic", "skill-arrow",
-                   "skill-burst", "skill-buff", "skill-shield", "skill-execute"] as const;
+                   "skill-burst", "skill-buff", "skill-shield", "skill-execute",
+                   "skill-fire", "skill-ice", "skill-zap", "skill-roar",
+                   "skill-ult", "skill-drain", "skill-mark", "skill-dash"] as const;
 type SfxKey = typeof SFX_FILES[number];
 const SFX_STYLE: Record<SfxKey, { gain: number; rateLo: number; rateHi: number; throttleMs: number }> = {
   "attack-hit":    { gain: 0.5,  rateLo: 0.92, rateHi: 1.08, throttleMs: 70 },
@@ -479,6 +512,14 @@ const SFX_STYLE: Record<SfxKey, { gain: number; rateLo: number; rateHi: number; 
   "skill-buff":    { gain: 0.55, rateLo: 0.98, rateHi: 1.02, throttleMs: 120 },
   "skill-shield":  { gain: 0.55, rateLo: 0.98, rateHi: 1.02, throttleMs: 120 },
   "skill-execute": { gain: 0.6,  rateLo: 1.0,  rateHi: 1.0,  throttleMs: 150 },
+  "skill-fire":    { gain: 0.55, rateLo: 0.93, rateHi: 1.05, throttleMs: 100 },
+  "skill-ice":     { gain: 0.5,  rateLo: 0.97, rateHi: 1.08, throttleMs: 100 },
+  "skill-zap":     { gain: 0.5,  rateLo: 0.95, rateHi: 1.1,  throttleMs: 90 },
+  "skill-roar":    { gain: 0.6,  rateLo: 0.95, rateHi: 1.0,  throttleMs: 140 },
+  "skill-ult":     { gain: 0.65, rateLo: 0.98, rateHi: 1.02, throttleMs: 160 },
+  "skill-drain":   { gain: 0.5,  rateLo: 0.9,  rateHi: 1.0,  throttleMs: 120 },
+  "skill-mark":    { gain: 0.45, rateLo: 0.98, rateHi: 1.05, throttleMs: 120 },
+  "skill-dash":    { gain: 0.45, rateLo: 0.95, rateHi: 1.1,  throttleMs: 120 },
 };
 let sfxOn = localStorage.getItem(SFX_KEY) !== "0";
 let sfxCtx: AudioContext | null = null;
@@ -529,10 +570,34 @@ function playAttackHit(crit = false): void {
   if (crit) { playSfx("attack-hit", true); return; }
   playSfx("attack-hit");
 }
-/** 技能施放(cast:<id>):伤害按职业,其余按类型 */
+/** 技能施放(cast:<id>):按技能映射表专属音,未配置的回落到 类型/职业 默认分音 */
+const SFX_SKILL: Partial<Record<string, SfxKey>> = {
+  // 战士
+  w_blood: "skill-drain",   // 嗜血打击:吸血吞咽感
+  w_fatal: "skill-ult",     // 致命一击(必暴)
+  w_roar: "skill-roar",     // 毁灭怒吼(全属性大招)
+  // 法师
+  m_fire: "skill-fire",     // 火球术
+  m_storm: "skill-fire",    // 烈焰风暴
+  m_ice: "skill-ice",       // 寒冰箭
+  m_nova: "skill-ice",      // 冰霜新星(冻结)
+  m_chain: "skill-zap",     // 闪电链
+  m_meteor: "skill-ult",    // 陨石术
+  m_cata: "skill-ult",      // 元素灾变(必暴)
+  // 射手
+  r_mark: "skill-mark",     // 猎杀印记(标记提示音)
+  r_dash: "skill-dash",     // 疾行(位移嗖声)
+  r_sky: "skill-ult",       // 穿云箭
+  r_god: "skill-ult",       // 猎神之怒(全属性大招)
+};
+/** 多段技(skill_hit 连发)的命中节拍窗口:窗口内每个 skill_hit 播小型命中闪 */
+let multiHitUntil = 0;
 function playSkillCast(skillId: string): void {
   const def = SKILL_DEF.get(skillId);
   if (!def) return;
+  if (def.kind === "multi") multiHitUntil = performance.now() + 1400;
+  const mapped = SFX_SKILL[skillId];
+  if (mapped) { playSfx(mapped); return; }
   let key: SfxKey;
   if (def.kind === "execute") key = "skill-execute";
   else if (def.kind === "shield") key = "skill-shield";
@@ -590,8 +655,14 @@ function drainEvents(): void {
       } else if (text.startsWith("cast:")) {
         playSkillCast(text.slice(5));
         playSkillFx(text.slice(5));
+      } else if (text === "skill_hit") {
+        // 多段技每一下的小命中闪(单段技的施放特效已覆盖,不叠加大特效)
+        if (performance.now() < multiHitUntil) {
+          const p = monCenterPx();
+          if (p) fxSpawn("fx-hit",
+            p.x + Math.random() * 26 - 13, p.y + Math.random() * 26 - 13);
+        }
       }
-      // skill_hit:技能伤害命中,仅闪白+飘字(mob_flash 已覆盖)
     }
   }
   if (logs.length) {
@@ -644,24 +715,27 @@ function fxSpawn(cls: string, x: number, y: number, vars: Record<string, string>
   return el;
 }
 
-/** 职业·战士/法师/射手的普攻形态;crit 时放大提亮。命中点取怪物中心(无怪时舞台中心)。 */
-function playAttackFx(cls0?: string, crit = false): void {
+/** 怪物中心(舞台内像素坐标;无怪时舞台中心偏上) */
+function monCenterPx(): { x: number; y: number } | null {
   const stage = document.getElementById("stage");
-  const layer = document.getElementById("fx-layer");
-  if (!stage || !layer) return;
-  const cls = cls0 ?? g.classId;
-  if (!cls) return;
+  if (!stage) return null;
   const sr = stage.getBoundingClientRect();
   const art = stage.querySelector<HTMLElement>(".mon-art");
-  let hx: number, hy: number;
   if (art) {
     const ar = art.getBoundingClientRect();
-    hx = ar.left + ar.width / 2 - sr.left;
-    hy = ar.top + ar.height / 2 - sr.top;
-  } else {
-    hx = sr.width / 2;
-    hy = sr.height * 0.42;
+    return { x: ar.left + ar.width / 2 - sr.left, y: ar.top + ar.height / 2 - sr.top };
   }
+  return { x: sr.width / 2, y: sr.height * 0.42 };
+}
+
+/** 职业·战士/法师/射手的普攻形态;crit 时放大提亮。命中点取怪物中心(无怪时舞台中心)。 */
+function playAttackFx(cls0?: string, crit = false): void {
+  const layer = document.getElementById("fx-layer");
+  const cls = cls0 ?? g.classId;
+  if (!layer || !cls) return;
+  const p = monCenterPx();
+  if (!p) return;
+  const { x: hx, y: hy } = p;
   const c = crit ? " crit" : "";
   if (cls === "warrior") {
     fxSpawn("fx-slash" + c, hx, hy,
@@ -875,6 +949,7 @@ function renderNow(): void {
   renderAltar(st);
   renderSettings(st);
   renderOverlays(st);
+  renderGearModal(st);
 }
 
 function renderTop(st: State): void {
@@ -1048,27 +1123,17 @@ function renderBattle(st: State): void {
 function renderHeroPage(st: State): void {
   if (!st.class_id) { $("hero-detail").innerHTML = ""; return; }
   const h = st.hero;
-  let slots = "";
+  // 装备框:装备 6 槽,点击槽位弹详情(属性与强化/洗练/卸下);遗物在塔页更换
+  let frame = "";
   for (const s of ["weapon", "helmet", "armor", "boots", "amulet", "ring"]) {
     const it = st.equip[s];
-    if (!it) {
-      slots += `<div class="slot-card"><div class="slot-l"><div class="sl">${slotName(s)}</div>` +
-        `<div class="nm eq-empty">— 空 —</div></div>` +
-        `<div class="slot-m" style="color:var(--dim)">尚未装备</div></div>`;
-      continue;
-    }
-    slots +=
-      `<div class="slot-card"><div class="slot-l"><div class="sl">${slotName(s)} · 评分 ${fmt(it.score)}</div>` +
-        `<div class="nm c-${it.rcolor}">${esc(it.name)}</div>` +
-        `<div class="sub">+${it.plus} · 全属性${pctTxt(it.pb)}</div></div>` +
-      `<div class="slot-m"><div>${itemMainLine(it)}</div>` +
-        `<div class="af">${esc(itemAffixLine(it) || "无词缀")}</div></div>` +
-      `<div class="slot-r">` +
-        `<button class="btn mini" data-cmd="enhance" data-a="${s}">强化 ◈${fmt(it.ecost)}</button>` +
-        `<button class="btn mini" data-cmd="enhance_multi" data-a="${s}" title="连续强化10次(钱不够自动停)">⚒×10</button>` +
-        `<button class="btn mini" data-cmd="reforge" data-a="${s}" title="按品质洗词条">洗✦${st.reforge_stones}</button>` +
-        `<button class="btn mini" data-cmd="unequip" data-a="${s}">卸下</button>` +
-      `</div></div>`;
+    frame += `<div class="gear-slot" data-gear="slot:${s}">` +
+      `<div class="sl">${slotName(s)}</div>` +
+      (it
+        ? `<div class="nm c-${it.rcolor}">${esc(it.name)}${it.plus ? ` <span style="color:#5adfff">+${it.plus}</span>` : ""}</div>` +
+          `<div class="sub">评分 ${fmt(it.score)} · 主属性${pctTxt(it.pb)}</div>`
+        : `<div class="nm eq-empty">— 空 —</div><div class="sub">击败怪物获取</div>`) +
+      `</div>`;
   }
   const xpPct = Math.min(100, st.xp / st.xp_req * 100);
   const pw = st.power;
@@ -1090,7 +1155,8 @@ function renderHeroPage(st: State): void {
     (pw ? `<div style="color:var(--dim);font-size:11.5px;margin:0 0 12px">` +
       `战力构成:输出 ${fmt(pw.offense)} · 生存 ${fmt(pw.defense)} · 功能 ${fmt(pw.utility)}` +
       `(按第 ${Math.max(1, st.stats.max_zone)} 区假人折算,含生效增益)</div>` : "") +
-    slots;
+    `<h3 style="margin-top:16px"><span class="dot"></span>装备框 · 点击槽位查看属性与操作</h3>` +
+    `<div class="gear-frame">${frame}</div>`;
 }
 
 /** 一键出售的品质档(≤ 该档全卖);UI 会话级状态,默认精良(原「普通/精良」行为) */
@@ -1106,7 +1172,7 @@ function renderBag(st: State): void {
       `<div class="sub">${it.slot_name} · ${it.rname} · ${it.affixes.length}词缀 · T${it.tier}</div>` +
       `<div class="lines">${esc(itemMainLine(it))}<br>${esc(itemAffixLine(it) || "")}</div>` +
       `<div class="ops">` +
-        `<button class="btn mini" data-cmd="equip" data-a="${i}">装备</button>` +
+        `<button class="btn mini" data-cmd="gear_cmp_item" data-a="${i}" title="对比当前装备后再决定">装备▾</button>` +
         `<button class="btn mini" data-cmd="dismantle" data-a="${i}">分解◈${fmt(it.dgold)}${it.dstones ? "✦" + it.dstones : ""}</button>` +
         `<button class="btn mini" data-cmd="sell" data-a="${i}">出售</button>` +
       `</div></div>`;
@@ -1173,7 +1239,7 @@ function renderSkills(st: State): void {
     (s.unlocked
       ? `<div class="sk-ops">` +
         (maxed
-          ? `<div class="cost" style="color:var(--dim)">基础已满 Lv.${D.BAL.skill_lv_max}·装备加成仍生效</div>`
+          ? `<div class="cost" style="color:var(--dim)">基础已满 Lv.${D.BAL.skill_lv_max}·装备/遗物单技能加成仍生效</div>`
           : `<div class="cost">升级 ◈${fmt(s.cost)}</div>` +
             `<button class="btn mini" data-cmd="skill_up" data-a="${s.id}">升级</button>`) +
         (s.equipped
@@ -1236,7 +1302,18 @@ function renderTower(st: State): void {
   const reach = tw.max_floor + 1;   // 下一层(爬塔起点)
   const boss = reach % D.TOWER.boss_every === 0;
   const p = Math.min(100, tw.max_floor / reach * 100);
-  const nRelics = st.relics.filter(Boolean).length;
+
+  // 遗物 4 槽:塔页更换,点击弹详情(与角色页装备框同款交互)
+  let relicFrame = "";
+  st.relics.forEach((r, i) => {
+    relicFrame += `<div class="gear-slot relic" data-gear="relic:${i}">` +
+      `<div class="sl">遗物${i + 1}</div>` +
+      (r
+        ? `<div class="nm c-${r.rcolor}">${esc(r.name)}</div>` +
+          `<div class="sub">${r.rname} T${r.tier} · ${r.effects.length}效果</div>`
+        : `<div class="nm eq-empty">— 空 —</div><div class="sub">爬塔通关获取</div>`) +
+      `</div>`;
+  });
 
   let html =
     `<h3><span class="dot"></span>深渊塔 · 钥匙 ×${tw.keys}(每日 ${D.TOWER.keys_per_day} 把)` +
@@ -1257,25 +1334,11 @@ function renderTower(st: State): void {
     `</span></div>` +
     `<div class="bar q lg"><div class="fill" style="width:${p}%"></div>` +
       `<div class="num">第1层 → 第${tw.max_floor}层 · 下一层 第${reach}层</div></div>` +
-    `<h3 style="margin-top:16px"><span class="dot"></span>遗物 · ${nRelics}/4 槽(通关必得,空槽优先装满)</h3>`;
+    `<h3 style="margin-top:16px"><span class="dot"></span>遗物 · 4 槽(通关必得,空槽优先装满)` +
+    `<span style="color:var(--dim);font-size:12px;font-weight:400;margin-left:8px">点击槽位查看详情</span></h3>` +
+    `<div class="gear-frame">${relicFrame}</div>`;
 
-  st.relics.forEach((r, i) => {
-    if (!r) {
-      html += `<div class="slot-card"><div class="slot-l"><div class="sl">遗物${i + 1}</div>` +
-        `<div class="nm eq-empty">— 空 —</div></div>` +
-        `<div class="slot-m" style="color:var(--dim)">通关塔层掉落遗物,自动装入空槽</div></div>`;
-      return;
-    }
-    const effs = r.effects
-      .map(e => `◈ ${e.name} +${e.unit === "级" ? Math.round(e.val) : pctTxt(e.val)}${e.unit}`)
-      .join(" &nbsp; ");
-    html += `<div class="slot-card"><div class="slot-l"><div class="sl">遗物${i + 1} · ${r.rname} T${r.tier}</div>` +
-      `<div class="nm c-${r.rcolor}">${esc(r.name)}</div></div>` +
-      `<div class="slot-m"><div class="af">${effs}</div></div>` +
-      `<div class="slot-r"><button class="btn mini" data-cmd="unequip_relic" data-a="${i}">卸下</button></div></div>`;
-  });
-
-  // ---- 遗物背包(换装/分解/扩容;满槽装备=替换效果最少的一件) ----
+  // ---- 遗物背包(换装对比/分解/扩容;满槽装备=替换效果最少的一件) ----
   const nBag = st.relic_bag.length;
   const bagFull = nBag >= st.relic_bag_cap;
   const upCost = st.relic_bag_cost;
@@ -1299,8 +1362,8 @@ function renderTower(st: State): void {
         `<div class="nm c-${r.rcolor}">${esc(r.name)}</div></div>` +
         `<div class="slot-m"><div class="af">${effs}</div></div>` +
         `<div class="slot-r">` +
-        `<button class="btn mini" data-cmd="relic_equip" data-a="${i}"` +
-          ` title="装上;4槽全满时自动替换效果最少的一件">装备</button>` +
+        `<button class="btn mini" data-cmd="gear_cmp_relic" data-a="${i}"` +
+          ` title="对比目标槽后决定;4槽全满时替换效果最少的一件">装备▾</button>` +
         `<button class="btn mini" data-cmd="relic_dismantle" data-a="${i}" title="分解得 1 颗重铸石(洗练用)">分解✦1</button>` +
         `</div></div>`;
     });
@@ -1464,6 +1527,154 @@ function renderSwapModal(p: NonNullable<State["pending_swap"]>): void {
   $("swap-body").innerHTML = `<div class="swap-grid">${cols}</div>`;
 }
 
+// ---------------------------------------------------------------- 装备框详情 / 换装对比
+type GearView = {
+  mode: "slot" | "relic" | "cmp-item" | "cmp-relic";
+  slot?: string;              // slot:装备部位
+  idx?: number;               // relic:遗物槽位
+  item?: Item;                // cmp-item:背包中的新装备(对象引用,防索引漂移)
+  relic?: Relic;              // cmp-relic:背包中的新遗物
+};
+let gearView: GearView | null = null;
+let gearDeltaCache: { src: object; delta: number } | null = null;
+
+/** 装备详情单列(与换装对比同款卡片,含全部属性行) */
+function gearItemCol(it: ItemUI, tag: string, extra = ""): string {
+  const affixes = it.affixes.map(a =>
+    `<div>◈ ${a.name} +${a.val}${a.pct ? "%" : ""}</div>`).join("");
+  const innate = it.innate ? `<div>✦ ${it.innate.name} +${it.innate.val}%</div>` : "";
+  return `<div class="swap-col${extra ? " " + extra : ""}">` +
+    `<div class="sw-tag">${tag}</div>` +
+    `<div class="nm c-${it.rcolor}">${esc(it.name)}${it.plus ? ` +${it.plus}` : ""}</div>` +
+    `<div class="sw-line">${it.slot_name} · ${it.rname} · Lv.${it.tier}</div>` +
+    `<div class="af"><div>主属性 ${it.main.name} +${it.main.val}${it.main.pct ? "%" : ""}</div>${innate}${affixes}</div>` +
+    `<div class="sw-score">评分 ${fmt(it.score)} · 主属性+${pctTxt(it.pb)}</div>` +
+    (extra === "new" ? "" : "") + `</div>`;
+}
+
+function gearRelicCol(r: RelicUI, tag: string, extra = ""): string {
+  const effs = r.effects
+    .map(e => `<div>◈ ${e.name} +${e.unit === "级" ? Math.round(e.val) : pctTxt(e.val)}${e.unit}</div>`).join("");
+  return `<div class="swap-col${extra ? " " + extra : ""}">` +
+    `<div class="sw-tag">${tag}</div>` +
+    `<div class="nm c-${r.rcolor}">${esc(r.name)}</div>` +
+    `<div class="sw-line">${r.rname} · T${r.tier} · ${r.effects.length} 条效果</div>` +
+    `<div class="af">${effs}</div></div>`;
+}
+
+function powerDeltaLine(delta: number): string {
+  return `<div class="sw-pow">战力变化 ` +
+    (delta >= 0
+      ? `<span class="sw-up">+${fmt(delta)}</span>`
+      : `<span style="color:#ff8a8a;font-weight:700">−${fmt(Math.abs(delta))}</span>`) +
+    `</div>`;
+}
+
+function renderGearModal(st: State): void {
+  const m = $("gear-modal");
+  if (!gearView || !st.class_id) { m.classList.remove("show"); return; }
+  m.classList.add("show");
+  const title = $("gear-title"), sub = $("gear-sub"), body = $("gear-body"), ops = $("gear-ops");
+  const v = gearView;
+
+  if (v.mode === "slot") {
+    const s = v.slot!;
+    const it = st.equip[s];
+    title.textContent = `${slotName(s)} · 装备详情`;
+    if (!it) {
+      sub.textContent = "该部位尚未装备,击败怪物可获得掉落";
+      body.innerHTML = `<div class="swap-grid"><div class="swap-col">` +
+        `<div class="nm eq-empty">— 空 —</div></div></div>`;
+      ops.innerHTML = "";
+      return;
+    }
+    sub.textContent = "强化只提升主属性与固有;词缀靠洗练";
+    body.innerHTML = `<div class="swap-grid">${gearItemCol(it, "当前装备")}</div>`;
+    ops.innerHTML =
+      `<button class="btn" data-cmd="enhance" data-a="${s}">强化 ◈${fmt(it.ecost)}</button>` +
+      `<button class="btn" data-cmd="enhance_multi" data-a="${s}" title="连续强化10次(钱不够自动停)">⚒×10</button>` +
+      `<button class="btn" data-cmd="reforge" data-a="${s}" title="按品质洗词条(幸运提升值域)">洗✦${st.reforge_stones}</button>` +
+      `<button class="btn warn" data-cmd="unequip" data-a="${s}">卸下</button>`;
+    return;
+  }
+
+  if (v.mode === "relic") {
+    const r = st.relics[v.idx ?? 0];
+    title.textContent = `遗物${(v.idx ?? 0) + 1} · 详情`;
+    if (!r) {
+      sub.textContent = "空槽:爬塔通关必得遗物,自动装入空槽";
+      body.innerHTML = `<div class="swap-grid"><div class="swap-col">` +
+        `<div class="nm eq-empty">— 空 —</div></div></div>`;
+      ops.innerHTML = "";
+      return;
+    }
+    sub.textContent = "遗物来自深渊塔,效果常驻生效";
+    body.innerHTML = `<div class="swap-grid">${gearRelicCol(r, "当前遗物")}</div>`;
+    ops.innerHTML = `<button class="btn warn" data-cmd="unequip_relic" data-a="${v.idx}">卸下</button>`;
+    return;
+  }
+
+  if (v.mode === "cmp-item") {
+    const newItem = v.item!;
+    const live = g.bag.includes(newItem) ? newItem : null;   // 背包已变动(分解/售出)则失效
+    if (!live) { gearView = null; m.classList.remove("show"); return; }
+    const n = itemUI(live);
+    const cur = st.equip[live.slot] ?? null;
+    title.textContent = `⚔ 换装对比 · ${n.slot_name}`;
+    sub.textContent = cur ? "对比当前装备与背包中的新装备,选择要用的" : "该部位为空,直接穿上";
+    let delta: number;
+    if (gearDeltaCache?.src === live) delta = gearDeltaCache.delta;
+    else {
+      const after = powerWithEquip(g, live.slot, live);
+      delta = after.total - heroPower(g, false).total;
+      gearDeltaCache = { src: live, delta };
+    }
+    const scoreLine = cur
+      ? ` <span class="sw-up">(评分 ${Math.trunc(n.score - cur.score) >= 0 ? "+" : ""}${fmt(Math.trunc(n.score - cur.score))})</span>` : "";
+    body.innerHTML = `<div class="swap-grid">` +
+      (cur ? gearItemCol(cur, "当前装备") : `<div class="swap-col"><div class="sw-tag">当前装备</div><div class="nm eq-empty">— 空 —</div></div>`) +
+      gearItemCol(n, "新的装备", "new") +
+      `</div>` + powerDeltaLine(delta) +
+      (cur ? `<div class="sw-score" style="text-align:center">新装备评分 ${fmt(n.score)}${scoreLine}</div>` : "");
+    ops.innerHTML =
+      `<button class="btn big sell-on" data-cmd="gear_take_item">✦ 换上新的</button>` +
+      `<button class="btn big" data-cmd="gear_close">保留现在的</button>`;
+    return;
+  }
+
+  // cmp-relic
+  const newRelic = v.relic!;
+  const liveIdx = g.relicBag.indexOf(newRelic);
+  if (liveIdx < 0) { gearView = null; m.classList.remove("show"); return; }
+  const n = relicUI(newRelic);
+  let target = g.relics.findIndex(r => !r);
+  if (target < 0) {
+    let worstN = 99;
+    g.relics.forEach((r, i) => {
+      if (r && r.effects.length < worstN) { worstN = r.effects.length; target = i; }
+    });
+  }
+  const cur = st.relics[target] ?? null;
+  title.textContent = `◆ 装遗物对比 · 目标槽 遗物${target + 1}`;
+  sub.textContent = cur
+    ? "遗物槽全满:将替换效果最少的一件(旧件回到背包)"
+    : `装入空槽 遗物${target + 1}`;
+  let delta: number;
+  if (gearDeltaCache?.src === newRelic) delta = gearDeltaCache.delta;
+  else {
+    const after = powerWithRelic(g, target, newRelic);
+    delta = after.total - heroPower(g, false).total;
+    gearDeltaCache = { src: newRelic, delta };
+  }
+  body.innerHTML = `<div class="swap-grid">` +
+    (cur ? gearRelicCol(cur, "当前遗物") : `<div class="swap-col"><div class="sw-tag">当前遗物</div><div class="nm eq-empty">— 空 —</div></div>`) +
+    gearRelicCol(n, "新的遗物", "new") +
+    `</div>` + powerDeltaLine(delta);
+  ops.innerHTML =
+    `<button class="btn big sell-on" data-cmd="gear_take_relic">✦ 装上新的</button>` +
+    `<button class="btn big" data-cmd="gear_close">保留现在的</button>`;
+}
+
 // ---------------------------------------------------------------- 交互
 let paused = false;
 
@@ -1498,6 +1709,13 @@ document.addEventListener("click", (e: MouseEvent) => {
   const nav = target.closest(".nav-item");
   if (nav) {
     switchTab((nav as HTMLElement).dataset.tab ?? curTab);
+    return;
+  }
+  const gearEl = target.closest<HTMLElement>("[data-gear]");
+  if (gearEl) {
+    const [kind, val] = (gearEl.dataset.gear ?? "").split(":");
+    gearView = kind === "slot" ? { mode: "slot", slot: val } : { mode: "relic", idx: Number(val) };
+    renderNow();
     return;
   }
   const el = target.closest<HTMLElement>("[data-cmd]");
@@ -1548,11 +1766,13 @@ function togglePause(): void {
 document.addEventListener("keydown", (e: KeyboardEvent) => {
   const t = e.target as HTMLElement;
   if (t.tagName === "SELECT" || t.tagName === "INPUT") return;
-  // ESC:关闭换装对比弹窗(视为稍后处理,物品留在背包)
-  if (e.key === "Escape" && document.querySelector("#swap-modal")?.classList.contains("show")) {
-    g.resolveSwap(false);
-    renderNow();
-    return;
+  // ESC:关闭换装对比/装备详情弹窗(视为稍后处理,物品留在背包)
+  if (e.key === "Escape") {
+    const swapOpen = document.querySelector("#swap-modal")?.classList.contains("show");
+    if (swapOpen) { g.resolveSwap(false); renderNow(); return; }
+    if (document.querySelector("#gear-modal")?.classList.contains("show")) {
+      gearView = null; renderNow(); return;
+    }
   }
   const tabs = ["battle", "hero", "bag", "skill", "quest", "tower",
                  "leaderboard", "altar", "settings"];
@@ -2098,6 +2318,10 @@ function boot(): void {
   $("swap-close").addEventListener("click", () => { g.resolveSwap(false); renderNow(); });
   $("swap-modal").addEventListener("click", (e: Event) => {
     if (e.target === e.currentTarget) { g.resolveSwap(false); renderNow(); }
+  });
+  $("gear-modal").addEventListener("click", (e: Event) => {
+    const t = e.target as HTMLElement;
+    if (t.id === "gear-close" || t.id === "gear-modal") { gearView = null; renderNow(); }
   });
   // 启动:仅当本机存有 Supabase 会话令牌(sb- 前缀,登录过)才加载 SDK 恢复会话;
   // 游客(绝大多数)首屏不为 ~200KB 的 SDK 买单。点登录时由 ensureCloud 按需加载。

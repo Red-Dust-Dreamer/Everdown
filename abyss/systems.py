@@ -185,6 +185,16 @@ def resolve(g, elapsed):
     lv0, zone0 = g.level, g.zone
     gold0, xp0 = g.gold, g.stats.get("gold_earned", 0)
     xp_gain_total = 0
+
+    def _buff_win(stat):
+        """药剂增益窗口:离线期间按经过时间自然消耗(与实时战斗同口径)"""
+        b = g.buffs.get(stat)
+        if b and b["until"] > g.time:
+            return b["pct"], b["until"] - g.time
+        return 0.0, 0.0
+
+    xp_pct, xp_rem = _buff_win("xp")
+    gold_pct, gold_rem = _buff_win("gold")
     guard = int(elapsed / 0.3) + 32   # 死循环保险丝
     while remaining > 1e-6 and guard > 0:
         guard -= 1
@@ -219,6 +229,8 @@ def resolve(g, elapsed):
             # 打不过:按存活时间死亡。推进态走完整退层/自动挂机;
             # 挂机层位是离线下限,原地复活再战,不被补算模型的近似误差逐次磨低
             remaining -= ttd + BAL["respawn_sec"]
+            xp_rem -= ttd + BAL["respawn_sec"]
+            gold_rem -= ttd + BAL["respawn_sec"]
             g.hero["hp"] = 0.0
             g.respawn_timer = BAL["respawn_sec"]
             if g.mode == "push":
@@ -228,13 +240,16 @@ def resolve(g, elapsed):
             rep["deaths"] += 1
             continue
         remaining -= kill_t
+        xp_rem -= kill_t
+        gold_rem -= kill_t
         # 这一杀的结算(规则与 tick 路径一致)
         g.hero["hp"] = max(1.0, min(g.hero["max_hp"],
                                     g.hero["hp"] - kill_t * net
                                     + g.hero["max_hp"] * 0.08))
         g.stats["kills"] += 1
         rep["kills"] += 1
-        gold = mob_gold(mon.tier) * (1 + g.hero["goldfind"] / 100.0)
+        gold = mob_gold(mon.tier) * (1 + g.hero["goldfind"] / 100.0
+                                     + (gold_pct if gold_rem > 0 else 0.0) / 100.0)
         if mon.boss:
             gold *= BAL["boss_gold"]
             g.stats["boss_kills"] += 1
@@ -245,7 +260,8 @@ def resolve(g, elapsed):
             gold *= BAL["elite_gold"]
         g.gold += int(gold)
         g.stats["gold_earned"] += int(gold)
-        xp = int(mob_xp(mon.tier))
+        xp = int(mob_xp(mon.tier) * (1 + g.hero.get("xp_pct", 0.0) / 100.0
+                                     + (xp_pct if xp_rem > 0 else 0.0) / 100.0))
         xp_gain_total += xp
         g.gain_xp(xp)
         g.quest_progress("kill", 1)
@@ -255,7 +271,8 @@ def resolve(g, elapsed):
         if g.rng.random() < chance:
             item = roll_item(mon.tier, rng=g.rng, luck=g.hero.get("luck", 0.0),
                              min_idx=(2 if mon.boss else 0),
-                             boost=(0.6 if mon.boss else (0.25 if mon.elite else 0.0)))
+                             boost=(0.6 if mon.boss else (0.25 if mon.elite else 0.0)),
+                             cls=g.class_id)
             if len(rep["items"]) < BAL["offline_item_cap"]:
                 rep["items"].append(item)  # 报告展示截断;游戏内照常入包
             g.add_item(item)

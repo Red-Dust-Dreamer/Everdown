@@ -1,6 +1,6 @@
 /** 技能引擎:主动施放(数据驱动)+ 被动数值聚合与钩子查询(与 abyss/skills.py 一致) */
 import { c, fmt } from "./ansi.ts";
-import { CLASSES, PASSIVE_DEF } from "./data.ts";
+import { BAL, CLASSES, PASSIVE_DEF } from "./data.ts";
 import type { ActiveSkill, PassiveSkill } from "./data.ts";
 import { _dmg } from "./combat.ts";
 import type { Game } from "./game.ts";
@@ -16,7 +16,10 @@ export function equipSkillLv(g: Game): number {
 }
 
 export function effLv(g: Game, sid: string): number {
-  // 技能有效等级 = 自身等级(1~10) + 装备词缀加成 + 遗物单技能加成
+  // 技能有效等级 = 自身等级(1~10,金币升级上限)
+  //   + 全技能词缀(旧档未绑定词条的聚合加成)
+  //   + 单技能词缀(roll 时随机绑定,只加该技能,且不推过 skill_lv_max)
+  //   + 遗物单技能加成(skill_lv_r,塔奖励,可超上限)
   let relicLv = 0;
   for (const r of g.relics) {
     if (r && r.skillId === sid) {
@@ -25,7 +28,14 @@ export function effLv(g: Game, sid: string): number {
       }
     }
   }
-  return Math.max(1, g.skillLv[sid] ?? 1) + equipSkillLv(g) + relicLv;
+  let eqOne = 0;
+  for (const it of Object.values(g.equip)) {
+    if (it.skillSid !== sid) continue;
+    for (const a of it.affixes) if (a.id === "skill_lv") eqOne += Math.trunc(a.val);
+  }
+  const base = Math.max(1, g.skillLv[sid] ?? 1);
+  eqOne = Math.min(eqOne, Math.max(0, BAL.skill_lv_max - base));
+  return base + equipSkillLv(g) + eqOne + relicLv;
 }
 
 export function skillVal(def: { base: number; per?: number }, lv: number): number {

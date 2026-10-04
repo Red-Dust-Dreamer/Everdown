@@ -2,8 +2,9 @@
 import { c, fmt, pad } from "./ansi.ts";
 import type { PyRandom } from "./rng.ts";
 import {
-  AFFIX_DEF, AFFIX_SUFFIX, AFFIXES, BAL, CAPS, RARITIES, RARITY_IDX,
-  RARITY_PREFIX, SLOTS, SLOT_INNATE, MAIN_ROLLS, STAT_NAMES,
+  ACTIVE_DEF, ACTIVE_SKILLS, AFFIX_DEF, AFFIX_SUFFIX, AFFIXES, BAL, CAPS,
+  PASSIVE_DEF, PASSIVE_SKILLS, RARITIES, RARITY_IDX, RARITY_PREFIX, SLOTS,
+  SLOT_INNATE, MAIN_ROLLS, STAT_NAMES,
 } from "./data.ts";
 import type { StatKey } from "./data.ts";
 
@@ -37,10 +38,13 @@ export class Item {
   name: string;
   /** roll 定的主属性(防具槽生命/防御二选一);null=旧存档,回落 LEGACY_MAIN */
   mainId: StatKey | null;
+  /** skill_lv 词缀绑定的技能 id(roll 时随机,主动/被动);null=旧档未绑定,保持全技能聚合 */
+  skillSid: string | null = null;
 
   constructor(slot: string, rarity: string, tier: number, mainVal: number,
               affixes: AffixRoll[], plus = 0, name: string | null = null,
-              rng?: PyRandom, mainId: StatKey | null = null) {
+              rng?: PyRandom, mainId: StatKey | null = null,
+              skillSid: string | null = null) {
     this.slot = slot;
     this.rarity = rarity;
     this.tier = tier;
@@ -49,6 +53,13 @@ export class Item {
     this.affixes = affixes;
     this.name = name ?? this.genName(rng);
     this.mainId = mainId;
+    this.skillSid = skillSid;
+  }
+
+  /** 绑定技能名(skill_lv 词缀显示用);未绑定返回 null */
+  boundSkillName(): string | null {
+    if (!this.skillSid) return null;
+    return ACTIVE_DEF[this.skillSid]?.name ?? PASSIVE_DEF[this.skillSid]?.name ?? null;
   }
 
   private genName(rng?: PyRandom): string {
@@ -75,13 +86,16 @@ export class Item {
   }
 
   stats(): Record<string, number> {
-    const m = this.mult();
-    const pb = 1 + plusBonus(this.plus);
+    // 强化只提主属性与固有(基础数值),词条不吃强化——多词条逐级放大膨胀过快
+    const rmul = RARITIES[RARITY_IDX[this.rarity]].mainMul;
+    const m = this.mult();   // 主属性用:稀有度 × 强化
     const out: Record<string, number> = { [this.mainStat()]: this.mainVal * m };
     for (const a of this.affixes) {
-      // 百分比词缀 roll 时已按稀有度分档,只吃强化不吃倍率;数值词缀吃 倍率×强化
+      // 绑定技能的单技能词缀不进通用聚合(effLv 按 skillSid 单独生效)
+      if (a.id === "skill_lv" && this.skillSid) continue;
+      // 百分比词缀保持 roll 值;数值词缀只吃稀有度倍率(均不吃强化)
       const pct = AFFIX_DEF[a.id]?.pct;
-      out[a.id] = (out[a.id] ?? 0) + a.val * (pct ? pb : m);
+      out[a.id] = (out[a.id] ?? 0) + a.val * (pct ? 1 : rmul);
     }
     const innate = SLOT_INNATE[this.slot];
     if (innate) {
@@ -154,13 +168,14 @@ export class Item {
       affixes: this.affixes.map(a => [a.id, round2(a.val)] as [string, number]),
       name: this.name,
       ...(this.mainId ? { main_id: this.mainId } : {}),
+      ...(this.skillSid ? { skill_sid: this.skillSid } : {}),
     };
   }
 
   static fromDict(d: any): Item {
     return new Item(d.slot, d.rarity, d.tier, d.main_val,
       d.affixes.map((a: any) => ({ id: a[0] as StatKey, val: a[1] })),
-      d.plus ?? 0, d.name, undefined, d.main_id ?? null);
+      d.plus ?? 0, d.name, undefined, d.main_id ?? null, d.skill_sid ?? null);
   }
 
   rarityColor() {
@@ -185,6 +200,12 @@ export class Item {
     const isPct = PCT_MAINS.includes(mstat);
     lines.push(c("主属性:", "bright_black") + ` ${STAT_NAMES[mstat]} ${isPct ? pctStr(v) : fmt(v)}`);
     for (const a of this.affixes) {
+      // 绑定技能的单技能词缀:词条名=技能名,整级显示
+      if (a.id === "skill_lv" && this.skillSid) {
+        const nm = this.boundSkillName() ?? "技能";
+        lines.push(c("├ 词缀:", "bright_black") + ` ${nm} +${Math.trunc(a.val)}级`);
+        continue;
+      }
       const def = AFFIX_DEF[a.id];
       const av = stats[a.id] ?? 0;
       lines.push(c("├ 词缀:", "bright_black")
@@ -230,7 +251,8 @@ export function rollRarity(rng: PyRandom, luck = 0, minIdx = 0, boost = 0): numb
   return Math.max(0, minIdx);
 }
 
-export function rollItem(tier: number, rng: PyRandom, luck = 0, minIdx = 0, boost = 0): Item {
+export function rollItem(tier: number, rng: PyRandom, luck = 0, minIdx = 0, boost = 0,
+                         cls: string | null = null): Item {
   const slotDef = SLOTS[rng.randrange(SLOTS.length)];
   const rid = rollRarity(rng, luck, minIdx, boost);
   const rar = RARITIES[rid];
@@ -254,7 +276,14 @@ export function rollItem(tier: number, rng: PyRandom, luck = 0, minIdx = 0, boos
       : rng.uniform(a.lo, a.hi) + a.k * tier;
     affixes.push({ id: a.id, val });
   }
-  return new Item(slotDef.id, rar.key, tier, mainVal, affixes, 0, null, rng, pick.stat);
+  // 单技能词缀:随机绑定当前职业一个技能(主动+被动池);rng 消耗与 python 严格一致
+  let skillSid: string | null = null;
+  if (affixes.some(a => a.id === "skill_lv")) {
+    const sidPool = [...ACTIVE_SKILLS, ...PASSIVE_SKILLS]
+      .filter(s => s.cls === cls).map(s => s.id);
+    skillSid = sidPool.length ? rng.choice(sidPool) : null;
+  }
+  return new Item(slotDef.id, rar.key, tier, mainVal, affixes, 0, null, rng, pick.stat, skillSid);
 }
 
 /** 词缀斜率修正的展示信息(与 CAPS 无关,评分权重在 AFFIXES 中) */

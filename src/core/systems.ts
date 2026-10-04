@@ -168,6 +168,13 @@ export function resolve(g: Game, elapsed: number): ResolveReport {
   const lv0 = g.level, zone0 = g.zone;
   const gold0 = g.gold;
   let xpTotal = 0;
+  // 药剂增益窗口:离线期间按经过时间自然消耗(与实时战斗同口径,喝了再挂后台不白喝)
+  const buffWin = (stat: string): { pct: number; rem: number } => {
+    const b = g.buffs[stat];
+    return b && b.until > g.time ? { pct: b.pct, rem: b.until - g.time } : { pct: 0, rem: 0 };
+  };
+  const xpB = buffWin("xp"), goldB = buffWin("gold");
+  let xpRem = xpB.rem, goldRem = goldB.rem;
   let guard = Math.trunc(elapsed / 0.3) + 32;
   while (remaining > 1e-6 && guard > 0) {
     guard--;
@@ -203,6 +210,8 @@ export function resolve(g: Game, elapsed: number): ResolveReport {
       // 打不过:按存活时间死亡。推进态走完整退层/自动挂机;
       // 挂机层位是离线下限,原地复活再战,不被补算模型的近似误差逐次磨低
       remaining -= ttd + BAL.respawn_sec;
+      xpRem -= ttd + BAL.respawn_sec;
+      goldRem -= ttd + BAL.respawn_sec;
       g.hero.hp = 0;
       g.respawnTimer = BAL.respawn_sec;
       if (g.mode === "push") g.retreatStage();
@@ -211,11 +220,14 @@ export function resolve(g: Game, elapsed: number): ResolveReport {
       continue;
     }
     remaining -= killT;
+    xpRem -= killT;
+    goldRem -= killT;
     g.hero.hp = Math.max(1, Math.min(g.hero.max_hp,
       g.hero.hp - killT * net + g.hero.max_hp * 0.08));
     g.stats.kills += 1;
     rep.kills += 1;
-    let gold = mobGold(mon.tier) * (1 + g.hero.goldfind / 100);
+    let gold = mobGold(mon.tier)
+      * (1 + g.hero.goldfind / 100 + (goldRem > 0 ? goldB.pct : 0) / 100);
     if (mon.boss) {
       gold *= BAL.boss_gold;
       g.stats.boss_kills += 1;
@@ -226,7 +238,8 @@ export function resolve(g: Game, elapsed: number): ResolveReport {
     }
     g.gold += Math.trunc(gold);
     g.stats.gold_earned += Math.trunc(gold);
-    const xp = Math.trunc(mobXp(mon.tier));
+    const xp = Math.trunc(mobXp(mon.tier)
+      * (1 + (g.hero.xp_pct ?? 0) / 100 + (xpRem > 0 ? xpB.pct : 0) / 100));
     xpTotal += xp;
     g.gainXp(xp);
     g.questProgress("kill", 1);
@@ -234,7 +247,7 @@ export function resolve(g: Game, elapsed: number): ResolveReport {
     if (mon.boss) chance = BAL.boss_drop;
     if (g.rng.random() < chance) {
       const item = rollItem(mon.tier, g.rng, g.hero.luck ?? 0,
-        mon.boss ? 2 : 0, mon.boss ? 0.6 : mon.elite ? 0.25 : 0);
+        mon.boss ? 2 : 0, mon.boss ? 0.6 : mon.elite ? 0.25 : 0, g.classId);
       if (rep.items.length < BAL.offline_item_cap) rep.items.push(item);
       g.addItem(item);
       if (RARITY_IDX[item.rarity] >= 2) g.questProgress("loot", 1);

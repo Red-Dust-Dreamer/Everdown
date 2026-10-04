@@ -4,12 +4,12 @@
 # ---------------------------------------------------------------- 稀有度
 # (键, 名称, 颜色, 词缀数, 主属性系数, 基础掉落权重)
 RARITIES = [
-    ("common",    "普通", "bright_black",   1, 1.00, 55.0),
-    ("fine",      "精良", "green",          2, 1.12, 25.0),
-    ("rare",      "稀有", "bright_blue",    2, 1.28, 12.0),
-    ("epic",      "史诗", "bright_magenta", 3, 1.48, 5.5),
-    ("legendary", "传说", "bright_yellow",  3, 1.75, 2.0),
-    ("mythic",    "神话", "bright_red",     4, 2.10, 0.5),
+    ("common",    "普通", "bright_black",   1, 1.00, 58.0),
+    ("fine",      "精良", "green",          2, 1.12, 25.5),
+    ("rare",      "稀有", "bright_blue",    2, 1.28, 11.0),
+    ("epic",      "史诗", "bright_magenta", 3, 1.48, 4.2),
+    ("legendary", "传说", "bright_yellow",  3, 1.75, 1.4),
+    ("mythic",    "神话", "bright_red",     4, 2.10, 0.07),
 ]
 RARITY_IDX = {r[0]: i for i, r in enumerate(RARITIES)}
 RARITY_NAMES_CN = ["普通", "精良", "稀有", "史诗", "传说", "神话"]
@@ -64,7 +64,9 @@ AFFIXES = [
     ("crit_dmg",  "暴击伤害", 8.0, 16.0, 0.0, True,  2.8, 10.0),
     ("lifesteal", "吸血",     1.0, 2.5, 0.0,  True,  7.0, 1.0),
     ("goldfind",  "金币加成", 5.0, 12.0, 0.0, True,  1.8, 6.0),
-    ("skill_lv",  "全技能等级", 0.3, 0.8, 0.0, False, 11.0, 0),
+    ("skill_lv",  "全技能等级", 1.0, 1.0, 0.0, False, 11.0, 0),
+    # ↑ 新掉落 roll 时随机绑定当前职业一个技能(主动/被动池),词缀名显示为技能名,
+    #   只加该技能且不推过 skill_lv_max;name 仅作旧存档未绑定词条的回显(全技能聚合)
     ("luck",      "幸运",     2.0, 5.0, 0.0,  True,  5.0, 3.0),
 ]
 AFFIX_DEF = {a[0]: a for a in AFFIXES}
@@ -79,7 +81,7 @@ STAT_NAMES = {
     "gold": "金币", "xp": "经验", "all": "全属性",
 }
 # 百分比词缀上限(最终汇总时截断)
-CAPS = {"haste": 150.0, "crit": 75.0, "lifesteal": 25.0, "luck": 200.0,
+CAPS = {"haste": 150.0, "crit": 75.0, "lifesteal": 25.0, "luck": 50.0,
         "skill_dmg": 300.0, "cd_reduce": 40.0, "dodge": 40.0,
         "armor_pierce": 50.0, "xp_pct": 200.0}
 
@@ -516,12 +518,12 @@ QUEST_TYPES = [
 # ---------------------------------------------------------------- 深渊祭坛(金币→永久属性;与 TS 同构)
 # (id, 名称, 图标, 属性, op, 每级收益)  op: pct=百分比乘区 / add=点数
 ALTAR_LINES = [
-    ("power",  "力量祭坛", "⚔", "atk",      "pct", 1.0),
-    ("vigor",  "生命祭坛", "❤", "hp",       "pct", 2.0),
-    ("guard",  "守护祭坛", "🛡", "def",      "pct", 2.0),
-    ("edge",   "锋锐祭坛", "🗡", "crit_dmg", "add", 1.0),
-    ("swift",  "迅捷祭坛", "💨", "haste",    "add", 0.5),
-    ("greed",  "贪婪祭坛", "◈", "goldfind", "add", 1.5),
+    ("power",  "力量祭坛", "⚔", "atk",      "pct", 0.4),
+    ("vigor",  "生命祭坛", "❤", "hp",       "pct", 1.0),
+    ("guard",  "守护祭坛", "🛡", "def",      "pct", 1.0),
+    ("edge",   "锋锐祭坛", "🗡", "crit_dmg", "add", 0.5),
+    ("swift",  "迅捷祭坛", "💨", "haste",    "add", 0.3),
+    ("greed",  "贪婪祭坛", "◈", "goldfind", "add", 0.5),
 ]
 
 # ---------------------------------------------------------------- 临时药剂(30 分钟增益,buff 管道;与 TS 同构)
@@ -582,7 +584,8 @@ BAL = {
     "bag_size": 40,
     "quest_daily_limit": 10,  # 每日完成悬赏上限(本地 0 点重置;与 TS 主实现同构)
     "altar_cost0": 200, "altar_cost_lv": 80, "altar_cost_lv2": 10, "altar_cost_t": 3,
-    "potion_cost_k": 300,        # 药剂价格 = k × 当前层击杀金(30 分钟)
+    "potion_cost0": 10000,       # 药剂初始价;每购买一次价格翻倍(30 分钟增益)
+    "potion_cost_cap": 1000000,  # 药剂单次购买价格上限
     "tower_key_extra": 10,       # 每日可加购钥匙数(免费 3 把之外)
     "tower_key_cost_k": 150,     # 第 n 把加购价格 = k × n × 击杀金
     "bag_expand_step": 10,       # 背包每次扩容格数

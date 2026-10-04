@@ -90,6 +90,7 @@ export class Game {
   questRerollCount = 0;       // 今日悬赏刷新次数(上限 BAL.quest_reroll_max)
   towerKeysBought = 0;        // 今日已加购塔钥匙数(上限 BAL.tower_key_extra)
   altarLv: Record<string, number> = {};   // 深渊祭坛各线等级(金币→永久属性)
+  potionBought: Record<string, number> = {};   // 药剂已购次数(价格翻倍阶梯,按种类独立)
   bagExpLv = 0;               // 背包扩容次数(每 +1 扩 BAL.bag_expand_step 格,至 bag_expand_max)
   questDailyDate = "";        // 本地日期 YYYY-MM-DD,跨日重置计数
   events: [string, string, string][] = [];
@@ -895,9 +896,10 @@ export class Game {
     }
   }
 
-  /** 药剂价格 = k × 当前层击杀金(30 分钟增益,同键续时不叠加) */
+  /** 药剂价格:初始价 × 2^已购次数,单次封顶(每种药剂独立计价) */
   potionCost(pid: string): number {
-    return Math.round(BAL.potion_cost_k * mobGold(tierOf(this.zone, this.stage)));
+    const n = this.potionBought[pid] ?? 0;
+    return Math.round(Math.min(BAL.potion_cost0 * 2 ** n, BAL.potion_cost_cap));
   }
   usePotion(pid: string): void {
     const def = POTIONS.find(p => p.id === pid);
@@ -905,6 +907,7 @@ export class Game {
     const cost = this.potionCost(pid);
     if (this.gold < cost) { this.toast(`金币不足(需要 ${fmt(cost)})`); return; }
     this.gold -= cost;
+    this.potionBought[pid] = (this.potionBought[pid] ?? 0) + 1;
     S.addBuff(this, def.buff, def.pct, def.dur);
     this.log(`${def.icon} 饮下${def.name}:30 分钟内${def.buff === "atk" ? "攻击" : def.buff === "xp" ? "经验" : "金币"} +${def.pct}%`,
       "bright_green");
@@ -1050,6 +1053,7 @@ export class Game {
       quest_reroll_count: this.questRerollCount,
       tower_keys_bought: this.towerKeysBought,
       altar_lv: this.altarLv,
+      potion_bought: this.potionBought,
       bag_exp_lv: this.bagExpLv,
       relics: this.relics.map(r => r ? r.toDict() : null),
       // pendingSwap 不序列化;待确认的新遗物并入存档背包,避免关页丢失
@@ -1124,6 +1128,7 @@ export class Game {
     g.questRerollCount = d.quest_reroll_count ?? 0;
     g.towerKeysBought = d.tower_keys_bought ?? 0;
     g.altarLv = d.altar_lv ?? {};
+    g.potionBought = d.potion_bought ?? {};
     g.bagExpLv = d.bag_exp_lv ?? 0;
     g.emaKill = d.ema_kill ?? 0;
     g.recalcHero();

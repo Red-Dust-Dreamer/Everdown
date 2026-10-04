@@ -26,14 +26,27 @@ def equip_skill_lv(g):
 
 
 def eff_lv(g, sid):
-    """技能有效等级 = 自身等级(1~10) + 装备词缀加成 + 遗物单技能加成"""
+    """技能有效等级 = 自身等级(1~10,金币升级上限)
+      + 全技能词缀(旧档未绑定词条的聚合加成)
+      + 单技能词缀(roll 时随机绑定,只加该技能,且不推过 skill_lv_max)
+      + 遗物单技能加成(skill_lv_r,塔奖励,可超上限)"""
     relic_lv = 0
     for r in g.relics:
         if r and r.skill_id == sid:
             for eid, val in r.effects:
                 if eid == "skill_lv_r":
                     relic_lv += int(val)
-    return max(1, g.skill_lv.get(sid, 1)) + equip_skill_lv(g) + relic_lv
+    eq_one = 0
+    for it in g.equip.values():
+        if it.skill_sid != sid:
+            continue
+        for aid, val in it.affixes:
+            if aid == "skill_lv":
+                eq_one += int(val)
+    from .data import BAL
+    base = max(1, g.skill_lv.get(sid, 1))
+    eq_one = min(eq_one, max(0, BAL["skill_lv_max"] - base))
+    return base + equip_skill_lv(g) + eq_one + relic_lv
 
 
 def skill_val(defn, lv):

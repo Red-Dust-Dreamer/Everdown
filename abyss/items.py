@@ -3,7 +3,8 @@
 import random
 
 from .ansi import c, fmt
-from .data import (AFFIX_DEF, AFFIX_SUFFIX, AFFIXES, BAL, RARITIES,
+from .data import (ACTIVE_DEF, ACTIVE_SKILLS, AFFIX_DEF, AFFIX_SUFFIX, AFFIXES,
+                   BAL, PASSIVE_DEF, PASSIVE_SKILLS, RARITIES,
                    RARITY_IDX, RARITY_PREFIX, SLOTS, SLOT_IDX, SLOT_INNATE,
                    MAIN_ROLLS, STAT_NAMES, CAPS)
 
@@ -16,10 +17,11 @@ def plus_bonus(plus):
 
 
 class Item:
-    __slots__ = ("slot", "rarity", "tier", "plus", "main_val", "affixes", "name", "main_id")
+    __slots__ = ("slot", "rarity", "tier", "plus", "main_val", "affixes", "name",
+                 "main_id", "skill_sid")
 
     def __init__(self, slot, rarity, tier, main_val, affixes, plus=0, name=None, rng=None,
-                 main_id=None):
+                 main_id=None, skill_sid=None):
         self.slot = slot          # weapon/helmet/...
         self.rarity = rarity      # common/.../mythic
         self.tier = tier          # 掉落时的怪物档位
@@ -28,6 +30,14 @@ class Item:
         self.affixes = affixes    # [(id, 基础值), ...]
         self.name = name or self._gen_name(rng or random)
         self.main_id = main_id   # roll 定的主属性;None=旧存档,回落 LEGACY_MAIN
+        self.skill_sid = skill_sid  # skill_lv 词缀绑定的技能;None=旧档,保持全技能聚合
+
+    def bound_skill_name(self):
+        """绑定技能名(skill_lv 词缀显示用);未绑定返回 None"""
+        if not self.skill_sid:
+            return None
+        d = ACTIVE_DEF.get(self.skill_sid) or PASSIVE_DEF.get(self.skill_sid)
+        return d["name"] if d else None
 
     # ------------------------------------------------ 命名
     def _gen_name(self, rng):
@@ -50,13 +60,17 @@ class Item:
 
     def stats(self):
         """最终属性 dict。
-        百分比词缀 roll 时已按稀有度分档,只吃强化不吃倍率;数值词缀吃 倍率×强化。"""
-        m = self.mult()
-        pb = 1 + plus_bonus(self.plus)
+        强化只提主属性与固有(基础数值),词条不吃强化——多词条逐级放大膨胀过快;
+        百分比词缀保持 roll 值,数值词缀只吃稀有度倍率。"""
+        rmul = RARITIES[RARITY_IDX[self.rarity]][4]
+        m = self.mult()   # 主属性用:稀有度 × 强化
         out = {self._main_stat(): self.main_val * m}
         for aid, val in self.affixes:
+            # 绑定技能的单技能词缀不进通用聚合(eff_lv 按 skill_sid 单独生效)
+            if aid == "skill_lv" and self.skill_sid:
+                continue
             pct = AFFIX_DEF[aid][5]
-            out[aid] = out.get(aid, 0) + val * (pb if pct else m)
+            out[aid] = out.get(aid, 0) + val * (1 if pct else rmul)
         innate = SLOT_INNATE.get(self.slot)
         if innate:
             k, per = innate
@@ -134,13 +148,15 @@ class Item:
              "name": self.name}
         if self.main_id:
             d["main_id"] = self.main_id
+        if self.skill_sid:
+            d["skill_sid"] = self.skill_sid
         return d
 
     @classmethod
     def from_dict(cls, d):
         return cls(d["slot"], d["rarity"], d["tier"], d["main_val"],
                    [(a, v) for a, v in d["affixes"]], d.get("plus", 0), d["name"],
-                   main_id=d.get("main_id"))
+                   main_id=d.get("main_id"), skill_sid=d.get("skill_sid"))
 
     # ------------------------------------------------ 显示
     def rarity_color(self):
@@ -168,6 +184,12 @@ class Item:
         else:
             lines.append(c("主属性:", "bright_black") + " %s %s" % (STAT_NAMES[mstat], fmt(v)))
         for aid, _ in self.affixes:
+            # 绑定技能的单技能词缀:词条名=技能名,整级显示
+            if aid == "skill_lv" and self.skill_sid:
+                nm = self.bound_skill_name() or "技能"
+                lines.append(c("├ 词缀:", "bright_black")
+                             + " %s +%d级" % (nm, int([v for i, v in self.affixes if i == aid][0])))
+                continue
             v = stats.get(aid, 0)
             a = AFFIX_DEF[aid]
             if a[5]:  # 百分比
@@ -209,7 +231,7 @@ def roll_rarity(rng, luck=0.0, min_idx=0, boost=0.0):
     return max(0, min_idx)
 
 
-def roll_item(tier, rng=None, luck=0.0, min_idx=0, boost=0.0):
+def roll_item(tier, rng=None, luck=0.0, min_idx=0, boost=0.0, cls=None):
     """按怪物档位 tier 生成一件装备(全部随机走传入的 rng)。
 
     数值体系 2.0:数值型主属性 = 基值 + 槽斜率×t^p(与怪物HP同阶);
@@ -239,4 +261,11 @@ def roll_item(tier, rng=None, luck=0.0, min_idx=0, boost=0.0):
         else:
             val = rng.uniform(a[2], a[3]) + a[4] * tier
         affixes.append((a[0], val))
-    return Item(slot_def[0], rar[0], tier, main_val, affixes, rng=rng, main_id=stat)
+    # 单技能词缀:随机绑定当前职业一个技能(主动+被动池);rng 消耗与 TS 严格一致
+    skill_sid = None
+    if any(aid == "skill_lv" for aid, _ in affixes):
+        sid_pool = [s["id"] for s in ACTIVE_SKILLS + PASSIVE_SKILLS if s["cls"] == cls]
+        if sid_pool:
+            skill_sid = rng.choice(sid_pool)
+    return Item(slot_def[0], rar[0], tier, main_val, affixes, rng=rng,
+                main_id=stat, skill_sid=skill_sid)
