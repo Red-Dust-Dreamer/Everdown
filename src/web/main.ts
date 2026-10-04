@@ -493,9 +493,10 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
 }
 
 // ---------------------------------------------------------------- 音效
-// 战斗音效(CC0 复古音效,出处与许可见 public/sfx/README.txt):
-// 普攻命中 + 技能按类型分音(伤害按职业、增益/护盾/处决/多段连击各自专属)。
-// WebAudio 解码一次缓存播放;音调微变防重复感;开关存 localStorage(不进核心存档)。
+// 战斗音效(出处与许可见 public/sfx/README.txt;前 8 个 CC0 素材、后 8 个程序合成):
+// 普攻命中 + 技能分音:SFX_SKILL 表按技能配专属音(火/冰/雷/怒吼/大招/吸血/印记/位移),
+// 未配置的回落到 类型/职业 默认分音。WebAudio 解码一次缓存播放;音调微变防重复感;
+// 开关存 localStorage(不进核心存档)。
 const BASE_URL = (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL || "/";
 const SFX_KEY = "abyss_sfx";
 const SFX_FILES = ["attack-hit", "skill-heavy", "skill-magic", "skill-arrow",
@@ -590,12 +591,16 @@ const SFX_SKILL: Partial<Record<string, SfxKey>> = {
   r_sky: "skill-ult",       // 穿云箭
   r_god: "skill-ult",       // 猎神之怒(全属性大招)
 };
-/** 多段技(skill_hit 连发)的命中节拍窗口:窗口内每个 skill_hit 播小型命中闪 */
+/** 多段技(skill_hit 连发)的命中节拍窗口:窗口内每个 skill_hit 播小型命中闪(带技能主色) */
 let multiHitUntil = 0;
+let multiHitColor = "#a5ffbe";
 function playSkillCast(skillId: string): void {
   const def = SKILL_DEF.get(skillId);
   if (!def) return;
-  if (def.kind === "multi") multiHitUntil = performance.now() + 1400;
+  if (def.kind === "multi") {
+    multiHitUntil = performance.now() + 1400;
+    multiHitColor = (FX_COLORS[def.color] ?? FX_COLORS.white)[0];
+  }
   const mapped = SFX_SKILL[skillId];
   if (mapped) { playSfx(mapped); return; }
   let key: SfxKey;
@@ -660,7 +665,8 @@ function drainEvents(): void {
         if (performance.now() < multiHitUntil) {
           const p = monCenterPx();
           if (p) fxSpawn("fx-hit",
-            p.x + Math.random() * 26 - 13, p.y + Math.random() * 26 - 13);
+            p.x + Math.random() * 26 - 13, p.y + Math.random() * 26 - 13,
+            { "--fx-c": multiHitColor });
         }
       }
     }

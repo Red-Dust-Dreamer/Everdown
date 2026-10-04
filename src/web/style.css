@@ -280,12 +280,13 @@ body{
   25%{opacity:1}
   100%{transform:translate(var(--x,200px),0);opacity:1}}
 .fx-hit{position:absolute;width:26px;height:26px;animation:fxHit .2s ease-out forwards}
-.fx-hit::before,.fx-hit::after{content:"";position:absolute;background:#a5ffbe;
-  box-shadow:0 0 8px rgba(120,255,160,.9)}
+/* --fx-c 由调用方传入(多段技命中闪跟随技能主色);默认射手绿 */
+.fx-hit::before,.fx-hit::after{content:"";position:absolute;background:var(--fx-c,#a5ffbe);
+  box-shadow:0 0 8px var(--fx-c,#a5ffbe)}
 .fx-hit::before{left:50%;top:0;bottom:0;width:2px;transform:translateX(-50%)}
 .fx-hit::after{top:50%;left:0;right:0;height:2px;transform:translateY(-50%)}
 .fx-hit.crit::before,.fx-hit.crit::after{background:#e8ffcf;
-  box-shadow:0 0 12px rgba(220,255,180,1)} 
+  box-shadow:0 0 12px rgba(220,255,180,1)}
 @keyframes fxHit{0%{transform:translate(-50%,-50%) scale(.3) rotate(0deg);opacity:0}
   30%{opacity:1}
   100%{transform:translate(-50%,-50%) scale(1.15) rotate(35deg);opacity:0}}

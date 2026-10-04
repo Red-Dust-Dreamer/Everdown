@@ -4,7 +4,7 @@
  * 或自定义域名根路径),SHELL 相对路径按 SW 脚本所在 URL 解析。
  * 改动任何资源后 sw.js 字节变化即触发更新(bump VERSION 强制全刷)。
  */
-const VERSION = "v16";
+const VERSION = "v17";
 const CACHE = `abyss-idle-${VERSION}`;
 const SHELL = [
   "./",
@@ -21,6 +21,14 @@ const SHELL = [
   "./sfx/skill-buff.wav",
   "./sfx/skill-shield.wav",
   "./sfx/skill-execute.wav",
+  "./sfx/skill-fire.wav",
+  "./sfx/skill-ice.wav",
+  "./sfx/skill-zap.wav",
+  "./sfx/skill-roar.wav",
+  "./sfx/skill-ult.wav",
+  "./sfx/skill-drain.wav",
+  "./sfx/skill-mark.wav",
+  "./sfx/skill-dash.wav",
   "./mon/slime.png", "./mon/slime-boss.png",
   "./mon/wolf.png", "./mon/wolf-boss.png",
   "./mon/goblin.png", "./mon/goblin-boss.png",

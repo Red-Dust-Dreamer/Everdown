@@ -78,3 +78,12 @@ diff /tmp/state_py.json /tmp/state_ts.json
 2. FAIL / SOFT-OK 后,缩小秒数 + 换 seed 复现,再用 state_dump 双版 diff,
    找到第一个不一致的字段向下定位(装备/技能 → hero 派生 → 战斗 tick);
 3. 修复后重跑 parity.sh 直至退出码 0。
+
+## 9. gen_sfx.py — 技能音效程序合成(可选工具)
+
+```bash
+python scripts/gen_sfx.py    # 重新生成 8 个合成技能音到 src/web/public/sfx/
+```
+
+固定随机种子,产物可复现;覆盖 public/sfx 时须 bump sw.js 的 VERSION 强刷缓存。
+背景与许可说明见 src/web/public/sfx/README.txt 的 B 组注记。
