@@ -713,12 +713,17 @@ function flashMon(): void {
 }
 
 // ---------------------------------------------------------------- 英雄模型
+/** 英雄立绘开关(2026-10-05 决定暂下):false=隐藏模型,全部内容保留可随时恢复
+ *  (资产/样式/动画与恢复步骤见 docs/models.md);攻击投射物从舞台内英雄侧
+ *  锚点(约 13%,即立绘原位)发出,不再从屏幕外飞入。true=恢复立绘与全部动画。 */
+const HERO_MODEL = false;
 let heroClsCache = "";
 function heroColorOf(color: string): string {
   return (FX_COLORS[color] ?? FX_COLORS.white)[0];
 }
 /** 同步英雄模型(职业徽记/立绘 hero/<class>.png/阵亡态);仅职业变化时才动 DOM */
 function heroModelSync(st: State): void {
+  if (!HERO_MODEL) return;
   const el = $("hero-art");
   if (!el) return;
   if (st.class_id && st.class_id !== heroClsCache) {
@@ -732,23 +737,25 @@ function heroModelSync(st: State): void {
   }
   el.classList.toggle("dead", (st.respawn ?? 0) > 0);
 }
-/** 前冲打击:冲到怪物跟前命中再收回;lunge=普攻 crit=暴击 skill=技能(带技能主色) */
+/** 前冲打击:冲到怪物跟前命中再收回;lunge=普攻 crit=暴击 skill=技能(带技能主色)。
+ *  模型关闭时跳过立绘动画,但保留命中一拍(bump-mon 怪物顶退)。 */
 function heroLunge(kind: "lunge" | "crit" | "skill", color?: string): void {
+  const stage = $("stage");
+  setTimeout(() => {
+    stage.classList.add("bump-mon");
+    setTimeout(() => stage.classList.remove("bump-mon"), 130);
+  }, kind === "skill" ? 240 : 190);
+  if (!HERO_MODEL) return;
   const el = $("hero-art");
   if (!el || el.classList.contains("dead")) return;
   el.classList.remove("lunge", "crit", "skill", "hurt");
   void el.offsetWidth;   // 强制 reflow 以重触发动画
   if (color) el.style.setProperty("--hero-c", color);
   el.classList.add(kind);
-  // 命中一拍:怪物被顶退(bump-mon 位移样式本就存在,此前无触发方)
-  const stage = $("stage");
-  setTimeout(() => {
-    stage.classList.add("bump-mon");
-    setTimeout(() => stage.classList.remove("bump-mon"), 130);
-  }, kind === "skill" ? 240 : 190);
 }
 /** 受击:后撤 + 泛红闪 */
 function heroHurt(): void {
+  if (!HERO_MODEL) return;
   const el = $("hero-art");
   if (!el) return;
   el.classList.remove("lunge", "crit", "skill");
@@ -786,6 +793,22 @@ function monCenterPx(): { x: number; y: number } | null {
   return { x: sr.width / 2, y: sr.height * 0.42 };
 }
 
+/** 英雄侧发射锚点 x(舞台内像素):模型开着取立绘前沿,关着取立绘原位(舞台 13%) */
+function heroMuzzleX(): number {
+  const stage = document.getElementById("stage");
+  if (!stage) return 60;
+  if (HERO_MODEL) {
+    const hero = document.getElementById("hero-art");
+    if (hero) return hero.getBoundingClientRect().right - stage.getBoundingClientRect().left;
+  }
+  return stage.clientWidth * 0.13;
+}
+/** 英雄侧发射锚点(confetti 归一化 x) */
+function heroMuzzleNorm(): number {
+  const stage = document.getElementById("stage");
+  return stage ? heroMuzzleX() / stage.clientWidth : 0.13;
+}
+
 /** 职业·战士/法师/射手的普攻形态;crit 时放大提亮。命中点取怪物中心(无怪时舞台中心)。 */
 function playAttackFx(cls0?: string, crit = false): void {
   const layer = document.getElementById("fx-layer");
@@ -800,11 +823,13 @@ function playAttackFx(cls0?: string, crit = false): void {
       { "--r": `${Math.floor(Math.random() * 70 - 55)}deg` });
   } else if (cls === "mage") {
     const dy = Math.floor(Math.random() * 28 - 14);
-    fxSpawn("fx-bolt" + c, -34, hy + dy, { "--x": `${hx + 34}px` });
+    const x0 = heroMuzzleX();   // 从英雄侧锚点(舞台内)射向怪物,不再屏幕外飞入
+    fxSpawn("fx-bolt" + c, x0, hy + dy, { "--x": `${hx - x0}px` });
     fxSpawn("fx-burst" + c, hx, hy + dy).style.animationDelay = "160ms";
   } else if (cls === "ranger") {
     const dy = Math.floor(Math.random() * 22 - 11);
-    fxSpawn("fx-arrow" + c, -40, hy + dy, { "--x": `${hx + 40}px` });
+    const x0 = heroMuzzleX();
+    fxSpawn("fx-arrow" + c, x0, hy + dy, { "--x": `${hx - x0}px` });
     fxSpawn("fx-hit" + c, hx, hy + dy).style.animationDelay = "110ms";
   }
 }
@@ -938,11 +963,11 @@ function playSkillFx(sid: string): void {
       fire(mon, 90, 360, 42, n + 8);
       break;
     case "side":
-      fire({ x: 0.05, y: mon.y }, 25, 26, 85, Math.round(n * 0.8));
+      fire({ x: heroMuzzleNorm(), y: mon.y }, 25, 26, 85, Math.round(n * 0.8));
       fire(mon, 90, 70, 40, Math.round(n * 0.4));
       break;
     case "zip":
-      fire({ x: 0, y: mon.y }, 12, 14, 110, n);
+      fire({ x: heroMuzzleNorm(), y: mon.y }, 12, 14, 110, n);
       fire(mon, 90, 60, 30, 10);
       break;
     case "rain": {
@@ -2462,6 +2487,7 @@ function boot(): void {
     if (e.animationName !== "hero-idle")
       $("hero-art").classList.remove("lunge", "crit", "skill", "hurt");
   });
+  if (!HERO_MODEL) ($("hero-art") as HTMLElement).style.display = "none";
 
   // 调试钩子:__abyss.state() 验证推进;fx("warrior") 演示普攻特效与音效;
   // skillfx("m_meteor") 演示任意技能的粒子特效;sfxcast("w_exec") 演示技能音效;sfx() 查看音效状态;
