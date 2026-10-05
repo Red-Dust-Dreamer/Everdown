@@ -317,10 +317,10 @@ CN_NUM = ["一", "二", "三", "四", "五", "六", "七", "八", "九", "十"]
 
 # (名称, 颜色, 属性系数, 专属主动技能)
 # 技能: name/icon/cd(秒)/mult(每段伤害=攻击×mult)/hits(段数)/
-#        lifesteal(伤害全额回复自身)/defdown=(降英雄防%,秒)/atkdown=(降英雄攻%,秒)/stun(眩晕英雄秒)
+#        lifesteal(伤害全额回复自身)/defdown=(降英雄防%,秒)/atkdown=(降英雄攻%,秒)/stun(眩晕英雄秒)/slow=(降英雄攻速%,秒)
 MONSTERS = {
     "slime":     ("史莱姆", "green", 1.0,
-                  dict(name="酸液喷吐", icon="☣", cd=10, mult=1.2, hits=1, defdown=(0.30, 5))),
+                  dict(name="酸液喷吐", icon="☣", cd=10, mult=1.2, hits=1, slow=(0.35, 4))),
     "wolf":      ("恐狼", "yellow", 1.05,
                   dict(name="狂暴撕咬", icon="🐍", cd=8, mult=0.6, hits=3)),
     "goblin":    ("哥布林", "bright_green", 0.95,
@@ -341,7 +341,7 @@ MONSTERS = {
     "mushroom": ("毒蘑菇", "green", 0.95,
                  dict(name="孢子毒云", icon="☣", cd=11, mult=1.3, hits=1, atkdown=(0.20, 5))),
     "spider":   ("红背毒蛛", "red", 1.0,
-                 dict(name="缠丝连蛰", icon="🕸", cd=9, mult=0.55, hits=3, defdown=(0.25, 4))),
+                 dict(name="缠丝连蛰", icon="🕸", cd=10, mult=0.55, hits=3, defdown=(0.25, 4), stun=1.0)),
     "snake":    ("黑曼巴蛇", "bright_black", 1.05,
                  dict(name="毒牙速咬", icon="🦷", cd=9, mult=0.7, hits=3)),
     "husk":     ("肿胀腐尸", "magenta", 0.95,
@@ -352,7 +352,7 @@ MONSTERS = {
                  dict(name="甲群啃噬", icon="🐜", cd=9, mult=0.45, hits=4)),
     # ---- 散怪:强化既有主题 ----
     "drake":    ("霜翼幼龙", "bright_cyan", 1.15,
-                 dict(name="寒霜吐息", icon="❄", cd=13, mult=2.4, hits=1, atkdown=(0.25, 5))),
+                 dict(name="寒霜吐息", icon="❄", cd=13, mult=2.4, hits=1, slow=(0.30, 5))),
     "eye":      ("辉光邪眼", "bright_magenta", 1.1,
                  dict(name="疯狂凝视", icon="👁", cd=12, mult=1.9, hits=1, stun=1.0)),
 }

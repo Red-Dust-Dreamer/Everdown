@@ -149,7 +149,7 @@ npm run dev            # vite dev(root=src/web,端口 8614)
     "BAL.loadout_unlock.2": 14,
     "RARITIES.5.weight": 3,
     "ACTIVE_SKILLS.12.cd": 4,
-    "MONSTERS.slime.skill.defdown.0": 0.4
+    "MONSTERS.slime.skill.slow.0": 0.4
   }
 }
 ```

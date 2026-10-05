@@ -18,6 +18,7 @@ import { View } from "../core/view.ts";
 import { handleKey } from "../core/host.ts";
 import { renderFrame } from "../core/render.ts";
 import { BAL, CLASSES } from "../core/data.ts";
+import { Monster, battleTick } from "../core/combat.ts";
 import { pyRound, Item } from "../core/items.ts";
 import { Relic, rollRelic } from "../core/relics.ts";
 import { fmt, dwidth } from "../core/ansi.ts";
@@ -694,6 +695,62 @@ function testSellJunk(): void {
   eq(g.bag.length, 0, "≤神话档清空背包");
 }
 
+// ================================================================ 14. 怪物技能 debuff(减速/眩晕)
+function testMobSkillDebuff(): void {
+  const mem = memHooks();
+  const g = newGame(96);
+  g.chooseClass("warrior");
+  const h = g.hero;
+
+  // 工具:构造低攻高血怪(atk=0 不伤英雄),数英雄攻击事件次数
+  const mkMon = (skill: any): Monster =>
+    new Monster("测试傀儡", ["  ", "  "], "green", 1e9, 0, 0, 999, false, false, 1, skill, "slime");
+  const heroHits = (sec: number): number =>
+    g.events.filter(e => e[0] === "anim" && e[1] === "hero_attack").length;
+
+  // ---- 施放即上 debuff:slow → slow_pct/slow_until;stun → stun_until ----
+  g.monster = mkMon({ name: "酸液", icon: "x", cd: 10, mult: 1, hits: 1, slow: [0.35, 4] });
+  (g.monster as Monster).skillTimer = 10;
+  battleTick(g, 0.05);
+  ok((h.slow_until ?? 0) > g.time, "酸液施放后英雄被减速");
+  close(h.slow_pct ?? 0, 0.35, "减速幅度 35%");
+  eq(h.stun_until ?? 0, 0, "减速技能不附带眩晕");
+
+  g.monster = mkMon({ name: "缠丝", icon: "x", cd: 10, mult: 1, hits: 1, stun: 1.0 });
+  (g.monster as Monster).skillTimer = 10;
+  battleTick(g, 0.05);
+  ok((h.stun_until ?? 0) > g.time, "缠丝施放后英雄被眩晕");
+
+  // ---- 行为:眩晕期间不出手;减速期间攻击频率按 (1-pct) 下降 ----
+  const fresh = () => { g.events.length = 0; g.monster = mkMon(null); };
+  const run = (sec: number) => { for (let t = 0; t < sec; t += 0.05) battleTick(g, 0.05); };
+
+  fresh();
+  h.stun_until = g.time + 100;
+  run(5);
+  eq(heroHits(5), 0, "眩晕期间英雄不攻击");
+  h.stun_until = 0;
+
+  fresh();
+  run(10);
+  const n0 = heroHits(10);
+  ok(n0 >= 8, `基准 10 秒出手次数充足(实际 ${n0})`);
+
+  fresh();
+  h.slow_pct = 40; h.slow_until = g.time + 100;
+  run(10);
+  const n1 = heroHits(10);
+  ok(n1 > 0 && n1 <= Math.ceil(n0 * 0.6), `减速 40% 后攻击次数约为基准 6 成(基准 ${n0},实际 ${n1})`);
+
+  // ---- 存档口径:debuff 为运行时字段,不进存档 ----
+  h.slow_pct = 40; h.slow_until = g.time + 100; h.stun_until = g.time + 5;
+  g.save();
+  const g2 = Game.fromDict(JSON.parse(mem.raw));
+  ok(!("slow_until" in g2.hero) || (g2.hero.slow_until ?? 0) <= g2.time,
+    "重载存档后减速不残留");
+  ok((g2.hero.stun_until ?? 0) <= g2.time, "重载存档后眩晕不残留");
+}
+
 // ================================================================ runner
 const TESTS: [string, () => void][] = [
   ["1.RNG(MT19937 与 CPython 对拍)", testRng],
@@ -709,6 +766,7 @@ const TESTS: [string, () => void][] = [
   ["11.存档防御+遗物roll修正(损坏/luck/空装配)", testSaveDefenseAndRelicRoll],
   ["12.战力系统(计算/预览还原/buff口径)", testPower],
   ["13.一键出售品质档(默认/档位0/2/5)", testSellJunk],
+  ["14.怪物技能debuff(减速/眩晕/存档口径)", testMobSkillDebuff],
 ];
 
 let failed = 0;

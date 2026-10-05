@@ -514,14 +514,14 @@ const SFX_STYLE: Record<SfxKey, { gain: number; rateLo: number; rateHi: number; 
   "skill-buff":    { gain: 0.55, rateLo: 0.98, rateHi: 1.02, throttleMs: 120 },
   "skill-shield":  { gain: 0.55, rateLo: 0.98, rateHi: 1.02, throttleMs: 120 },
   "skill-execute": { gain: 0.6,  rateLo: 1.0,  rateHi: 1.0,  throttleMs: 150 },
-  "skill-fire":    { gain: 0.55, rateLo: 0.93, rateHi: 1.05, throttleMs: 100 },
-  "skill-ice":     { gain: 0.5,  rateLo: 0.97, rateHi: 1.08, throttleMs: 100 },
-  "skill-zap":     { gain: 0.5,  rateLo: 0.95, rateHi: 1.1,  throttleMs: 90 },
-  "skill-roar":    { gain: 0.6,  rateLo: 0.95, rateHi: 1.0,  throttleMs: 140 },
-  "skill-ult":     { gain: 0.65, rateLo: 0.98, rateHi: 1.02, throttleMs: 160 },
-  "skill-drain":   { gain: 0.5,  rateLo: 0.9,  rateHi: 1.0,  throttleMs: 120 },
-  "skill-mark":    { gain: 0.45, rateLo: 0.98, rateHi: 1.05, throttleMs: 120 },
-  "skill-dash":    { gain: 0.45, rateLo: 0.95, rateHi: 1.1,  throttleMs: 120 },
+  "skill-fire":    { gain: 0.82, rateLo: 0.93, rateHi: 1.05, throttleMs: 100 },
+  "skill-ice":     { gain: 0.78, rateLo: 0.97, rateHi: 1.08, throttleMs: 100 },
+  "skill-zap":     { gain: 0.8,  rateLo: 0.95, rateHi: 1.1,  throttleMs: 90 },
+  "skill-roar":    { gain: 0.88, rateLo: 0.95, rateHi: 1.0,  throttleMs: 140 },
+  "skill-ult":     { gain: 0.92, rateLo: 0.98, rateHi: 1.02, throttleMs: 160 },
+  "skill-drain":   { gain: 0.78, rateLo: 0.9,  rateHi: 1.0,  throttleMs: 120 },
+  "skill-mark":    { gain: 0.72, rateLo: 0.98, rateHi: 1.05, throttleMs: 120 },
+  "skill-dash":    { gain: 0.72, rateLo: 0.95, rateHi: 1.1,  throttleMs: 120 },
 };
 let sfxOn = localStorage.getItem(SFX_KEY) !== "0";
 let sfxCtx: AudioContext | null = null;
@@ -656,19 +656,26 @@ function drainEvents(): void {
       else if (text === "hero_attack") {
         // 技能伤害命中已改发 skill_hit(核心侧),不再与普攻音/特效重叠
         const crit = nextEvtIsCrit(evs, i);
+        heroLunge(crit ? "crit" : "lunge");
         playAttackFx(undefined, crit);
         playAttackHit(crit);
       } else if (text.startsWith("cast:")) {
+        const def = SKILL_DEF.get(text.slice(5));
+        heroLunge("skill", def ? heroColorOf(def.color) : undefined);
         playSkillCast(text.slice(5));
         playSkillFx(text.slice(5));
+      } else if (text === "mob_attack") {
+        heroHurt();
       } else if (text === "skill_hit") {
-        // 多段技每一下的小命中闪(单段技的施放特效已覆盖,不叠加大特效)
+        // 多段技每一下的命中节拍(单段技的施放特效已覆盖,不叠加大特效)
         if (performance.now() < multiHitUntil) {
           const p = monCenterPx();
-          if (p) fxSpawn("fx-hit",
-            p.x + Math.random() * 26 - 13, p.y + Math.random() * 26 - 13,
+          if (p) fxSpawn("fx-tick",
+            p.x + Math.random() * 36 - 18, p.y + Math.random() * 36 - 18,
             { "--fx-c": multiHitColor });
         }
+      } else if (text.startsWith("loot:")) {
+        playLootBeam(text.slice(5));
       }
     }
   }
@@ -703,6 +710,50 @@ function flashMon(): void {
   if (!el) return;
   el.classList.add("flash");
   setTimeout(() => el.classList.remove("flash"), 70);
+}
+
+// ---------------------------------------------------------------- 英雄模型
+let heroClsCache = "";
+function heroColorOf(color: string): string {
+  return (FX_COLORS[color] ?? FX_COLORS.white)[0];
+}
+/** 同步英雄模型(职业徽记/立绘 hero/<class>.png/阵亡态);仅职业变化时才动 DOM */
+function heroModelSync(st: State): void {
+  const el = $("hero-art");
+  if (!el) return;
+  if (st.class_id && st.class_id !== heroClsCache) {
+    heroClsCache = st.class_id;
+    const img = el.querySelector("img") as HTMLImageElement;
+    img.onerror = () => el.classList.remove("hasimg");
+    img.onload = () => el.classList.add("hasimg");
+    img.src = `${BASE_URL}hero/${st.class_id}.png`;
+    (el.querySelector(".glyph") as HTMLElement).textContent = st.cls.icon;
+    el.style.setProperty("--hero-c", heroColorOf(st.cls.color));
+  }
+  el.classList.toggle("dead", (st.respawn ?? 0) > 0);
+}
+/** 前冲打击:冲到怪物跟前命中再收回;lunge=普攻 crit=暴击 skill=技能(带技能主色) */
+function heroLunge(kind: "lunge" | "crit" | "skill", color?: string): void {
+  const el = $("hero-art");
+  if (!el || el.classList.contains("dead")) return;
+  el.classList.remove("lunge", "crit", "skill", "hurt");
+  void el.offsetWidth;   // 强制 reflow 以重触发动画
+  if (color) el.style.setProperty("--hero-c", color);
+  el.classList.add(kind);
+  // 命中一拍:怪物被顶退(bump-mon 位移样式本就存在,此前无触发方)
+  const stage = $("stage");
+  setTimeout(() => {
+    stage.classList.add("bump-mon");
+    setTimeout(() => stage.classList.remove("bump-mon"), 130);
+  }, kind === "skill" ? 240 : 190);
+}
+/** 受击:后撤 + 泛红闪 */
+function heroHurt(): void {
+  const el = $("hero-art");
+  if (!el) return;
+  el.classList.remove("lunge", "crit", "skill");
+  void el.offsetWidth;
+  el.classList.add("hurt");
 }
 
 // ---------------------------------------------------------------- 普攻特效(每职业一套)
@@ -870,8 +921,9 @@ function playSkillFx(sid: string): void {
   const fx = SKILL_FX[sid] ?? { mode: "burst" as FxMode };
   const colors = FX_COLORS[def.color] ?? FX_COLORS.white;
   const shapes = iconShapes(def.icon);
-  const n = fx.n ?? 26;
-  const scalar = fx.scalar ?? 1;
+  // 整体观感加强(2026-10-05 用户反馈"看不见"):粒子数 ×1.6、单个尺寸 ×1.25
+  const n = Math.round((fx.n ?? 26) * 1.6);
+  const scalar = (fx.scalar ?? 1) * 1.25;
   const mon = stageOrigin();
   const fire = (o: { x: number; y: number }, angle: number, spread: number,
                 v: number, cnt: number, ticks = 230) =>
@@ -938,6 +990,33 @@ function playSkillFx(sid: string): void {
   }
 }
 
+// ---------------------------------------------------------------- 掉落特效
+// 紫色(epic)或更好品质掉落:细激光柱身+底部粗光座,装备粒从怪物尸体向两侧
+// 抛物线爆出、落地驻留发光后消散(不在怪物模型上爆)。
+// 事件由核心侧击杀掉落处发出(anim "loot:<rarity>",TS/Python 双端一致)。
+const RARITY_HEX: Record<string, string> = {
+  epic: "#c26bff",       // 史诗·紫
+  legendary: "#ffd94a",  // 传说·金
+  mythic: "#ff5a5a",     // 神话·红
+};
+function playLootBeam(rarity: string): void {
+  const hex = RARITY_HEX[rarity];
+  if (!hex) return;
+  const p = monCenterPx();
+  if (!p) return;
+  fxSpawn("fx-beam", p.x, 0, { "--bx": hex, "--bh": Math.round(p.y + 40) + "px" });
+  // 爆装备:左右交替抛出(品质越高越多),--dx/--dy 决定落点
+  const n = { epic: 3, legendary: 4, mythic: 5 }[rarity] ?? 3;
+  for (let i = 0; i < n; i++) {
+    const side = i % 2 === 0 ? -1 : 1;
+    const dx = side * (55 + Math.random() * 75);
+    const dy = 55 + Math.random() * 55;
+    fxSpawn("fx-drop", p.x, p.y, {
+      "--bx": hex, "--dx": Math.round(dx) + "px", "--dy": Math.round(dy) + "px",
+    }).style.animationDelay = i * 45 + "ms";
+  }
+}
+
 // ---------------------------------------------------------------- 渲染
 let curTab = "battle";
 let offlineShown = false;
@@ -997,6 +1076,7 @@ function itemAffixLine(it: ItemUI): string {
 
 function renderBattle(st: State): void {
   if (!st.class_id) return;
+  heroModelSync(st);
   const h = st.hero;
   const hpPct = Math.max(0, Math.min(100, h.hp / h.max_hp * 100));
   const shield = h.shield ?? 0;
@@ -2377,17 +2457,26 @@ function boot(): void {
   });
   window.addEventListener("pagehide", () => g.save());
 
+  // 英雄模型:一次性动画结束后清类,让待机呼吸动画恢复
+  $("hero-art").addEventListener("animationend", (e: AnimationEvent) => {
+    if (e.animationName !== "hero-idle")
+      $("hero-art").classList.remove("lunge", "crit", "skill", "hurt");
+  });
+
   // 调试钩子:__abyss.state() 验证推进;fx("warrior") 演示普攻特效与音效;
-  // skillfx("m_meteor") 演示任意技能的粒子特效;sfxcast("w_exec") 演示技能音效;sfx() 查看音效状态
+  // skillfx("m_meteor") 演示任意技能的粒子特效;sfxcast("w_exec") 演示技能音效;sfx() 查看音效状态;
+  // lootbeam("epic") 演示掉落光柱
   (window as unknown as { __abyss?: { state(): string; fx(cls?: string, crit?: boolean): void;
                                          sfx(): string; skillfx(sid: string): void;
                                          sfxcast(sid: string): void;
+                                         lootbeam(rarity: string): void;
                                          dbg(): string } }).__abyss = {
     state: () => `t=${g.time | 0}s Lv${g.level} ${g.zone}区 kills=${g.stats.kills}`,
     fx: (cls, crit) => { playAttackFx(cls, crit); playAttackHit(crit ?? false); },
     sfx: () => sfxDebug(),
     skillfx: (sid) => playSkillFx(sid),
     sfxcast: (sid) => playSkillCast(sid),
+    lootbeam: (rarity) => playLootBeam(rarity),
     dbg: () => JSON.stringify({ auto_equip: g.settings.auto_equip,
       swap: g.pendingSwap ? `${g.pendingSwap.kind}:${g.pendingSwap.slot ?? g.pendingSwap.relicSlot}` : null,
       bagN: g.bag.length, equip: Object.keys(g.equip) }),

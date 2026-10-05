@@ -127,6 +127,9 @@ def battle_tick(game, dt):
     else:
         h["atk_timer"] += dt
         interval = h["interval"] / (1 + (h["haste"] + S.buff_pct(game, "haste")) / 100.0)
+        if h.get("slow_until", 0) > game.time:
+            # 减速拉长攻击间隔;钳制最多 ×4,防多来源叠出无限慢
+            interval /= max(0.25, 1 - h.get("slow_pct", 0) / 100.0)
         while h["atk_timer"] >= interval:
             h["atk_timer"] -= interval
             _hero_attack(game, mon)
@@ -228,6 +231,11 @@ def _cast_monster_skill(game, mon):
     if sk.get("stun"):
         h["stun_until"] = game.time + sk["stun"]
         game.add_floater("⛔ 眩晕", "bright_red")
+    if sk.get("slow"):
+        pct_v, dur = sk["slow"]
+        h["slow_pct"] = pct_v
+        h["slow_until"] = game.time + dur
+        game.add_floater("🐌 减速", "bright_red")
     # 不屈判定
     # 遗物:不死(独立判定,60s CD)
     if h["hp"] <= 0 and h.get("deathward", 0) > 0:
@@ -371,6 +379,9 @@ def _on_monster_killed(game, mon):
         from .data import RARITY_IDX
         if RARITY_IDX[item.rarity] >= 2:
             game.quest_progress("loot", 1)
+        # 紫色(epic)或更好:发掉落光柱事件(宿主表现层用,纯视觉)
+        if RARITY_IDX[item.rarity] >= 3:
+            game.emit("anim", "loot:" + item.rarity)
 
     if game.in_tower:
         game.monster = mon  # 保留引用给 tower_exit 用

@@ -230,12 +230,12 @@ export const THEMES: ThemeDef[] = [
 export interface MobSkill {
   name: string; icon: string; cd: number; mult: number; hits: number;
   lifesteal?: boolean; defdown?: [number, number]; atkdown?: [number, number];
-  stun?: number;
+  stun?: number; slow?: [number, number];
 }
 export interface MobDef { name: string; color: Color; power: number; skill: MobSkill }
 export const MONSTERS: Record<string, MobDef> = {
   slime: { name: "史莱姆", color: "green", power: 1.0,
-    skill: { name: "酸液喷吐", icon: "☣", cd: 10, mult: 1.2, hits: 1, defdown: [0.3, 5] } },
+    skill: { name: "酸液喷吐", icon: "☣", cd: 10, mult: 1.2, hits: 1, slow: [0.35, 4] } },
   wolf: { name: "恐狼", color: "yellow", power: 1.05,
     skill: { name: "狂暴撕咬", icon: "🐍", cd: 8, mult: 0.6, hits: 3 } },
   goblin: { name: "哥布林", color: "bright_green", power: 0.95,
@@ -256,7 +256,7 @@ export const MONSTERS: Record<string, MobDef> = {
   mushroom: { name: "毒蘑菇", color: "green", power: 0.95,
     skill: { name: "孢子毒云", icon: "☣", cd: 11, mult: 1.3, hits: 1, atkdown: [0.2, 5] } },
   spider: { name: "红背毒蛛", color: "red", power: 1.0,
-    skill: { name: "缠丝连蛰", icon: "🕸", cd: 9, mult: 0.55, hits: 3, defdown: [0.25, 4] } },
+    skill: { name: "缠丝连蛰", icon: "🕸", cd: 10, mult: 0.55, hits: 3, defdown: [0.25, 4], stun: 1.0 } },
   snake: { name: "黑曼巴蛇", color: "bright_black", power: 1.05,
     skill: { name: "毒牙速咬", icon: "🦷", cd: 9, mult: 0.7, hits: 3 } },
   husk: { name: "肿胀腐尸", color: "magenta", power: 0.95,
@@ -267,7 +267,7 @@ export const MONSTERS: Record<string, MobDef> = {
     skill: { name: "甲群啃噬", icon: "🐜", cd: 9, mult: 0.45, hits: 4 } },
   // ---- 散怪:强化既有主题 ----
   drake: { name: "霜翼幼龙", color: "bright_cyan", power: 1.15,
-    skill: { name: "寒霜吐息", icon: "❄", cd: 13, mult: 2.4, hits: 1, atkdown: [0.25, 5] } },
+    skill: { name: "寒霜吐息", icon: "❄", cd: 13, mult: 2.4, hits: 1, slow: [0.3, 5] } },
   eye: { name: "辉光邪眼", color: "bright_magenta", power: 1.1,
     skill: { name: "疯狂凝视", icon: "👁", cd: 12, mult: 1.9, hits: 1, stun: 1.0 } },
 };

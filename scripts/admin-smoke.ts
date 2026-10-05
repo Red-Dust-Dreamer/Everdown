@@ -153,7 +153,7 @@ check("A5 parse:§4.2 示例文件逐值解析", () => {
     '    "BAL.loadout_unlock.2": 14,',
     '    "RARITIES.5.weight": 3,',
     '    "ACTIVE_SKILLS.12.cd": 4,',
-    '    "MONSTERS.slime.skill.defdown.0": 0.4',
+    '    "MONSTERS.slime.skill.slow.0": 0.4',
     "  }",
     "}",
   ].join("\n");
@@ -162,7 +162,7 @@ check("A5 parse:§4.2 示例文件逐值解析", () => {
     "BAL.loadout_unlock.2": 14,
     "RARITIES.5.weight": 3,
     "ACTIVE_SKILLS.12.cd": 4,
-    "MONSTERS.slime.skill.defdown.0": 0.4,
+    "MONSTERS.slime.skill.slow.0": 0.4,
   }, "示例文件应解析出全部 5 条覆盖");
 });
 

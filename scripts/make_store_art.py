@@ -94,6 +94,32 @@ def make_icon():
     print("OK icon-512-new.png")
 
 
+# ---------------------------------------------------------------- 方版 1600×1600(竖版视频封面 1:1)
+def make_banner_square():
+    """与横版同视觉:标题居上、巨龙居中、双头犬前露;仅含游戏名,无图标无截图。"""
+    S = 1600
+    img = vgrad(S, S, (16, 16, 30), (7, 7, 14)).convert("RGBA")
+    img.alpha_composite(glow_layer((S, S), S * 0.5, S * 0.60, 560, (110, 55, 160)))
+    img.alpha_composite(glow_layer((S, S), S * 0.5, S * 0.60, 270, RED))
+    ground_shadow(img, S * 0.5, S * 0.80, 760, 80)
+    paste_px(img, "wolf-boss", 11, S * 0.30, S * 0.76, fade=0.85, outline=True)
+    paste_px(img, "drake-boss", 21, S * 0.55, S * 0.56, outline=True)
+    d = ImageDraw.Draw(img)
+    title_text(d, (S * 0.5, S * 0.20), "深渊挂机", font(FZH, 188), stroke=11)
+    d.text((S * 0.5, S * 0.315), "A B Y S S   I D L E", font=font(FZH_R, 46),
+           fill=(150, 150, 175), anchor="mm")
+    bar = Image.new("RGBA", (760, 10), (0, 0, 0, 0))
+    bd = ImageDraw.Draw(bar)
+    for x in range(760):
+        t = x / 760
+        c = (255, 217, 74) if t < 0.55 else (150, 45, 45)
+        bd.line([(x, 0), (x, 10)], fill=c + (230,))
+    img.alpha_composite(bar.filter(ImageFilter.GaussianBlur(1)),
+                        (int(S * 0.5 - 380), int(S * 0.268)))
+    img.convert("RGB").save(OUT / "banner-square-1600.jpg", quality=90)
+    print("OK banner-square-1600.jpg")
+
+
 # ---------------------------------------------------------------- 横版 1920×1080
 def make_banner_h():
     W, H = 1920, 1080
@@ -140,5 +166,6 @@ def make_banner_v():
 
 if __name__ == "__main__":
     make_icon()
+    make_banner_square()
     make_banner_h()
     make_banner_v()

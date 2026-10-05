@@ -186,6 +186,37 @@ body{
 .mon-art.spr .ascii{display:none;margin:0;white-space:pre}
 .mon-art.spr.imgfail img{display:none}
 .mon-art.spr.imgfail .ascii{display:block}
+/* 英雄模型:舞台左侧与怪物对峙;普攻/技能前冲到怪物跟前打击后归位
+   (立绘 hero/<class>.png 缺省时回退职业徽记字符) */
+#hero-art{position:absolute;left:13%;top:50%;transform:translateY(-50%);z-index:1;
+  width:96px;display:flex;align-items:center;justify-content:center;pointer-events:none}
+#hero-art .glyph{font-size:50px;font-weight:800;line-height:1;
+  filter:drop-shadow(0 0 16px var(--hero-c,#ff6b6b)) drop-shadow(0 6px 10px rgba(0,0,0,.55))}
+#hero-art img{display:none;width:104px;image-rendering:pixelated;
+  filter:drop-shadow(0 0 10px var(--hero-c,#ff6b6b)) drop-shadow(0 6px 10px rgba(0,0,0,.55))}
+#hero-art.hasimg img{display:block}
+#hero-art.hasimg .glyph{display:none}
+#hero-art.dead{filter:grayscale(1) brightness(.45)}
+@media (prefers-reduced-motion:no-preference){
+  #hero-art{animation:hero-idle 2.6s ease-in-out infinite}
+  @keyframes hero-idle{0%,100%{transform:translateY(-50%)}50%{transform:translateY(calc(-50% - 5px))}}
+  /* 前冲打击:冲到怪物跟前 → 停顿一拍(命中) → 收回;crit 更远更快,skill 最远带职业色辉光 */
+  #hero-art.lunge{--lx:min(32vw,210px);animation:hero-lunge .5s cubic-bezier(.3,.7,.3,1)}
+  #hero-art.crit{--lx:min(36vw,240px);animation:hero-lunge .42s cubic-bezier(.2,.8,.25,1)}
+  #hero-art.skill{--lx:min(38vw,255px);animation:hero-lunge .55s cubic-bezier(.25,.8,.3,1)}
+  @keyframes hero-lunge{
+    0%{transform:translateY(-50%) translateX(0) rotate(0)}
+    42%{transform:translateY(-50%) translateX(var(--lx)) rotate(3deg)}
+    58%{transform:translateY(-50%) translateX(var(--lx)) rotate(-4deg)}
+    100%{transform:translateY(-50%) translateX(0) rotate(0)}
+  }
+  #hero-art.hurt{animation:hero-hurt .32s ease-out}
+  @keyframes hero-hurt{
+    0%{transform:translateY(-50%)}
+    30%{transform:translateY(-50%) translateX(-14px);filter:brightness(1.9) saturate(3) hue-rotate(-40deg)}
+    100%{transform:translateY(-50%)}
+  }
+}
 @media (prefers-reduced-motion:no-preference){
   .mon-art.spr img{animation:mon-idle 2.4s ease-in-out infinite}
   @keyframes mon-idle{0%,100%{transform:translateY(0)}50%{transform:translateY(-4px)}}
@@ -290,6 +321,56 @@ body{
 @keyframes fxHit{0%{transform:translate(-50%,-50%) scale(.3) rotate(0deg);opacity:0}
   30%{opacity:1}
   100%{transform:translate(-50%,-50%) scale(1.15) rotate(35deg);opacity:0}}
+
+/* 多段技命中节拍:径向闪光 + 扩散色环(比普攻 fx-hit 更大更醒目,--fx-c 跟技能主色) */
+.fx-tick{position:absolute;width:40px;height:40px;border-radius:50%;
+  background:radial-gradient(circle,#fff 0%,var(--fx-c,#5adfff) 34%,transparent 72%);
+  box-shadow:0 0 18px 4px var(--fx-c,#5adfff);
+  animation:fxTick .3s ease-out forwards}
+.fx-tick::after{content:"";position:absolute;inset:-3px;border-radius:50%;
+  border:3px solid var(--fx-c,#5adfff);animation:fxTickRing .3s ease-out forwards}
+@keyframes fxTick{0%{transform:translate(-50%,-50%) scale(.35);opacity:1}
+  100%{transform:translate(-50%,-50%) scale(1.5);opacity:0}}
+@keyframes fxTickRing{0%{transform:scale(.4);opacity:.95}
+  100%{transform:scale(2.1);opacity:0}}
+
+/* 掉落特效:细激光柱身 + 底部粗光座(光座压在怪物落点),装备粒另行抛出 */
+.fx-beam{position:absolute;left:0;top:0;width:7px;height:var(--bh,240px);
+  transform:translateX(-50%);transform-origin:50% 100%;
+  background:linear-gradient(to top,transparent,var(--bx,#c26bff) 16%,
+    var(--bx,#c26bff) 84%,transparent);
+  border-radius:4px;filter:blur(.4px);
+  box-shadow:0 0 10px 1px var(--bx,#c26bff),0 0 30px 4px var(--bx,#c26bff);
+  animation:fxBeam 1.15s ease-out forwards}
+.fx-beam::after{content:"";position:absolute;left:50%;top:9%;bottom:7%;width:2px;
+  transform:translateX(-50%);border-radius:1px;
+  background:linear-gradient(to top,transparent,#fff 26%,#fff 72%,transparent)}
+.fx-beam::before{content:"";position:absolute;left:50%;bottom:-8px;width:48px;height:20px;
+  transform:translateX(-50%);border-radius:50%;
+  background:radial-gradient(ellipse,var(--bx,#c26bff) 0%,transparent 70%);
+  filter:blur(1px)}
+@keyframes fxBeam{0%{transform:translateX(-50%) scaleY(0);opacity:0}
+  16%{transform:translateX(-50%) scaleY(1);opacity:1}
+  72%{opacity:.9}
+  100%{transform:translateX(-50%) scaleY(1);opacity:0}}
+
+/* 装备粒:从怪物尸体向左右抛物线爆出(--dx/--dy 落点),落地小弹跳后驻留发光、渐隐 */
+.fx-drop{position:absolute;width:16px;height:16px;
+  animation:fxDrop 1.25s cubic-bezier(.25,.6,.45,1) forwards}
+.fx-drop::before{content:"";position:absolute;inset:0;border-radius:3px;
+  transform:rotate(45deg);
+  background:linear-gradient(135deg,#fff,var(--bx,#c26bff) 55%);
+  box-shadow:0 0 10px 2px var(--bx,#c26bff),0 0 22px 4px var(--bx,#c26bff)}
+@keyframes fxDrop{
+  0%{transform:translate(-50%,-50%);opacity:0}
+  8%{opacity:1}
+  38%{transform:translate(-50%,-50%)
+      translate(calc(var(--dx,60px)*.62),calc(var(--dy,90px)*.1 - 54px))}
+  70%{transform:translate(-50%,-50%) translate(var(--dx,60px),var(--dy,90px))}
+  74%{transform:translate(-50%,-50%) translate(var(--dx,60px),var(--dy,90px)) scale(1.18,.82)}
+  80%{transform:translate(-50%,-50%) translate(var(--dx,60px),var(--dy,90px))}
+  92%{opacity:1}
+  100%{transform:translate(-50%,-50%) translate(var(--dx,60px),var(--dy,90px));opacity:0}}
 
 @media (max-width:760px){.fx-slash{width:112px;height:112px}}
 @media (prefers-reduced-motion:reduce){#fx-layer{display:none}}
@@ -585,6 +666,9 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
   #col-hero{order:2;width:auto}
   #col-right{order:3;width:auto}
   #stage{min-height:34vh}
+  #hero-art{left:7%;width:76px}
+  #hero-art .glyph{font-size:38px}
+  #hero-art img{width:84px}
   #stage-track{order:0}
   .mon-art{font-size:17px}
   .mon-art.spr img{width:88px}

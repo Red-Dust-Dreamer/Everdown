@@ -128,7 +128,11 @@ export function battleTick(g: Game, dt: number): void {
 
   if ((h.stun_until ?? 0) <= g.time) {
     h.atk_timer += dt;
-    const interval = h.interval / (1 + (h.haste + S.buffPct(g, "haste")) / 100);
+    let interval = h.interval / (1 + (h.haste + S.buffPct(g, "haste")) / 100);
+    if ((h.slow_until ?? 0) > g.time) {
+      // 减速拉长攻击间隔;钳制最多 ×4,防多来源叠出无限慢
+      interval /= Math.max(0.25, 1 - (h.slow_pct ?? 0) / 100);
+    }
     while (h.atk_timer >= interval) {
       h.atk_timer -= interval;
       heroAttack(g, mon);
@@ -197,6 +201,11 @@ function castMonsterSkill(g: Game, mon: Monster): void {
   if (sk.stun) {
     h.stun_until = g.time + sk.stun;
     g.addFloater("⛔ 眩晕", "bright_red");
+  }
+  if (sk.slow) {
+    h.slow_pct = sk.slow[0];
+    h.slow_until = g.time + sk.slow[1];
+    g.addFloater("🐌 减速", "bright_red");
   }
   // 不屈判定
   // 遗物:不死(独立判定,60s CD)
@@ -365,6 +374,8 @@ function onMonsterKilled(g: Game, mon: Monster): void {
     const item = rollItem(mon.tier, g.rng, h.luck ?? 0, minIdx, boost, g.classId);
     g.addItem(item);
     if (RARITY_IDX[item.rarity] >= 2) g.questProgress("loot", 1);
+    // 紫色(epic)或更好:发掉落光柱事件(宿主表现层用,纯视觉)
+    if (RARITY_IDX[item.rarity] >= 3) g.emit("anim", "loot:" + item.rarity);
   }
 
   if (g.inTower) {
