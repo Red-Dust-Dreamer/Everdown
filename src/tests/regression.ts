@@ -825,6 +825,48 @@ function testRebirth(): void {
   eq(m.rebirths, 0, "v7 旧档 rebirths 默认 0");
 }
 
+// ================================================================ 16. 祭坛批量(×N 精确扣费 / MAX 至不足 / ×1 委托 / 预估 ±1)
+function testAltarBatch(): void {
+  const g = newGame(426242);
+  g.chooseClass("warrior");
+  const line = "power";
+  const c = (i: number): number => g.altarCost(line, i);
+
+  // altarCostN = 逐级求和;偏移查询不动真实等级
+  g.altarLv[line] = 3;
+  eq(g.altarCostN(line, 4), c(0) + c(1) + c(2) + c(3), "连买 4 次总费用 = 逐级求和");
+  eq(g.altarLv[line], 3, "偏移/求和查询不改真实等级");
+
+  // ×N:精确按显示总额扣费、升级 N 级
+  g.gold = 1_000_000;
+  const gold0 = g.gold, lv0 = g.altarLv[line] ?? 0;
+  const total4 = g.altarCostN(line, 4);
+  g.altarUpMulti(line, 4);
+  eq(g.altarLv[line], lv0 + 4, "×4 应升 4 级");
+  eq(g.gold, gold0 - total4, "×4 扣费 = 展示总额");
+
+  // MAX:买到"下一级买不起"为止,且与闭式预估误差 ≤1
+  g.gold = 5000;
+  const approx = g.altarMaxBuysApprox(line);
+  g.altarUpMulti(line, Infinity);
+  ok(g.gold < g.altarCost(line), "MAX 后应停在买不起处");
+  eq(g.altarLv[line], lv0 + 4 + approx, "MAX 购买级数 = 逐级真实口径(预估精确)");
+  const approx2 = g.altarMaxBuysApprox(line);
+  ok(approx2 <= 1, "MAX 后剩余金币最多再买 1 级(预估与实买差 ≤1)");
+  g.gold = 1;   // 连第一级都买不起
+  g.altarUpMulti(line, Infinity);
+  eq(g.altarLv[line], lv0 + 4 + approx, "金币不足时 MAX 不动等级");
+
+  // ×1 委托 altarUp:与单次结果一致
+  const g1 = newGame(426243), g2 = newGame(426244);
+  g1.chooseClass("warrior"); g2.chooseClass("warrior");
+  g1.gold = g2.gold = 500_000;
+  g1.altarUpMulti("vigor", 1);
+  g2.altarUp("vigor");
+  eq(g1.altarLv["vigor"], g2.altarLv["vigor"], "×1 与单次等价(等级)");
+  eq(g1.gold, g2.gold, "×1 与单次等价(扣费)");
+}
+
 // ================================================================ runner
 const TESTS: [string, () => void][] = [
   ["1.RNG(MT19937 与 CPython 对拍)", testRng],
@@ -842,6 +884,7 @@ const TESTS: [string, () => void][] = [
   ["13.一键出售品质档(默认/档位0/2/5)", testSellJunk],
   ["14.怪物技能debuff(减速/眩晕/存档口径)", testMobSkillDebuff],
   ["15.转生(门槛/重置/保留/倍率/存档v8)", testRebirth],
+  ["16.祭坛批量(×N精确扣费/MAX至不足/×1委托/预估)", testAltarBatch],
 ];
 
 let failed = 0;

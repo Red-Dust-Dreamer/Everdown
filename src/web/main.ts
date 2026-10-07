@@ -152,7 +152,8 @@ interface State {
   speed: number; max_speed: number; speed_unlock: readonly number[];
   skills: { active: SkillUI[]; passive: SkillUI[] };
   altar: { id: string; name: string; icon: string; stat: string; stat_name: string;
-           op: string; per: number; lv: number; cost: number; bonus: number }[];
+           op: string; per: number; lv: number; cost: number; bonus: number;
+           cost_n: number; max_n: number }[];
   potions: { id: string; name: string; icon: string; buff: string; pct: number;
              cost: number; remain: number }[];
   tower_key_cost: number | null; tower_keys_bought: number;
@@ -375,9 +376,12 @@ function buildState(g: Game): State {
     tower: { keys: g.tower.keys, max_floor: g.tower.max_floor },
     altar: D.ALTAR_LINES.map(l => {
       const lv = g.altarLv[l.id] ?? 0;
+      const maxMode = altarBatch === Infinity;
       return { id: l.id, name: l.name, icon: l.icon, stat: l.stat,
                stat_name: D.STAT_NAMES[l.stat] ?? l.stat, op: l.op, per: l.per,
-               lv, cost: g.altarCost(l.id), bonus: l.per * lv };
+               lv, cost: g.altarCost(l.id), bonus: l.per * lv,
+               cost_n: maxMode ? 0 : g.altarCostN(l.id, altarBatch),
+               max_n: maxMode ? g.altarMaxBuysApprox(l.id) : 0 };
     }),
     potions: D.POTIONS.map(p => ({
       id: p.id, name: p.name, icon: p.icon, buff: p.buff, pct: p.pct,
@@ -439,7 +443,12 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
     }
     case "tower_exit": g.towerExit(false); break;   // 撤退:视作战败,仅耗已用的钥匙
     case "altar_up": if (a) g.altarUp(a); break;
-    case "altar_up_multi": if (a) g.altarUpMulti(a); break;
+    case "altar_up_multi": if (a) g.altarUpMulti(a, altarBatch); break;
+    case "altar_batch": {
+      if (a === "max") altarBatch = Infinity;
+      else if (a === "1" || a === "10" || a === "100") altarBatch = Number(a);
+      break;   // 仅切 UI 档位,下一帧重渲染即生效
+    }
     case "potion": if (a) g.usePotion(a); break;
     case "tower_key": g.buyTowerKey(); break;
     case "quest_reroll": g.rerollQuests(); break;
@@ -2247,6 +2256,9 @@ function ensureAltarDom(): void {
 }
 
 // ================================================================ 深渊祭坛(金币→永久属性)+ 药剂
+/** 祭坛批量档(会话级 UI 状态,默认 ×10 与旧双按钮习惯一致):1/10/100/Infinity(MAX) */
+let altarBatch: number = 10;
+
 function renderAltar(st: State): void {
   const potCard = $("potions-card"), list = $("altar-list");
   if (!potCard || !list) return;
@@ -2264,23 +2276,36 @@ function renderAltar(st: State): void {
         <span class="cost">◈${fmt(p.cost)}</span>
       </button>`).join("") + `</div>`;
 
+  // —— 批量档选择(1/10/100/MAX):按钮随档位变标签,点击按所选次数连买
+  const pick = (v: string, label: string, on: boolean) =>
+    `<button class="btn mini rq-btn${on ? " on" : ""}" data-cmd="altar_batch" data-a="${v}">${label}</button>`;
+  const isMax = altarBatch === Infinity;
+  const batchBar = `<div class="sell-bar"><span class="lbl">每次献祭</span>` +
+    pick("1", "×1", altarBatch === 1) + pick("10", "×10", altarBatch === 10) +
+    pick("100", "×100", altarBatch === 100) + pick("max", "MAX", isMax) +
+    `<span class="hint">(金币不够自动停)</span></div>`;
+
   // —— 祭坛 6 线
   list.innerHTML =
-    `<h3><span class="dot"></span>深渊祭坛 · 金币献祭换永久加成(费用随等级平方上涨,无上限)</h3>` +
+    `<h3><span class="dot"></span>深渊祭坛 · 金币献祭换永久加成(费用随等级平方上涨,无上限)</h3>` + batchBar +
     st.altar.map(l => {
       const cur = l.op === "pct"
         ? `${l.stat_name} +${l.bonus.toFixed(1)}%`
         : `${l.stat_name} +${l.bonus.toFixed(1)}`;
       const next = l.op === "pct" ? `+${l.per}%` : `+${l.per}`;
+      const buyBtn = altarBatch === 1
+        ? `<button class="btn mini" data-cmd="altar_up_multi" data-a="${l.id}">献祭 ◈${fmt(l.cost)}</button>`
+        : isMax
+          ? `<button class="btn mini" data-cmd="altar_up_multi" data-a="${l.id}" title="连买至金币不足">献祭×MAX ≈${fmt(l.max_n)}</button>`
+          : `<button class="btn mini" data-cmd="altar_up_multi" data-a="${l.id}" title="连续献祭${altarBatch}次(金币不够自动停)">献祭×${altarBatch} ◈${fmt(l.cost_n)}</button>`;
       return `<div class="altar-row">
         <span class="ic">${l.icon}</span>
         <span class="nm">${l.name}</span>
         <span class="lv">Lv.${l.lv}</span>
         <span class="cur">${cur}</span>
         <span class="nx">(下一级 ${next})</span>
-        <button class="btn mini" data-cmd="altar_up" data-a="${l.id}">献祭 ◈${fmt(l.cost)}</button>` +
-        `<button class="btn mini" data-cmd="altar_up_multi" data-a="${l.id}" title="连续献祭10次(金币不够自动停)">献祭×10</button>` +
-      `</div>`;
+        ${buyBtn}
+      </div>`;
     }).join("");
 }
 

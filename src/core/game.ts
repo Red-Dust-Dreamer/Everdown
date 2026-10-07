@@ -931,12 +931,37 @@ export class Game {
   }
 
   // ================================================================ 金币消耗(祭坛/药剂/钥匙/悬赏刷新)
-  /** 祭坛单线下一级费用:多项式(基费 + 线性 + 平方 + 深度项),无等级上限 */
-  altarCost(lineId: string): number {
-    const lv = this.altarLv[lineId] ?? 0;
+  /** 祭坛单线下一级费用:多项式(基费 + 线性 + 平方 + 深度项),无等级上限;
+   *  lvOffset 供"连买 n 次总费用"逐级求和(不动真实等级) */
+  altarCost(lineId: string, lvOffset = 0): number {
+    const lv = (this.altarLv[lineId] ?? 0) + lvOffset;
     const t = tierOf(this.zone, this.stage);
     return Math.round(BAL.altar_cost0 + BAL.altar_cost_lv * lv
       + BAL.altar_cost_lv2 * lv * lv + BAL.altar_cost_t * t);
+  }
+  /** 连买 n 次的精确总费用(逐级取整求和;UI 按钮展示用,n 为档位值) */
+  altarCostN(lineId: string, n: number): number {
+    let sum = 0;
+    for (let i = 0; i < n; i++) sum += this.altarCost(lineId, i);
+    return sum;
+  }
+  /** MAX 档预估:当前金币约能连买几级。闭式(未逐级取整)+ 二分,与逐级购买误差 ≤1,
+   *  仅展示用;实际购买走 altarUpMulti 逐级取整扣费 */
+  altarMaxBuysApprox(lineId: string): number {
+    const lv = this.altarLv[lineId] ?? 0;
+    const t = tierOf(this.zone, this.stage);
+    const a = BAL.altar_cost0 + BAL.altar_cost_lv * lv + BAL.altar_cost_lv2 * lv * lv + BAL.altar_cost_t * t;
+    const b = BAL.altar_cost_lv + 2 * BAL.altar_cost_lv2 * lv;
+    const c = BAL.altar_cost_lv2;
+    const sum = (n: number): number =>
+      a * n + b * n * (n - 1) / 2 + c * n * (n - 1) * (2 * n - 1) / 6;
+    let lo = 0, hi = 1;
+    while (sum(hi) <= this.gold) hi *= 2;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi + 1) / 2);
+      if (sum(mid) <= this.gold) lo = mid; else hi = mid - 1;
+    }
+    return lo;
   }
   altarUp(lineId: string): void {
     const line = ALTAR_LINES.find(l => l.id === lineId);
@@ -951,12 +976,15 @@ export class Game {
     this.toast(`${line.name} Lv.${this.altarLv[lineId]}`);
   }
 
-  /** 献祭十次:连升 n 级,金币不够自动停 */
+  /** 献祭 N 次:连升至多 n 级(金币不够自动停);times=Infinity 为 MAX 档(买到买不起为止,
+   *  次数 O(√gold),常规金币量级下毫秒级)。×1 委托 altarUp 保持单次提示口径 */
   altarUpMulti(lineId: string, times = 10): void {
+    if (times === 1) return this.altarUp(lineId);
     const line = ALTAR_LINES.find(l => l.id === lineId);
     if (!line) { this.toast("无此祭坛"); return; }
     let spent = 0, n = 0;
     while (n < times) {
+      // 真实等级随购买递增,这里按"当前下一级"计价(偏移 0);offset 只给未发生购买的求和用
       const cost = this.altarCost(lineId);
       if (this.gold < cost) break;
       this.gold -= cost;
@@ -966,7 +994,7 @@ export class Game {
     }
     if (n > 0) {
       this.recalcHero();
-      this.log(`🕯 ${line.name} Lv.${this.altarLv[lineId]}(十连 ×${n},共 ◈${fmt(spent)})`,
+      this.log(`🕯 ${line.name} Lv.${this.altarLv[lineId]}(连祭 ×${n},共 ◈${fmt(spent)})`,
         "bright_magenta");
       this.toast(`${line.name} Lv.${this.altarLv[lineId]}(×${n})`);
     } else {
