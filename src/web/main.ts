@@ -125,6 +125,7 @@ interface State {
   class_id: string | null;
   cls: { name: string; icon: string; desc: string; color: string };
   level: number; xp: number; xp_req: number;
+  rebirths: number; can_rebirth: boolean; rebirth_min_level: number;
   gold: number; stones: number; playtime: number; time: number;
   zone: number; stage: number; stage_kills: number; kills_per_stage: number;
   mode: string; farm_stage: number;
@@ -345,6 +346,8 @@ function buildState(g: Game): State {
   return {
     class_id: g.classId, cls,
     level: g.level, xp: g.xp, xp_req: g.xpReq(),
+    rebirths: g.rebirths, can_rebirth: g.canRebirth(),
+    rebirth_min_level: D.BAL.rebirth_min_level,
     gold: g.gold, stones: g.stones, playtime: g.playtime, time: g.time,
     zone: g.zone, stage: g.stage, stage_kills: g.stageKills,
     kills_per_stage: D.BAL.kills_per_stage,
@@ -398,7 +401,16 @@ let g: Game;
 
 function doCmd(name: string, a: string | null = null, b: string | null = null): void {
   switch (name) {
-    case "choose_class": if (a) g.chooseClass(a); break;
+    case "choose_class":
+      if (rebirthPick) {   // 转生择业:选卡 = 以该职业转生
+        rebirthPick = false;
+        if (a) g.rebirth(a);
+        break;
+      }
+      // 新档选职业后进入 3 步新手引导
+      if (a) g.chooseClass(a);
+      introStep = 1;
+      break;
     case "mode": g.setMode(g.mode === "push" ? "farm" : "push"); break;
     case "speed": g.cycleSpeed(); break;
     case "farm_stage": g.setFarmStage(a === "1" ? 1 : -1); break;
@@ -477,6 +489,25 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
     case "dismiss_offline": g.pendingOffline = null; break;
     case "swap_take": g.resolveSwap(true); break;
     case "swap_keep": g.resolveSwap(false); break;
+    // —— 转生流程:角色页按钮 → 确认弹窗 → 择业(复用选职业卡,可保持原职业)——
+    case "rebirth":
+      rebirthAsk = true;
+      break;
+    case "rebirth_cancel":
+      rebirthAsk = false;
+      break;
+    case "rebirth_go":
+      rebirthAsk = false;
+      rebirthPick = true;   // 复用 #class-select 择业(choose_class 分支拦截)
+      break;
+    case "rebirth_keep":
+      rebirthPick = false;
+      g.rebirth();
+      break;
+    case "intro_next":
+      introStep = introStep === null ? null : introStep + 1;
+      if (introStep !== null && introStep > INTRO_STEPS.length) introStep = null;
+      break;
     case "cloud_login": showLoginModal(); break;
     case "cloud_logout":
       void ensureCloud().then(m => m && m.signOutCloud());
@@ -500,6 +531,8 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
 // 开关存 localStorage(不进核心存档)。
 const BASE_URL = (import.meta as unknown as { env?: { BASE_URL?: string } }).env?.BASE_URL || "/";
 const SFX_KEY = "abyss_sfx";
+const BGM_KEY = "abyss_bgm";          // BGM 开关(独立于音效)
+const VOL_KEY = "abyss_vol";          // 总音量 0-100(SFX+BGM 共用母线)
 const SFX_FILES = ["attack-hit", "skill-heavy", "skill-magic", "skill-arrow",
                    "skill-burst", "skill-buff", "skill-shield", "skill-execute",
                    "skill-fire", "skill-ice", "skill-zap", "skill-roar",
@@ -524,19 +557,32 @@ const SFX_STYLE: Record<SfxKey, { gain: number; rateLo: number; rateHi: number; 
   "skill-dash":    { gain: 0.72, rateLo: 0.95, rateHi: 1.1,  throttleMs: 120 },
 };
 let sfxOn = localStorage.getItem(SFX_KEY) !== "0";
+let bgmOn = localStorage.getItem(BGM_KEY) !== "0";
+let masterVol = Math.min(100, Math.max(0, Number(localStorage.getItem(VOL_KEY) ?? 70))) / 100;
 let sfxCtx: AudioContext | null = null;
+let masterGain: GainNode | null = null;   // 母线:总音量(SFX 与 BGM 都经它)
+let bgmGain: GainNode | null = null;
+let bgmBuf: AudioBuffer | null = null;
+let bgmSrc: AudioBufferSourceNode | null = null;
 const sfxBufs = new Map<SfxKey, AudioBuffer>();
 const sfxLastMs = new Map<SfxKey, number>();
 const sfxPlays = new Map<SfxKey, number>();
 const SKILL_DEF = new Map(D.ACTIVE_SKILLS.map(s => [s.id, s]));
 
-/** 页面加载即建 context 并预解码全部音效(suspended 态可解码),首次交互只需 resume */
+/** 页面加载即建 context 并预解码全部音效(suspended 态可解码),首次交互只需 resume。
+ *  同时建总音量母线(masterGain)并预取 BGM 循环;音效或 BGM 任一开启即建。 */
 function initSfx(): void {
-  if (sfxCtx || !sfxOn) return;
+  if (sfxCtx || (!sfxOn && !bgmOn)) return;
   const AC = window.AudioContext ??
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AC) return;
   sfxCtx = new AC();
+  masterGain = sfxCtx.createGain();
+  masterGain.gain.value = volCurve(masterVol);
+  masterGain.connect(sfxCtx.destination);
+  bgmGain = sfxCtx.createGain();
+  bgmGain.gain.value = 0.5;   // BGM 混音低于音效
+  bgmGain.connect(masterGain);
   for (const key of SFX_FILES) {
     fetch(`${BASE_URL}sfx/${key}.wav`)
       .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`sfx ${r.status}`))))
@@ -544,9 +590,49 @@ function initSfx(): void {
       .then(buf => sfxBufs.set(key, buf))
       .catch(() => { /* 单个音效缺失静默降级,游戏照常 */ });
   }
+  fetch(`${BASE_URL}bgm/loop.wav`)
+    .then(r => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(`bgm ${r.status}`))))
+    .then(b => sfxCtx!.decodeAudioData(b))
+    .then(buf => { bgmBuf = buf; startBgm(); })
+    .catch(() => { /* BGM 缺失静默降级 */ });
+}
+/** 音量感知曲线:线性滑条 → 近似等响度增益 */
+function volCurve(v: number): number {
+  return Math.pow(Math.max(0, Math.min(1, v)), 1.6);
 }
 function ensureSfx(): void {
-  if (sfxOn && sfxCtx?.state === "suspended") void sfxCtx.resume();
+  if ((sfxOn || bgmOn) && sfxCtx?.state === "suspended") {
+    void sfxCtx.resume().then(() => startBgm());
+  }
+  startBgm();
+}
+/** BGM:无缝循环(scripts/gen_bgm.py 合成的整循环 WAV);由首次交互解锁后启动 */
+function startBgm(): void {
+  if (!bgmOn || !bgmBuf || !sfxCtx || sfxCtx.state !== "running" || bgmSrc) return;
+  bgmSrc = sfxCtx.createBufferSource();
+  bgmSrc.buffer = bgmBuf;
+  bgmSrc.loop = true;
+  bgmSrc.connect(bgmGain!);
+  bgmSrc.start();
+}
+function stopBgm(): void {
+  if (!bgmSrc) return;
+  try { bgmSrc.stop(); } catch { /* 已停止 */ }
+  bgmSrc.disconnect();
+  bgmSrc = null;
+}
+function toggleBgm(): void {
+  bgmOn = !bgmOn;
+  localStorage.setItem(BGM_KEY, bgmOn ? "1" : "0");
+  if (bgmOn) { initSfx(); ensureSfx(); } else stopBgm();
+  toast(bgmOn ? "音乐:开" : "音乐:关");
+  renderNow();
+}
+/** 总音量(0-100):SFX 与 BGM 共用母线增益 */
+function setMasterVol(pct: number): void {
+  masterVol = Math.min(100, Math.max(0, pct)) / 100;
+  localStorage.setItem(VOL_KEY, String(Math.round(masterVol * 100)));
+  if (masterGain) masterGain.gain.value = volCurve(masterVol);
 }
 function playSfx(key: SfxKey, critBoost = false): void {
   if (!sfxOn) return;
@@ -563,7 +649,7 @@ function playSfx(key: SfxKey, critBoost = false): void {
   src.playbackRate.value = (st.rateLo + Math.random() * (st.rateHi - st.rateLo)) * boost;
   const gain = ctx.createGain();
   gain.gain.value = st.gain * (critBoost ? 1.25 : 1);
-  src.connect(gain).connect(ctx.destination);
+  src.connect(gain).connect(masterGain ?? ctx.destination);
   src.start();
   sfxPlays.set(key, (sfxPlays.get(key) ?? 0) + 1);
 }
@@ -625,7 +711,9 @@ function toggleSfx(): void {
 function sfxDebug(): string {
   const ready = SFX_FILES.filter(k => sfxBufs.has(k)).length;
   const plays = [...sfxPlays.entries()].map(([k, n]) => `${k.split("-").pop()}:${n}`).join(" ") || "0";
-  return `on=${sfxOn} ready=${ready}/${SFX_FILES.length} ctx=${sfxCtx?.state ?? "none"} [${plays}]`;
+  return `on=${sfxOn} ready=${ready}/${SFX_FILES.length} ctx=${sfxCtx?.state ?? "none"} ` +
+    `bgm=${bgmOn ? (bgmSrc ? "playing" : bgmBuf ? "ready" : "missing") : "off"} ` +
+    `vol=${Math.round(masterVol * 100)} [${plays}]`;
 }
 
 initSfx();
@@ -1046,6 +1134,16 @@ function playLootBeam(rarity: string): void {
 let curTab = "battle";
 let offlineShown = false;
 let swapShown = false;
+// —— 转生流程 UI 态(不进存档):rebirthAsk=确认弹窗,rebirthPick=择业卡 ——
+let rebirthAsk = false;
+let rebirthPick = false;
+// —— 新手引导(3 步,新档选完职业弹出;不进存档,一次性) ——
+const INTRO_STEPS: [string, string, string][] = [
+  ["⚔", "战斗全自动", "你无需任何操作:英雄会自动战斗、推层、打头目。你要做的是变强 —— 换更强的装备、升级技能。"],
+  ["🎒", "掉落与换装", "怪物掉落的装备进入背包,点「装备▾」可对比战力后再换上(默认自动换装已开启,不用管也行)。"],
+  ["🌙", "卡关就挂机", "打不过就切换挂机模式刷金币与装备;下线也有收益(离线最多结算 12 小时)。Lv40 后可「转生」换取永久强化。"],
+];
+let introStep: number | null = null;
 
 function renderNow(): void {
   const st = buildState(g);
@@ -1267,8 +1365,32 @@ function renderHeroPage(st: State): void {
     (pw ? `<div style="color:var(--dim);font-size:11.5px;margin:0 0 12px">` +
       `战力构成:输出 ${fmt(pw.offense)} · 生存 ${fmt(pw.defense)} · 功能 ${fmt(pw.utility)}` +
       `(按第 ${Math.max(1, st.stats.max_zone)} 区假人折算,含生效增益)</div>` : "") +
+    rebirthBlockHtml(st) +
     `<h3 style="margin-top:16px"><span class="dot"></span>装备框 · 点击槽位查看属性与操作</h3>` +
     `<div class="gear-frame">${frame}</div>`;
+}
+
+/** 转生块:当前加成 + 门槛进度 + 入口按钮(确认与择业在弹窗) */
+function rebirthBlockHtml(st: State): string {
+  const statPct = D.BAL.rebirth_stat_pct * st.rebirths;
+  const gainPct = D.BAL.rebirth_gain_pct * st.rebirths;
+  const nextStat = D.BAL.rebirth_stat_pct * (st.rebirths + 1);
+  const nextGain = D.BAL.rebirth_gain_pct * (st.rebirths + 1);
+  const lvLeft = Math.max(0, st.rebirth_min_level - st.level);
+  return `<h3 style="margin-top:16px"><span class="dot"></span>♻ 转生 · 涅槃重生</h3>` +
+    `<div class="rebirth-card${st.can_rebirth ? " ready" : ""}">` +
+      `<div class="rb-info">` +
+        `<span>转生 <b>${st.rebirths}</b> 世</span>` +
+        `<span>攻击/生命/防御 <b>+${statPct}%</b></span>` +
+        `<span>金币/经验 <b>+${gainPct}%</b></span>` +
+      `</div>` +
+      `<div class="rb-desc">重置本局成长(等级/装备/金币/技能等级),保留成就·祭坛·遗物·塔记录·背包容量;` +
+      `下一次:+${nextStat}% 三围 · +${nextGain}% 金币经验${st.rebirths === 0 ? ",并可选新职业" : ",可再换职业"}` +
+      `</div>` +
+      (st.can_rebirth
+        ? `<button class="btn big sell-on" data-cmd="rebirth">♻ 发起转生</button>`
+        : `<button class="btn big" disabled title="等级达标后解锁">Lv.${st.rebirth_min_level} 解锁(还差 ${lvLeft} 级)</button>`) +
+    `</div>`;
 }
 
 /** 一键出售的品质档(≤ 该档全卖);UI 会话级状态,默认精良(原「普通/精良」行为) */
@@ -1502,8 +1624,15 @@ function renderSettings(st: State): void {
         `<div style="display:flex;gap:6px"><button class="btn" data-cmd="farm_stage" data-a="-1">− 1 层</button>` +
         `<button class="btn" data-cmd="farm_stage" data-a="1">+ 1 层</button></div></div>`
       : "") +
-    `<div class="set-row"><div class="lbl">音效<div class="d">普通攻击命中音(复古 8-bit,CC0)</div></div>` +
+    `<div class="set-row"><div class="lbl">音效<div class="d">攻击与技能音(复古 8-bit + 程序合成)</div></div>` +
       `<div class="toggle${sfxOn ? " on" : ""}" data-local="sfx"></div></div>` +
+    `<div class="set-row"><div class="lbl">音乐<div class="d">深渊氛围循环(程序合成,可独立关闭)</div></div>` +
+      `<div class="toggle${bgmOn ? " on" : ""}" data-local="bgm"></div></div>` +
+    `<div class="set-row"><div class="lbl">总音量<div class="d">音效与音乐共用;0% = 全静音</div></div>` +
+      `<input type="range" class="vol-slider" min="0" max="100" step="5" ` +
+        `value="${Math.round(masterVol * 100)}" data-vol="master" ` +
+        `title="总音量 ${Math.round(masterVol * 100)}%">` +
+      `</div>` +
     (cloudState.ready
       ? `<div class="set-row"><div class="lbl">云账号<div class="d">登录后多设备存档漫游;不登录照常玩</div></div>` +
         `<div style="display:flex;align-items:center;flex-wrap:wrap;gap:6px">` +
@@ -1533,12 +1662,13 @@ function renderSettings(st: State): void {
       kv("暴击次数", fmt(s.crit_hits ?? 0)) + kv("游玩时长", fmtTime(st.playtime)) +
     `</div>` +
     `<p class="set-hint" style="color:var(--dim);font-size:12px;margin-top:14px">` +
-      `<span class="kbd-hint">快捷键:1-9 切页 · F 推进/挂机 · P 暂停 · S 存档 · M 静音 · </span>v${pkg.version}</p>`;
+      `<span class="kbd-hint">快捷键:1-8 切页 · 9 设置 · F 推进/挂机 · P 暂停 · S 存档 · M 音效 · </span>v${pkg.version}</p>`;
 }
 
 function renderOverlays(st: State): void {
   const cs = $("class-select");
-  if (!st.class_id && !cs.classList.contains("show")) {
+  const wantCls = !st.class_id || rebirthPick;   // 新档选职业 / 转生择业共用
+  if (wantCls && !cs.classList.contains("show")) {
     const cl: [string, string, string, string, string][] = [
       ["warrior", "⚔", "战士", "钢铁与怒火:生存极强,越战越勇,斩杀收头", "生命×1.30 · 攻击×1.05 · 防御×1.35"],
       ["mage", "✦", "法师", "元素与毁灭:普攻平庸,技能伤害爆炸", "生命×1.05 · 攻击×1.10 · 防御×1.00"],
@@ -1548,9 +1678,36 @@ function renderOverlays(st: State): void {
       `<div class="cls-card" data-cmd="choose_class" data-a="${c[0]}">` +
       `<div class="ic">${c[1]}</div><div class="nm">${c[2]}</div>` +
       `<div class="ds">${c[3]}</div><div class="bs">${c[4]}</div></div>`).join("");
+    ($("cls-sub") as HTMLElement).textContent = rebirthPick
+      ? "选择下一世的职业(选卡转生;职业与技能池随之更换,遗物/成就/祭坛保留)"
+      : "选择将决定你的技能池与成长方向(40 级后可通过转生更换)";
+    const keep = $("cls-keep");
+    keep.style.display = rebirthPick && st.class_id ? "" : "none";
+    if (rebirthPick && st.class_id) {
+      ($("cls-keep-btn") as HTMLElement).innerHTML = `保持 ${st.cls.icon} ${esc(st.cls.name)}`;
+    }
     cs.classList.add("show");
-  } else if (st.class_id && cs.classList.contains("show")) {
+  } else if (!wantCls && cs.classList.contains("show")) {
     cs.classList.remove("show");
+  }
+
+  // —— 转生确认弹窗(保留/重置清单;确认后进入择业)——
+  $("rebirth-modal").classList.toggle("show", rebirthAsk);
+
+  // —— 新手引导(3 步;新档选完职业弹出)——
+  const im = $("intro-modal");
+  const wantIntro = introStep !== null && introStep >= 1
+    && introStep <= INTRO_STEPS.length && st.class_id !== null;
+  im.classList.toggle("show", wantIntro);
+  if (wantIntro) {
+    const step = introStep!;
+    const [ic, ti, ds] = INTRO_STEPS[step - 1];
+    $("intro-dots").innerHTML = INTRO_STEPS.map((_, i) =>
+      `<i class="${i < step ? "on" : ""}"></i>`).join("");
+    $("intro-body").innerHTML =
+      `<div class="intro-ic">${ic}</div><h2>${ti}</h2><p class="dim">${ds}</p>`;
+    ($("intro-next") as HTMLElement).textContent =
+      step >= INTRO_STEPS.length ? "开始冒险" : `下一步(${step}/${INTRO_STEPS.length})`;
   }
 
   const om = $("offline-modal");
@@ -1791,21 +1948,21 @@ function renderGearModal(st: State): void {
 // ---------------------------------------------------------------- 交互
 let paused = false;
 
-/** 塔 tab 与页面容器:index.html 保持 6 tab 静态结构,这里按解锁动态补。 */
+/** 塔排行祭坛三个动态 tab:设置已移至顶栏齿轮,注入锚点改为链式(悬赏→塔→排行→祭坛)。 */
 function ensureTowerDom(): void {
   if (document.querySelector('.nav-item[data-tab="tower"]')) return;
-  const settingsNav = document.querySelector('.nav-item[data-tab="settings"]');
+  const questNav = document.querySelector('.nav-item[data-tab="quest"]');
   const towerNav = document.createElement("div");
   towerNav.className = "nav-item";
   towerNav.dataset.tab = "tower";
   towerNav.innerHTML = `<span class="ic">🗼</span><span class="tx">塔</span><span class="kbd">6</span>`;
-  settingsNav?.before(towerNav);
-  const pageSettings = document.getElementById("page-settings");
+  questNav?.after(towerNav);
+  const pageQuest = document.getElementById("page-quest");
   const towerPage = document.createElement("div");
   towerPage.className = "page";
   towerPage.id = "page-tower";
   towerPage.innerHTML = `<div class="card grow" id="tower-panel"></div>`;
-  pageSettings?.before(towerPage);
+  pageQuest?.after(towerPage);
 }
 
 function switchTab(name: string): void {
@@ -1819,6 +1976,7 @@ function switchTab(name: string): void {
 
 document.addEventListener("click", (e: MouseEvent) => {
   const target = e.target as HTMLElement;
+  if (target.id === "gear-btn") { switchTab("settings"); return; }
   const nav = target.closest(".nav-item");
   if (nav) {
     switchTab((nav as HTMLElement).dataset.tab ?? curTab);
@@ -1850,10 +2008,16 @@ function localCmd(name: string): void {
     toast("存档已导出");
   } else if (name === "import") ($("file-input") as HTMLInputElement).click();
   else if (name === "sfx") toggleSfx();
+  else if (name === "bgm") toggleBgm();
   else if (name === "reset") {
     if (confirm("确定清空浏览器存档并重新开始?")) { doCmd("reset"); renderNow(); }
   }
 }
+// 总音量滑条:input 事件委托(设置页每次渲染重建 DOM,不能绑在元素上)
+document.addEventListener("input", (e: Event) => {
+  const el = (e.target as HTMLElement).closest<HTMLInputElement>("[data-vol]");
+  if (el) setMasterVol(Number(el.value));
+});
 $("file-input").addEventListener("change", (e: Event) => {
   const input = e.target as HTMLInputElement;
   const f = input.files && input.files[0];
@@ -1879,8 +2043,11 @@ function togglePause(): void {
 document.addEventListener("keydown", (e: KeyboardEvent) => {
   const t = e.target as HTMLElement;
   if (t.tagName === "SELECT" || t.tagName === "INPUT") return;
-  // ESC:关闭换装对比/装备详情弹窗(视为稍后处理,物品留在背包)
+  // ESC:关闭弹窗(换装对比/装备详情/转生确认与择业/新手引导)
   if (e.key === "Escape") {
+    if (rebirthAsk) { rebirthAsk = false; renderNow(); return; }
+    if (rebirthPick) { rebirthPick = false; renderNow(); return; }
+    if (introStep !== null) { introStep = null; renderNow(); return; }
     const swapOpen = document.querySelector("#swap-modal")?.classList.contains("show");
     if (swapOpen) { g.resolveSwap(false); renderNow(); return; }
     if (document.querySelector("#gear-modal")?.classList.contains("show")) {
@@ -1893,6 +2060,7 @@ document.addEventListener("keydown", (e: KeyboardEvent) => {
   if (idx >= 0) {
     const item = document.querySelector(`.nav-item[data-tab="${tabs[idx]}"]`) as HTMLElement | null;
     if (item) item.click();
+    else if (tabs[idx]) switchTab(tabs[idx]);   // 设置无导航项(顶栏齿轮):直接切页
   } else if (e.key === "f" || e.key === "F") { doCmd("mode"); renderNow(); }
   else if (e.key === "b" || e.key === "B") { doCmd("speed"); renderNow(); }
   else if (e.key === "j" || e.key === "J") { doCmd("cycle_sell"); renderNow(); }
@@ -2043,19 +2211,19 @@ function lbMyName(): string {
 
 function ensureAltarDom(): void {
   if (document.querySelector('.nav-item[data-tab="altar"]')) return;
-  const settingsNav = document.querySelector('.nav-item[data-tab="settings"]');
+  const lbNav = document.querySelector('.nav-item[data-tab="leaderboard"]');
   const nav = document.createElement("div");
   nav.className = "nav-item";
   nav.dataset.tab = "altar";
   nav.innerHTML = `<span class="ic">🕯</span><span class="tx">祭坛</span><span class="kbd">8</span>`;
-  settingsNav?.before(nav);
-  const pageSettings = document.getElementById("page-settings");
+  lbNav?.after(nav);
+  const pageLb = document.getElementById("page-leaderboard");
   const page = document.createElement("div");
   page.className = "page";
   page.id = "page-altar";
   page.innerHTML = `<div class="card" id="potions-card"></div>
                     <div class="card grow" id="altar-list"></div>`;
-  pageSettings?.before(page);
+  pageLb?.after(page);
 }
 
 // ================================================================ 深渊祭坛(金币→永久属性)+ 药剂
@@ -2098,19 +2266,19 @@ function renderAltar(st: State): void {
 
 function ensureLeaderboardDom(): void {
   if (document.querySelector('.nav-item[data-tab="leaderboard"]')) return;
-  const settingsNav = document.querySelector('.nav-item[data-tab="settings"]');
+  const towerNav = document.querySelector('.nav-item[data-tab="tower"]');
   const nav = document.createElement("div");
   nav.className = "nav-item";
   nav.dataset.tab = "leaderboard";
   nav.innerHTML = `<span class="ic">🏆</span><span class="tx">排行</span><span class="kbd">7</span>`;
-  settingsNav?.before(nav);
-  const pageSettings = document.getElementById("page-settings");
+  towerNav?.after(nav);
+  const pageTower = document.getElementById("page-tower");
   const page = document.createElement("div");
   page.className = "page";
   page.id = "page-leaderboard";
   page.innerHTML = `<div class="card" id="lb-mine"></div>
                     <div class="card grow" id="lb-list"></div>`;
-  pageSettings?.before(page);
+  pageTower?.after(page);
 }
 
 async function lbFetch(board: "zone" | "level" | "tower" | "power"): Promise<string | null> {

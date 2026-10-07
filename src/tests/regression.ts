@@ -751,6 +751,80 @@ function testMobSkillDebuff(): void {
   ok((g2.hero.stun_until ?? 0) <= g2.time, "重载存档后眩晕不残留");
 }
 
+// ================================================================ 15. 转生(门槛/重置/保留/倍率/存档 v8)
+function testRebirth(): void {
+  const mem = memHooks();
+  const g = newGame(77);
+  g.chooseClass("warrior");
+  ok(!g.canRebirth(), "Lv40 以下不应可转生");
+  g.rebirth();
+  eq(g.rebirths, 0, "未达门槛 rebirth() 应被拒");
+
+  // 堆一批跨"重置/保留"两侧的进度
+  g.level = BAL.rebirth_min_level;         // 直接达标(确定性)
+  g.gold = 98765;
+  g.stones = 13;
+  g.skillLv["w_strike"] = 5;
+  g.altarLv["power"] = 4;
+  g.stats.kills = 500;
+  g.stats.max_zone = 9;
+  g.tower.max_floor = 12;
+  g.bagExpLv = 2;
+  g.bag.push(new Item("weapon", "fine", 30, 10, [{ id: "atk", val: 5 }]));
+  g.recalcHero();
+  ok(g.canRebirth(), "Lv40 应可转生");
+
+  g.rebirth("mage");   // 转生 + 换职业(职业锁的唯一出口)
+  eq(g.rebirths, 1, "转生后 rebirths=1");
+  eq(g.classId, "mage", "转生可换职业");
+  eq(g.level, 1, "等级重置为 1");
+  eq(g.zone, 1, "区域重置为第 1 区");
+  eq(g.gold, 0, "金币重置");
+  eq(Object.keys(g.equip).length, 0, "装备清空");
+  eq(g.bag.length, 0, "背包清空");
+  eq(g.skillLv["w_strike"] ?? 1, 1, "技能等级重置");
+  eq(g.stones, 13, "重铸石保留");
+  eq(g.altarLv["power"], 4, "祭坛等级保留");
+  eq(g.stats.kills, 500, "终身击杀保留(排行榜包络依赖)");
+  eq(g.stats.max_zone, 9, "终身最远区域保留");
+  eq(g.tower.max_floor, 12, "塔最高层保留");
+  eq(g.bagExpLv, 2, "背包容量等级保留");
+  ok(g.loadout.active.length > 0 && g.loadout.active[0].startsWith("m_"),
+    "loadout 按新职业(mage)重建");
+  // 倍率:干净档(无成就/祭坛干扰)Lv1 mage 转生后 = 基础 × (1+25%)
+  const gClean = newGame(78);
+  gClean.chooseClass("mage");
+  const cleanBase = gClean.hero.atk;
+  gClean.rebirths = 1;
+  gClean.recalcHero();
+  close(gClean.hero.atk, cleanBase * (1 + BAL.rebirth_stat_pct / 100),
+    "转生倍率应作用于三围(+25%)");
+  ok(g.hero.goldfind >= BAL.rebirth_gain_pct, "转生金币加成生效");
+  ok(g.hero.xp_pct >= BAL.rebirth_gain_pct, "转生经验加成生效");
+
+  // 塔中不可转生
+  g.level = BAL.rebirth_min_level;
+  g.inTower = true;
+  ok(!g.canRebirth(), "塔中不可转生");
+  g.inTower = false;
+
+  // 存档往返:rebirths 进档、重载后倍率仍生效(用干净档口径)
+  gClean.save();
+  const dClean = JSON.parse(mem.raw);
+  eq(dClean.rebirths, 1, "to_dict 应含 rebirths");
+  const gReload = Game.fromDict(dClean);
+  eq(gReload.rebirths, 1, "往返后 rebirths");
+  close(gReload.hero.atk, gClean.hero.atk, "往返后转生倍率仍生效");
+  eq(dClean.version, SAVE_VERSION, "存档版本应为最新(v8)");
+
+  // v7 → v8 迁移:无 rebirths 字段的旧档默认 0
+  const v7 = { ...dClean, version: 7 } as Record<string, unknown>;
+  delete v7.rebirths;
+  const m = migrateSave(v7);
+  eq(m.version, 8, "v7 迁移应到 v8");
+  eq(m.rebirths, 0, "v7 旧档 rebirths 默认 0");
+}
+
 // ================================================================ runner
 const TESTS: [string, () => void][] = [
   ["1.RNG(MT19937 与 CPython 对拍)", testRng],
@@ -767,6 +841,7 @@ const TESTS: [string, () => void][] = [
   ["12.战力系统(计算/预览还原/buff口径)", testPower],
   ["13.一键出售品质档(默认/档位0/2/5)", testSellJunk],
   ["14.怪物技能debuff(减速/眩晕/存档口径)", testMobSkillDebuff],
+  ["15.转生(门槛/重置/保留/倍率/存档v8)", testRebirth],
 ];
 
 let failed = 0;

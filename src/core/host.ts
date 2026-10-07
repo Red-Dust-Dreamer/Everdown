@@ -1,5 +1,5 @@
 /** 平台无关宿主逻辑:按键分发 + autopilot(与 abyss/main.py 一致) */
-import { ACTIVE_SKILLS, PASSIVE_SKILLS, ACTIVE_DEF, SLOTS } from "./data.ts";
+import { ACTIVE_SKILLS, PASSIVE_SKILLS, ACTIVE_DEF, BAL, SLOTS } from "./data.ts";
 import type { ActiveSkill } from "./data.ts";
 import type { Game } from "./game.ts";
 
@@ -67,6 +67,11 @@ export function handleKey(g: Game, key: string): KeyResult {
     else if (key === "u") g.enhance(SLOTS[ui.char_sel].id);
     else if (key === "r") g.reforge(SLOTS[ui.char_sel].id);
     else if (key === "e") g.unequip(SLOTS[ui.char_sel].id);
+    else if (key === "g") {
+      // 转生(CLI 口径:保持当前职业;Web 端才有择业界面)
+      if (g.canRebirth()) g.rebirth();
+      else g.toast(`转生需 Lv.${BAL.rebirth_min_level}`);
+    }
   } else if (tab === 2) {
     if (key === "up") ui.bag_sel = Math.max(0, ui.bag_sel - 1);
     else if (key === "down") ui.bag_sel = Math.min(Math.max(0, g.bag.length - 1), ui.bag_sel + 1);
@@ -167,9 +172,15 @@ export function handleKey(g: Game, key: string): KeyResult {
 }
 
 // ---------------------------------------------------------------- autopilot
-export function autopilot(g: Game, sim = false): void {
+/** autoRebirth=true:等级到转生门槛即转生(保持当前职业)。
+ *  仅供包络参考局(gen-lb-bounds)用 —— 真玩家转生时机自主,autopilot 默认不转。 */
+export function autopilot(g: Game, sim = false, autoRebirth = false): void {
   if (g.classId === null) {
     g.chooseClass("warrior");
+    return;
+  }
+  if (autoRebirth && g.canRebirth()) {
+    g.rebirth();
     return;
   }
   if (Math.trunc(g.time * 10) % 50 !== 0) return;

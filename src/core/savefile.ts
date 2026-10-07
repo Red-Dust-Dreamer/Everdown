@@ -353,5 +353,9 @@ export function validateSaveDict(d: Record<string, any>): SaveIssue[] {
     out.push(issue("quest_daily_date", "warn",
       `应为 YYYY-MM-DD(当前 ${fmtVal(d.quest_daily_date)}),跨日重置行为未定义`));
   }
+  if (d.rebirths !== undefined && !(isInt(d.rebirths) && d.rebirths >= 0)) {
+    out.push(issue("rebirths", "warn",
+      `rebirths 应为 ≥0 的整数(当前 ${fmtVal(d.rebirths)}),非法值回落 0 = 丢转生加成`));
+  }
   return out;
 }

@@ -19,7 +19,7 @@ import { PyRandom } from "./rng.ts";
 import * as systems from "./systems.ts";
 import * as S from "./skills.ts";
 
-export const SAVE_VERSION = 7;
+export const SAVE_VERSION = 8;
 export const EVENT_CAP = 2000;
 
 /** 手动模式待确认换装:自动换装关闭时,更强掉落弹新旧对比由玩家定夺 */
@@ -76,6 +76,7 @@ export class Game {
   equip: Record<string, Item> = {};
   bag: Item[] = [];
   classId: string | null = null;
+  rebirths = 0;                 // 转生次数(终身累计;倍率在 recalcHero 生效)
   loadout: Loadout = { active: [], passive: [] };
   skillLv: Record<string, number> = {};
   skillCd: Record<string, number> = {};
@@ -165,6 +166,68 @@ export class Game {
     this.spawn();
   }
 
+  // ================================================================ 转生
+  /** 门槛:等级达标且不在塔中(战败/换装弹窗无碍,UI 层自行拦截) */
+  canRebirth(): boolean {
+    return this.classId !== null && !this.inTower && this.level >= BAL.rebirth_min_level;
+  }
+
+  /** 转生:重置本局成长(等级/装备/背包/金币/技能等级),保留永久元进度
+   *  (成就/祭坛/遗物/塔记录/重铸石/背包容量),每次 +25% 三围与 +10% 金币经验;
+   *  newClass 省略 = 保持当前职业,传新职业 id = 转生时换职业(职业锁的唯一出口)。 */
+  rebirth(newClass?: string): void {
+    if (!this.canRebirth()) {
+      this.toast(this.inTower ? "塔中无法转生" : `转生需 Lv.${BAL.rebirth_min_level}`);
+      return;
+    }
+    const cid = newClass && CLASSES[newClass] ? newClass : this.classId!;
+    const n = this.rebirths + 1;
+    // —— 重置(本局成长)——
+    this.level = 1;
+    this.xp = 0;
+    this.zone = 1;
+    this.stage = 1;
+    this.stageKills = 0;
+    this.deathsRow = 0;
+    this.deathTier = -1;
+    this.mode = "push";
+    this.autoFarm = false;
+    this.farmStage = 1;
+    this.gold = 0;
+    this.equip = {};
+    this.bag = [];
+    this.skillLv = {};
+    this.buffs = {};
+    this.pendingSwap = null;
+    this.monster = null;
+    this.respawnTimer = 0;
+    this.settings.speed = 1;
+    // —— 保留(永久元进度):stones/altarLv/relics/relicBag/tower/bagExpLv/
+    //    potionBought/stats(终身)/daily 计数;playtime 不重置(离线与包络都按终身时长计)
+    this.rebirths = n;
+    this.classId = cid;
+    this.skillCd = {};
+    for (const s of ACTIVE_SKILLS) this.skillCd[s.id] = 0;
+    this.loadout = { active: [], passive: [] };
+    for (const s of ACTIVE_SKILLS) {
+      if (s.cls === cid && s.unlock <= 1) { this.loadout.active.push(s.id); break; }
+    }
+    for (const s of PASSIVE_SKILLS) {
+      if (s.cls === cid && s.unlock <= 1) { this.loadout.passive.push(s.id); break; }
+    }
+    // 悬赏按新局重掷(目标随区域缩放,旧深区目标在新局无从完成)
+    this.quests = [systems.rollQuest(1, this.rng), systems.rollQuest(1, this.rng),
+      systems.rollQuest(1, this.rng)];
+    this.recalcHero();
+    this.hero.hp = this.hero.max_hp;
+    const cls = CLASSES[cid];
+    this.log(`♻ 第 ${n} 次转生!以 ${cls.name} 之名重生:` +
+      `攻击/生命/防御 +${BAL.rebirth_stat_pct * n}% · 金币/经验 +${BAL.rebirth_gain_pct * n}%`,
+      "bright_magenta");
+    this.toast(`转生成功 · 第 ${n} 世`);
+    this.spawn();
+  }
+
   loadoutSlots(): number {
     let n = 0;
     for (const th of BAL.loadout_unlock) if (this.level >= th) n++;
@@ -228,6 +291,15 @@ export class Game {
     ];
     for (const m of mods) if (m.op === "add") agg[m.stat] = (agg[m.stat] ?? 0) + m.v;
     for (const m of mods) if (m.op === "pct") agg[m.stat] = (agg[m.stat] ?? 0) * (1 + m.v / 100);
+    // 转生倍率:三围乘区 + 金币/经验加成(加法叠加);在截断前生效,CAPS 仍兜底
+    if (this.rebirths > 0) {
+      const m = 1 + BAL.rebirth_stat_pct * this.rebirths / 100;
+      agg.hp *= m;
+      agg.atk *= m;
+      agg.def *= m;
+      agg.goldfind = (agg.goldfind ?? 0) + BAL.rebirth_gain_pct * this.rebirths;
+      agg.xp_pct = (agg.xp_pct ?? 0) + BAL.rebirth_gain_pct * this.rebirths;
+    }
     for (const [k, cap] of Object.entries(CAPS)) {
       if (k in agg) agg[k] = Math.min(agg[k], cap as number);
     }
@@ -1040,6 +1112,7 @@ export class Game {
       death_tier: this.deathTier, auto_farm: this.autoFarm,
       mode: this.mode, farm_stage: this.farmStage,
       class_id: this.classId,
+      rebirths: this.rebirths,
       loadout: this.loadout,
       skill_lv: this.skillLv,
       equip: Object.fromEntries(Object.entries(this.equip).map(([k, v]) => [k, v.toDict()])),
@@ -1097,6 +1170,7 @@ export class Game {
       .map(([k, v]) => [k, Item.fromDict(v as any)]));
     g.bag = (d.bag ?? []).map((i: any) => Item.fromDict(i));
     g.classId = d.class_id ?? null;
+    g.rebirths = d.rebirths ?? 0;
     g.loadout = d.loadout ?? { active: [], passive: [] };
     g.skillLv = d.skill_lv ?? {};
     g.skillCd = {};
@@ -1203,6 +1277,11 @@ export function migrateSave(d: Record<string, any>): Record<string, any> {
   }
   if (v < 7) {
     d.version = 7;
+  }
+  if (v < 8) {
+    // v7 → v8:转生系统(rebirths 终身计数,旧档默认 0,无破坏性变更)
+    d.rebirths = d.rebirths ?? 0;
+    d.version = 8;
   }
   // 装备规则 2.1(主属性候选表+词条数缩减):按标志位一次性清除旧装备,不保留。
   // 不用版本号判断——HMR 热更的旧页面会以新版本号续存旧装备,标志位幂等兜底。

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .ansi import (CLEAR_SCREEN, CURSOR_HOME, DISABLE_WRAP, ENABLE_WRAP,
                    HIDE_CURSOR, RESET, SHOW_CURSOR, c, enable_vt_mode, fmt, fmt_time)
-from .data import SLOTS
+from .data import BAL, SLOTS
 from .game import Game
 from .render import render_frame
 from .view import View
@@ -153,6 +153,12 @@ def handle_key(g, key):
             g.reforge(SLOTS[ui["char_sel"]][0])
         elif key == "e":
             g.unequip(SLOTS[ui["char_sel"]][0])
+        elif key == "g":
+            # 转生(CLI 口径:保持当前职业;Web 端才有择业界面)
+            if g.can_rebirth():
+                g.rebirth()
+            else:
+                g.toast("转生需 Lv.%d" % BAL["rebirth_min_level"])
     elif tab == 2:  # 背包
         if key == "up":
             ui["bag_sel"] = max(0, ui["bag_sel"] - 1)
@@ -370,11 +376,15 @@ def run_demo(seconds=30.0, seed=DEFAULT_SEED):
     return 0
 
 
-def _autopilot(g, sim=False):
+def _autopilot(g, sim=False, auto_rebirth=False):
     """模拟挂机玩家:自动装配新技能、强化最低强化装备、升级技能;
-    卡墙自动转挂机(游戏内置),刷一段时间无死亡再切回推进"""
+    卡墙自动转挂机(游戏内置),刷一段时间无死亡再切回推进。
+    auto_rebirth=True:等级到转生门槛即转生(仅供包络参考局,默认不转)。"""
     if g.class_id is None:
         g.choose_class("warrior")
+        return
+    if auto_rebirth and g.can_rebirth():
+        g.rebirth()
         return
     if int(g.time * 10) % 50 != 0:
         return

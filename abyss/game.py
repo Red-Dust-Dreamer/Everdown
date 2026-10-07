@@ -27,7 +27,7 @@ D_ALTAR = {a[0]: a for a in ALTAR_LINES}
 D_POTION = {p[0]: p for p in POTIONS}
 
 SAVE_PATH = Path(__file__).resolve().parent.parent / "save.json"
-SAVE_VERSION = 7
+SAVE_VERSION = 8
 EVENT_CAP = 2000
 VIRTUAL_STATS = ("skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct",
                  "all_skill_lv", "crit_extra", "kill_heal", "deathward",
@@ -57,6 +57,7 @@ class Game:
         self.bag = []              # [Item] 最新在前
         # ---- 职业与技能 ----
         self.class_id = None                    # 待选择(渲染层弹职业选择)
+        self.rebirths = 0                       # 转生次数(终身累计;倍率在 recalc_hero 生效)
         self.loadout = {"active": [], "passive": []}   # 各至多4个已装配技能id
         self.skill_lv = {}                      # 技能id -> 自主升级等级
         self.skill_cd = {s["id"]: 0.0 for s in ACTIVE_SKILLS}
@@ -156,6 +157,69 @@ class Game:
         self.log("按 H 查看按键说明;技能页(5)可更换装配与升级技能。", "bright_black")
         self.spawn()
 
+    # ================================================================ 转生
+    def can_rebirth(self):
+        """门槛:等级达标且不在塔中(战败/换装弹窗无碍,渲染层自行拦截)"""
+        return (self.class_id is not None and not self.in_tower
+                and self.level >= BAL["rebirth_min_level"])
+
+    def rebirth(self, new_class=None):
+        """转生:重置本局成长(等级/装备/背包/金币/技能等级),保留永久元进度
+        (成就/祭坛/遗物/塔记录/重铸石/背包容量),每次 +25% 三围与 +10% 金币经验;
+        new_class 省略 = 保持当前职业,传新职业 id = 转生时换职业。"""
+        if not self.can_rebirth():
+            self.toast("塔中无法转生" if self.in_tower
+                       else "转生需 Lv.%d" % BAL["rebirth_min_level"])
+            return
+        cid = new_class if new_class in CLASSES else self.class_id
+        n = self.rebirths + 1
+        # —— 重置(本局成长)——
+        self.level = 1
+        self.xp = 0
+        self.zone = 1
+        self.stage = 1
+        self.stage_kills = 0
+        self.deaths_row = 0
+        self.death_tier = -1
+        self.mode = "push"
+        self.auto_farm = False
+        self.farm_stage = 1
+        self.gold = 0
+        self.equip = {}
+        self.bag = []
+        self.skill_lv = {}
+        self.buffs = {}
+        self.pending_swap = None
+        self.monster = None
+        self.respawn_timer = 0.0
+        self.settings["speed"] = 1
+        # —— 保留(永久元进度):stones/altar_lv/relics/tower/bag_exp_lv/
+        #    potion_bought/stats(终身)/daily 计数;playtime 不重置
+        self.rebirths = n
+        self.class_id = cid
+        self.skill_cd = {s["id"]: 0.0 for s in ACTIVE_SKILLS}
+        self.loadout = {"active": [], "passive": []}
+        for s in ACTIVE_SKILLS:
+            if s["cls"] == cid and s["unlock"] <= 1:
+                self.loadout["active"].append(s["id"])
+                break
+        for s in PASSIVE_SKILLS:
+            if s["cls"] == cid and s["unlock"] <= 1:
+                self.loadout["passive"].append(s["id"])
+                break
+        # 悬赏按新局重掷(目标随区域缩放,旧深区目标在新局无从完成)
+        self.quests = [systems.roll_quest(1, self.rng),
+                       systems.roll_quest(1, self.rng),
+                       systems.roll_quest(1, self.rng)]
+        self.recalc_hero()
+        self.hero["hp"] = self.hero["max_hp"]
+        cls = CLASSES[cid]
+        self.log("♻ 第 %d 次转生!以 %s之名重生:攻击/生命/防御 +%d%% · 金币/经验 +%d%%"
+                 % (n, cls["name"], BAL["rebirth_stat_pct"] * n,
+                    BAL["rebirth_gain_pct"] * n), "bright_magenta")
+        self.toast("转生成功 · 第 %d 世" % n)
+        self.spawn()
+
     def loadout_slots(self):
         """当前解锁的装配槽位数(主动/被动同阶)"""
         n = 0
@@ -227,6 +291,14 @@ class Game:
         for m in mods:
             if m["op"] == "pct":
                 agg[m["stat"]] = agg.get(m["stat"], 0) * (1 + m["v"] / 100.0)
+        # 转生倍率:三围乘区 + 金币/经验加成(加法叠加);在截断前生效,CAPS 仍兜底
+        if self.rebirths > 0:
+            m = 1 + BAL["rebirth_stat_pct"] * self.rebirths / 100.0
+            agg["hp"] *= m
+            agg["atk"] *= m
+            agg["def"] *= m
+            agg["goldfind"] = agg.get("goldfind", 0) + BAL["rebirth_gain_pct"] * self.rebirths
+            agg["xp_pct"] = agg.get("xp_pct", 0) + BAL["rebirth_gain_pct"] * self.rebirths
         for k, cap in CAPS.items():
             if k in agg:
                 agg[k] = min(agg[k], cap)
@@ -899,6 +971,7 @@ class Game:
             "death_tier": self.death_tier, "auto_farm": self.auto_farm,
             "mode": self.mode, "farm_stage": self.farm_stage,
             "class_id": self.class_id,
+            "rebirths": self.rebirths,
             "loadout": self.loadout,
             "skill_lv": self.skill_lv,
             "equip": {s: it.to_dict() for s, it in self.equip.items()},
@@ -949,6 +1022,7 @@ class Game:
         g.equip = {s: Item.from_dict(v) for s, v in d.get("equip", {}).items()}
         g.bag = [Item.from_dict(v) for v in d.get("bag", [])]
         g.class_id = d.get("class_id")
+        g.rebirths = d.get("rebirths", 0)
         g.loadout = d.get("loadout") or {"active": [], "passive": []}
         g.skill_lv = d.get("skill_lv") or {}
         g.skill_cd = {s["id"]: 0.0 for s in ACTIVE_SKILLS}
@@ -1053,6 +1127,10 @@ def migrate_save(d):
         v = 6
     if v < 7:
         d["version"] = 7
+    if v < 8:
+        # v7 → v8:转生系统(rebirths 终身计数,旧档默认 0,无破坏性变更)
+        d.setdefault("rebirths", 0)
+        d["version"] = 8
     # 装备规则 2.1:按标志位一次性清除旧装备(与 TS 同款幂等兜底,防 HMR 绕过)
     if not d.get("gear_rules_21"):
         d["equip"] = {}

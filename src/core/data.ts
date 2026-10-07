@@ -414,6 +414,11 @@ export const BAL = {
   speed_unlock: [1, 10, 30],
   death_row_to_farm: 2,
   farm_stuck_row: 5,   // 挂机层位连续战败 N 次:视为层位过高,退 3 层止损
+
+  // ---- 转生(2.2):重置本局成长,换永久倍率;成就/祭坛/遗物/塔记录终身保留 ----
+  rebirth_min_level: 40,   // 转生门槛:英雄等级(约 3~4 小时推进可达)
+  rebirth_stat_pct: 25,    // 每次转生:攻击/生命/防御 +25%(加法叠加)
+  rebirth_gain_pct: 10,    // 每次转生:金币加成/经验加成 +10%(加法叠加)
 } as const;
 
 export const VIRTUAL_STATS = ["skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct"] as const;

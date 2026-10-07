@@ -28,8 +28,10 @@ const ROOT = process.cwd();                  // 从仓库根运行(npm run gen:l
 
 interface Sample { level: number; kills: number; zone: number; tower: number; power: number }
 
-/** 与 sim.ts runSim 同构的参考局(autopilot 全自动),返回终局指标 */
-function runRef(sec: number, cls: string): Sample {
+/** 与 sim.ts runSim 同构的参考局(autopilot 全自动),返回终局指标。
+ *  2.2 起跑两种策略:永不转生 / 到门槛即转生(rebirth=true)——转生玩家重爬更快,
+ *  各指标取两策略最大值,包络才罩得住高转生玩家的真实上限。 */
+function runRef(sec: number, cls: string, rebirth = false): Sample {
   const g = new Game(SEED);
   g.view = new View();
   g.chooseClass(cls);
@@ -37,7 +39,7 @@ function runRef(sec: number, cls: string): Sample {
   for (let i = 0; i < steps; i++) {
     g.tick(TICK);
     g.events.length = 0;
-    autopilot(g, true);
+    autopilot(g, true, rebirth);
   }
   return {
     level: g.level,
@@ -48,14 +50,17 @@ function runRef(sec: number, cls: string): Sample {
   };
 }
 
-console.log(`== 参考局:${DURATIONS.join("/")} 秒 × ${CLASSES.join("/")} × seed ${SEED}(全默认数值)`);
+console.log(`== 参考局:${DURATIONS.join("/")} 秒 × ${CLASSES.join("/")} × seed ${SEED}(全默认数值;含转生策略)`);
 const curve = DURATIONS.map(t => {
   const best: Sample = { level: 0, kills: 0, zone: 0, tower: 0, power: 0 };
   for (const cls of CLASSES) {
-    const s = runRef(t, cls);
-    for (const k of Object.keys(best) as (keyof Sample)[])
-      best[k] = Math.max(best[k], s[k]);
-    console.log(`   t=${t}s ${cls.padEnd(7)} Lv${s.level} kills=${s.kills} zone=${s.zone} tower=${s.tower} power=${s.power}`);
+    for (const rb of [false, true]) {
+      const s = runRef(t, cls, rb);
+      for (const k of Object.keys(best) as (keyof Sample)[])
+        best[k] = Math.max(best[k], s[k]);
+      console.log(`   t=${t}s ${cls.padEnd(7)} ${rb ? "rebirth" : "plain "} ` +
+        `Lv${s.level} kills=${s.kills} zone=${s.zone} tower=${s.tower} power=${s.power}`);
+    }
   }
   return {
     t,

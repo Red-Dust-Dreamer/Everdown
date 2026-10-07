@@ -1,6 +1,6 @@
 {
   "name": "abyss-idle",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "private": true,
   "description": "深渊挂机 — 终端放置刷宝游戏(TS 同构核心:Web / Node CLI 共用)",
   "type": "module",

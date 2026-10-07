@@ -5,13 +5,16 @@
  *   node --experimental-strip-types scripts/state_dump.ts --sim 30 --seed 20260930 --cls warrior
  *
  * 与 src/sim.ts runSim 同构:new Game(seed).chooseClass(cls),循环
- * g.tick(0.1) → g.events.length = 0 → autopilot(g, true)(autopilot 在 src/core/host.ts)。
+ * g.tick(0.1) → g.events.length = 0 → autopilot(g, true)(autopilot 在 src/core/host.ts);
+ * 循环中点强制 level=rebirth_min_level 并 rebirth() 一次(覆盖转生状态与重置语义,
+ * scripts/state_dump.py 同规格)。
  * 输出 = g.toDict() + hero 摘要(保留 4 位小数),剔除 last_saved,
  * 键递归排序(对齐 Python json.dumps(sort_keys=True)),indent=2。
  * TS 侧 saveHooks 未注入,autosave 为空操作,不会写任何存档文件。
  */
 import { Game } from "../src/core/game.ts";
 import { autopilot } from "../src/core/host.ts";
+import { BAL } from "../src/core/data.ts";
 
 const TICK = 0.1;
 const HERO_KEYS = ["hp", "atk", "def", "max_hp", "interval", "haste", "crit", "crit_dmg"] as const;
@@ -60,7 +63,12 @@ const cls = clsIdx >= 0 ? args[clsIdx + 1] : "warrior";
 const g = new Game(seed);
 g.chooseClass(cls);
 const steps = Math.trunc(seconds / TICK);
+const rebirthAt = Math.trunc(steps / 2);   // 中点强制转生一次(双端同规格)
 for (let i = 0; i < steps; i++) {
+  if (i === rebirthAt) {
+    g.level = BAL.rebirth_min_level;   // 直接达成门槛(确定性,不吃随机)
+    g.rebirth();
+  }
   g.tick(TICK);
   g.events.length = 0;
   autopilot(g, true);

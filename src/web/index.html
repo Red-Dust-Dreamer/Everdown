@@ -35,18 +35,18 @@
   <span class="res res-stone" id="res-stone"></span>
   <span class="res res-time" id="res-time"></span>
   <button class="btn" data-local="save">存档</button>
+  <button class="btn" id="gear-btn" data-tab="settings" title="设置(快捷键 9)">⚙</button>
   <button class="btn warn" id="pause-btn" data-local="pause">暂停</button>
 </header>
 
 <div id="main">
-  <!-- 导航(手机端变为底部标签栏) -->
+  <!-- 导航(手机端变为底部标签栏;设置在顶栏 ⚙ 与快捷键 9) -->
   <nav id="nav">
     <div class="nav-item on" data-tab="battle"><span class="ic">⚔</span><span class="tx">战斗</span><span class="kbd">1</span></div>
     <div class="nav-item" data-tab="hero"><span class="ic">🧙</span><span class="tx">角色</span><span class="kbd">2</span></div>
     <div class="nav-item" data-tab="bag"><span class="ic">🎒</span><span class="tx">背包</span><span class="kbd">3</span></div>
     <div class="nav-item" data-tab="skill"><span class="ic">✦</span><span class="tx">技能</span><span class="kbd">4</span></div>
     <div class="nav-item" data-tab="quest"><span class="ic">📜</span><span class="tx">悬赏</span><span class="kbd">5</span></div>
-    <div class="nav-item" data-tab="settings"><span class="ic">⚙</span><span class="tx">设置</span><span class="kbd">9</span></div>
   </nav>
 
   <!-- 内容区:各页容器由 main.ts 填充 -->
@@ -93,12 +93,41 @@
   </div>
 </div>
 
-<!-- 职业选择(新档) -->
+<!-- 职业选择(新档)/ 转生择业(共用卡片;文案与「保持原职业」按模式切换) -->
 <div class="overlay" id="class-select">
   <div class="modal wide">
     <h2>选择你的职业</h2>
-    <p class="dim">选择将决定你的技能池与成长方向(存档内不可更换)</p>
+    <p class="dim" id="cls-sub">选择将决定你的技能池与成长方向(40 级后可通过转生更换)</p>
     <div class="cls-grid" id="cls-grid"></div>
+    <div class="swap-ops" id="cls-keep" style="display:none">
+      <button class="btn big" data-cmd="rebirth_keep" id="cls-keep-btn">保持原职业</button>
+    </div>
+  </div>
+</div>
+
+<!-- 转生确认(保留/重置清单;确认后进入择业) -->
+<div class="overlay" id="rebirth-modal">
+  <div class="modal">
+    <h2>♻ 发起转生?</h2>
+    <p class="dim">重置本局成长,换取永久倍率;每次转生:攻击/生命/防御 +25%、金币/经验 +10%(可叠加)</p>
+    <div id="rebirth-body">
+      <div class="rb-keep"><b>保留:</b>成就与加成 · 祭坛等级 · 遗物与背包 · 深渊塔最高层 · 重铸石 · 背包容量 · 排行榜记录</div>
+      <div class="rb-reset"><b>重置:</b>等级 · 装备与背包物品 · 金币 · 技能等级 · 当前区域(从第 1 区重来)</div>
+      <div class="rb-note">转生时可更换职业(也可保持)——这是全游戏唯一的换职业机会。</div>
+    </div>
+    <div class="swap-ops">
+      <button class="btn big sell-on" data-cmd="rebirth_go">选择下一世职业 →</button>
+      <button class="btn big" data-cmd="rebirth_cancel">再想想</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新手引导(3 步;新档选完职业弹出) -->
+<div class="overlay" id="intro-modal">
+  <div class="modal">
+    <div id="intro-body"></div>
+    <div class="intro-dots" id="intro-dots"></div>
+    <button class="btn big sell-on" id="intro-next" data-cmd="intro_next">下一步</button>
   </div>
 </div>
 

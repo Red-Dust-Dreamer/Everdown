@@ -28,6 +28,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from abyss import game as game_mod  # noqa: E402
 from abyss.game import Game         # noqa: E402
 from abyss.main import _autopilot   # noqa: E402
+from abyss.data import BAL          # noqa: E402
 
 TICK = 0.1
 HERO_KEYS = ("hp", "atk", "def", "max_hp", "interval", "haste", "crit", "crit_dmg")
@@ -56,7 +57,12 @@ def main(argv=None):
 
     g = Game(seed=args.seed)
     g.choose_class(args.cls)
-    for _ in range(int(args.sim / TICK)):
+    steps = int(args.sim / TICK)
+    rebirth_at = steps // 2          # 中点强制转生一次(双端同规格)
+    for i in range(steps):
+        if i == rebirth_at:
+            g.level = BAL["rebirth_min_level"]   # 直接达成门槛(确定性,不吃随机)
+            g.rebirth()
         g.tick(TICK)
         g.events.clear()
         _autopilot(g, sim=True)
