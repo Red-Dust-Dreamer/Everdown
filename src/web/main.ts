@@ -1141,7 +1141,7 @@ let rebirthPick = false;
 const INTRO_STEPS: [string, string, string][] = [
   ["⚔", "战斗全自动", "你无需任何操作:英雄会自动战斗、推层、打头目。你要做的是变强 —— 换更强的装备、升级技能。"],
   ["🎒", "掉落与换装", "怪物掉落的装备进入背包,点「装备▾」可对比战力后再换上(默认自动换装已开启,不用管也行)。"],
-  ["🌙", "卡关就挂机", "打不过就切换挂机模式刷金币与装备;下线也有收益(离线最多结算 12 小时)。Lv40 后可「转生」换取永久强化。"],
+  ["🌙", "卡关就挂机", "打不过就切换挂机模式刷金币与装备;下线也有收益(离线最多结算 12 小时)。Lv50 后可「转生」换取永久强化。"],
 ];
 let introStep: number | null = null;
 
@@ -1680,7 +1680,7 @@ function renderOverlays(st: State): void {
       `<div class="ds">${c[3]}</div><div class="bs">${c[4]}</div></div>`).join("");
     ($("cls-sub") as HTMLElement).textContent = rebirthPick
       ? "选择下一世的职业(选卡转生;职业与技能池随之更换,遗物/成就/祭坛保留)"
-      : "选择将决定你的技能池与成长方向(40 级后可通过转生更换)";
+      : "选择将决定你的技能池与成长方向(50 级后可通过转生更换)";
     const keep = $("cls-keep");
     keep.style.display = rebirthPick && st.class_id ? "" : "none";
     if (rebirthPick && st.class_id) {
