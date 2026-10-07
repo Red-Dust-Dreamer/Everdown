@@ -12,7 +12,6 @@
     "cli": "node --experimental-strip-types src/cli.ts",
     "sim": "node --experimental-strip-types src/sim.ts",
     "demo": "node --experimental-strip-types src/sim.ts --demo",
-    "parity": "bash scripts/parity.sh",
     "gen:lb": "node --experimental-strip-types scripts/gen-lb-bounds.ts",
     "lb-smoke": "node --experimental-strip-types scripts/lb-smoke.ts",
     "test": "node --experimental-strip-types src/tests/regression.ts"

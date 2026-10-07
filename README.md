@@ -1,15 +1,13 @@
-# ⚔ 深渊挂机 (Abyss Idle) v2.0
+# ⚔ 深渊挂机 (Abyss Idle) v2.2
 
 终端与浏览器里的**放置刷宝**游戏:你的深渊行者永不停歇地自动战斗,你要做的是看掉落、换装备、点强化、推深渊。
 
-**双实现**:
+**TypeScript(`src/`)= 唯一实现** —— 网页/移动端与 Node CLI 共用同一套核心。
+(原 Python 对拍镜像 `abyss/` 与 Pyodide 遗留网页版已于 2026-10 归档至 `archive/python-mirror` 分支。)
 
-- **TypeScript(`src/`)= 主实现** —— 网页/移动端与 Node CLI 共用同一套核心,RNG 与 Python 版逐位兼容;
-- **Python(`abyss/`)= 冻结基准** —— 仅用于对拍验证与平衡模拟,不再新增功能。
+![平台](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows/macOS/Linux-green) ![实现](https://img.shields.io/badge/%E5%AE%9E%E7%8E%B0-TypeScript-blue) ![版本](https://img.shields.io/badge/%E7%89%88%E6%9C%AC-v2.2-orange)
 
-![平台](https://img.shields.io/badge/%E5%B9%B3%E5%8F%B0-Windows/macOS/Linux-green) ![实现](https://img.shields.io/badge/%E5%AE%9E%E7%8E%B0-TS%E4%B8%BB%E5%AE%9E%E7%8E%B0%2FPython%E5%9F%BA%E5%87%86-blue) ![版本](https://img.shields.io/badge/%E7%89%88%E6%9C%AC-v2.0-orange)
-
-## 运行(三个入口)
+## 运行(两个入口)
 
 ```bash
 # 1) 网页版(推荐):秒开、离线可用,与 CLI 共用同一核心与存档格式
@@ -20,10 +18,6 @@ npm run dev                       # http://localhost:8614
 
 # 2) TS CLI(免编译直跑,需 Node 22+)
 npm run cli                       # 或:node --experimental-strip-types src/cli.ts
-
-# 3) Python CLI(冻结基准实现,纯标准库零依赖)
-py run.py                         # Windows(推荐 Windows Terminal,窗口至少 100×30)
-python3 run.py                    # macOS / Linux
 ```
 
 > Windows 老版 cmd 也能跑(程序会自动开启 VT 模式),但 Windows Terminal 字体渲染更好。
@@ -31,16 +25,11 @@ python3 run.py                    # macOS / Linux
 > 网页存档保存在浏览器 localStorage,支持导出/导入 JSON(可与 CLI 的 save.json 互通);
 > 关闭页面再打开会自动结算**离线收益**(上限 12 小时,与 CLI 同一套懒结算 `resolve()`)。
 
-遗留网页版(Pyodide 慢启动,首载约 10 秒):`py -m http.server 8613` 后访问 http://localhost:8613/web/legacy/ 。
-
-现代网页版 **web/app**(2026-10-01 新增,图形界面,与 CLI/legacy 共用 Python 核心与 localStorage 存档):项目根起服务后访问 http://localhost:8613/web/app/ 。功能与 CLI 对齐(7 页全交互、离线结算弹窗、存档导出导入);设计稿见 `web/mockup/`。
-
 其他命令:
 
 ```bash
 npm run sim               # 平衡模拟(TS):无渲染长跑,输出进度报告
 npm run demo              # 自检(TS):模拟 30 秒并渲染全部界面
-py run.py --demo          # Python 基准侧同款:--sim 3600 平衡模拟 / --new 重开
 ```
 
 存档自动保存在游戏目录 `save.json`(每 30 秒 + 退出时)。
@@ -220,9 +209,13 @@ abyss-idle/
 
 ## 开发
 
-- **前置**:先 `npm install`(仅 typescript + vite 两个 devDependencies;Python 侧仍零依赖,`py run.py` 开箱即用);
-- **对拍**:`bash scripts/parity.sh` —— 同 seed 分别驱动 TS 与 Python 核心逐位比对,改动 `src/core` 后必跑;
+- **前置**:先 `npm install`(仅 typescript + vite 两个 devDependencies);
 - **回归**:`node --experimental-strip-types src/tests/regression.ts` —— 核心行为快照回归,防止重构悄悄改变数值。
+
+> **Python 镜像已归档**(2026-10):`abyss/` 对拍镜像、`run.py`、`web/legacy`、`web/app`
+> 与 parity/state_dump 对拍脚本移至 `archive/python-mirror` 分支(无真实玩家,维护税大于价值)。
+> 恢复:`git checkout archive/python-mirror -- abyss run.py`。
+> 代码注释中"与 abyss/*.py 一致"为历史对拍基准说明,数值语义不变。
 
 ## Roadmap(候选)
 

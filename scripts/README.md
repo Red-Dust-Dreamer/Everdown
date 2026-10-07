@@ -1,5 +1,10 @@
 # scripts/ — Python / TS 双实现对拍工具
 
+> **⚠ 已归档(2026-10)**:Python 镜像与对拍工具链已移至 `archive/python-mirror` 分支
+> (parity.sh / state_dump.* / test_tower_dump.py 随行)。本文件以下内容为归档时的
+> 历史流程记录,仅作参考;现有门禁见 README「开发」节。其余工具(gen-lb-bounds /
+> admin-smoke / lb-smoke / gen_sfx / gen_bgm)仍在用。
+
 Python(`abyss/`,基准)与 TS(`src/`)双实现并存,本目录固化对拍流程。
 所有工具**只读**游戏代码,绝不触碰项目根下的 `save.json`
 (`state_dump.py` 把 autosave 的 `SAVE_PATH` monkey 到临时目录;TS 侧不注入
