@@ -77,6 +77,7 @@ export class Game {
   bag: Item[] = [];
   classId: string | null = null;
   rebirths = 0;                 // 转生次数(终身累计;倍率在 recalcHero 生效)
+  rebirthHinted = false;        // 本世是否已提示过转生解锁(瞬态,不序列化;转生时重置)
   loadout: Loadout = { active: [], passive: [] };
   skillLv: Record<string, number> = {};
   skillCd: Record<string, number> = {};
@@ -205,6 +206,7 @@ export class Game {
     // —— 保留(永久元进度):stones/altarLv/relics/relicBag/tower/bagExpLv/
     //    potionBought/stats(终身)/daily 计数;playtime 不重置(离线与包络都按终身时长计)
     this.rebirths = n;
+    this.rebirthHinted = false;
     this.classId = cid;
     this.skillCd = {};
     for (const s of ACTIVE_SKILLS) this.skillCd[s.id] = 0;
@@ -352,6 +354,10 @@ export class Game {
       if (this.level > 1 && (BAL.speed_unlock as readonly number[]).includes(this.level)) {
         const tier = (BAL.speed_unlock as readonly number[]).indexOf(this.level) + 1;
         this.log(`★ 解锁 ×${tier} 倍速!按 B 切换`, "bright_cyan");
+      }
+      if (this.level >= BAL.rebirth_min_level && !this.rebirthHinted) {
+        this.rebirthHinted = true;
+        this.log("★ 转生已解锁(角色页)——卡墙时转生收益最大;转生可更换职业", "bright_magenta");
       }
     }
   }

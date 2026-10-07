@@ -126,6 +126,8 @@ interface State {
   cls: { name: string; icon: string; desc: string; color: string };
   level: number; xp: number; xp_req: number;
   rebirths: number; can_rebirth: boolean; rebirth_min_level: number;
+  /** 推进受阻(自动转挂机中)= 游戏自身的"卡墙"信号;转生推荐的时机 */
+  stuck: boolean;
   gold: number; stones: number; playtime: number; time: number;
   zone: number; stage: number; stage_kills: number; kills_per_stage: number;
   mode: string; farm_stage: number;
@@ -348,6 +350,7 @@ function buildState(g: Game): State {
     level: g.level, xp: g.xp, xp_req: g.xpReq(),
     rebirths: g.rebirths, can_rebirth: g.canRebirth(),
     rebirth_min_level: D.BAL.rebirth_min_level,
+    stuck: g.mode === "farm" && g.autoFarm,
     gold: g.gold, stones: g.stones, playtime: g.playtime, time: g.time,
     zone: g.zone, stage: g.stage, stage_kills: g.stageKills,
     kills_per_stage: D.BAL.kills_per_stage,
@@ -1141,7 +1144,7 @@ let rebirthPick = false;
 const INTRO_STEPS: [string, string, string][] = [
   ["⚔", "战斗全自动", "你无需任何操作:英雄会自动战斗、推层、打头目。你要做的是变强 —— 换更强的装备、升级技能。"],
   ["🎒", "掉落与换装", "怪物掉落的装备进入背包,点「装备▾」可对比战力后再换上(默认自动换装已开启,不用管也行)。"],
-  ["🌙", "卡关就挂机", "打不过就切换挂机模式刷金币与装备;下线也有收益(离线最多结算 12 小时)。Lv50 后可「转生」换取永久强化。"],
+  ["🌙", "卡关就挂机", "打不过就切换挂机模式刷金币与装备;下线也有收益(离线最多结算 12 小时)。卡墙推不动时可「转生」换永久强化(还能换职业)。"],
 ];
 let introStep: number | null = null;
 
@@ -1370,15 +1373,27 @@ function renderHeroPage(st: State): void {
     `<div class="gear-frame">${frame}</div>`;
 }
 
-/** 转生块:当前加成 + 门槛进度 + 入口按钮(确认与择业在弹窗) */
+/** 转生块:当前加成 + 门槛进度 + 入口按钮(确认与择业在弹窗)。
+ *  三态(2026-10 数值结论:无墙曲线下"到点即转"是负收益,文案引导卡墙再转):
+ *  未达标=锁定;达标未卡墙=普通按钮+时机提示;卡墙(自动转挂机中)=高亮推荐。 */
 function rebirthBlockHtml(st: State): string {
   const statPct = D.BAL.rebirth_stat_pct * st.rebirths;
   const gainPct = D.BAL.rebirth_gain_pct * st.rebirths;
   const nextStat = D.BAL.rebirth_stat_pct * (st.rebirths + 1);
   const nextGain = D.BAL.rebirth_gain_pct * (st.rebirths + 1);
   const lvLeft = Math.max(0, st.rebirth_min_level - st.level);
+  const action = st.can_rebirth && st.stuck
+    ? `<button class="btn big sell-on" data-cmd="rebirth">♻ 转生(推荐)</button>`
+    : st.can_rebirth
+      ? `<button class="btn big" data-cmd="rebirth" title="随时可转;但未受阻时转生会放弃本局深度">♻ 发起转生</button>`
+      : `<button class="btn big" disabled title="等级达标后解锁">Lv.${st.rebirth_min_level} 解锁(还差 ${lvLeft} 级)</button>`;
+  const timing = st.can_rebirth
+    ? (st.stuck
+        ? `<div class="rb-timing stuck">⛔ 推进受阻中 —— 现在是转生的好时机:带着永久加成与祭坛/遗物重爬,能推得更远。</div>`
+        : `<div class="rb-timing">⏳ 当前推进未受阻:现在转生会放弃本局深度。建议推进受阻(卡墙自动转挂机)时再转;仅想换职业则随时可转。</div>`)
+    : "";
   return `<h3 style="margin-top:16px"><span class="dot"></span>♻ 转生 · 涅槃重生</h3>` +
-    `<div class="rebirth-card${st.can_rebirth ? " ready" : ""}">` +
+    `<div class="rebirth-card${st.can_rebirth ? (st.stuck ? " ready stuck" : " ready") : ""}">` +
       `<div class="rb-info">` +
         `<span>转生 <b>${st.rebirths}</b> 世</span>` +
         `<span>攻击/生命/防御 <b>+${statPct}%</b></span>` +
@@ -1387,9 +1402,7 @@ function rebirthBlockHtml(st: State): string {
       `<div class="rb-desc">重置本局成长(等级/装备/金币/技能等级),保留成就·祭坛·遗物·塔记录·背包容量;` +
       `下一次:+${nextStat}% 三围 · +${nextGain}% 金币经验${st.rebirths === 0 ? ",并可选新职业" : ",可再换职业"}` +
       `</div>` +
-      (st.can_rebirth
-        ? `<button class="btn big sell-on" data-cmd="rebirth">♻ 发起转生</button>`
-        : `<button class="btn big" disabled title="等级达标后解锁">Lv.${st.rebirth_min_level} 解锁(还差 ${lvLeft} 级)</button>`) +
+      timing + action +
     `</div>`;
 }
 
@@ -1691,8 +1704,15 @@ function renderOverlays(st: State): void {
     cs.classList.remove("show");
   }
 
-  // —— 转生确认弹窗(保留/重置清单;确认后进入择业)——
+  // —— 转生确认弹窗(保留/重置清单 + 时机提示;确认后进入择业)——
   $("rebirth-modal").classList.toggle("show", rebirthAsk);
+  if (rebirthAsk) {
+    const tm = $("rebirth-timing");
+    tm.textContent = st.stuck
+      ? "⛔ 推进受阻中 —— 现在转生时机合适"
+      : "⏳ 当前未受阻:现在转生会放弃本局深度,建议卡墙时再转(仅换职业请随意)";
+    tm.classList.toggle("stuck", st.stuck);
+  }
 
   // —— 新手引导(3 步;新档选完职业弹出)——
   const im = $("intro-modal");

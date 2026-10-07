@@ -796,3 +796,8 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
 
 /* ---- 设置:总音量滑条 ---- */
 .vol-slider{width:150px;accent-color:#6bff8f;cursor:pointer}
+
+/* ---- 转生时机提示(三态):未受阻=暗色劝缓,卡墙=金色推荐 ---- */
+.rb-timing{font-size:12px;line-height:1.6;color:var(--dim);margin-top:2px}
+.rb-timing.stuck{color:#ffd94a;font-weight:700}
+.rebirth-card.stuck{border-color:#6bff8f;box-shadow:0 0 0 1px #6bff8f2e}
