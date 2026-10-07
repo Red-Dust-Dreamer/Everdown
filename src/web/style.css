@@ -761,7 +761,9 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
 .altar-row .lv{color:#5adfff;font-variant-numeric:tabular-nums;min-width:56px;white-space:nowrap}
 .altar-row .cur{color:#6bff8f;font-variant-numeric:tabular-nums;min-width:118px;white-space:nowrap}
 .altar-row .nx{color:var(--dim);font-size:11.5px;min-width:96px;white-space:nowrap}
-.altar-row .btn{margin-left:auto;white-space:nowrap}
+/* 按钮定宽居中:档位(×1/×100/MAX)与数值位数变化不改变按钮宽度,六行齐整 */
+.altar-row .btn{margin-left:auto;white-space:nowrap;min-width:170px;text-align:center}
+#altar-list .sell-bar .btn{min-width:46px;text-align:center;padding-left:6px;padding-right:6px}
 @media (max-width:768px){
   .altar-row .nx{order:4;flex:1 1 100%;margin-left:0;white-space:nowrap}
   .altar-row .btn{margin-left:0;flex:1;min-height:42px}
