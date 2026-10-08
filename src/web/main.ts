@@ -2469,7 +2469,7 @@ const LB_BOARD_NAMES: Record<"zone" | "level" | "tower" | "power", string> =
 
 interface LbRow { name: string; score: number; kills: number; playtime: number;
                   level: number; max_zone: number; updated_at: number; is_me?: boolean }
-interface LbData { board: string; top: LbRow[]; you: { rank: number; inTop: boolean;
+interface LbData { board: string; period?: string; top: LbRow[]; you: { rank: number; inTop: boolean;
                   score: number; kills: number } | null }
 
 let lbBoard: "zone" | "level" | "tower" | "power" = "zone";
@@ -2730,7 +2730,11 @@ function renderLeaderboard(st: State): void {
   const periodSegs = `<button class="btn mini ${lbPeriod === "all" ? "on" : ""}" data-lb="period" data-a="all">终身</button>` +
     `<button class="btn mini ${lbPeriod === "week" ? "on" : ""}" data-lb="period" data-a="week">本周</button>`;
   let rows = "";
-  if (d) {
+  if (d && lbPeriod === "week" && d.board !== undefined && !(d as { period?: string }).period) {
+    // 旧后端不识别 period 参数(原样返回终身数据):不冒充周榜,明示后端待升级
+    rows = `<div style="color:var(--dim);padding:26px;text-align:center">` +
+      `该后端版本较旧,周榜暂不可用(部署新后端后自动恢复)</div>`;
+  } else if (d) {
     rows = d.top.map((r, i) => {
       const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}`;
       const sub = lbBoard === "zone"
