@@ -183,6 +183,7 @@ export function autopilot(g: Game, sim = false, autoRebirth = false): void {
     g.rebirth();
     return;
   }
+  if (g.canSignin()) g.claimSignin();   // 参考局也领签到:包络覆盖签到收益
   if (Math.trunc(g.time * 10) % 50 !== 0) return;
   // 自动装配:主动=伤害Top3+生存Top1(槽满时第4槽可被生存替换),被动=stat/hook 顺序
   const kinds = ["damage", "multi", "execute"];

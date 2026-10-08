@@ -228,6 +228,42 @@ try {
     }
     ok(false, "13 连发后仍未 429");
   });
+
+  // ---- 周榜(F 组,2.3):平行于终身榜,提交双写,同周只升不降 ----
+  interface BoardResp { board?: string; period?: string; error?: string;
+    top?: Array<{ name: string; score: number; is_me?: boolean }>;
+    you?: { rank: number; score: number } | null }
+  const getBoard = async (qs: string): Promise<{ status: number; body: BoardResp }> => {
+    const r = await fetch(`${BASE}/board?${qs}`);
+    return { status: r.status, body: await r.json() as BoardResp };
+  };
+
+  await check("S19 周榜平行:提交后本周榜可见,终身榜同数据并存(双写)", async () => {
+    const s = await post(sub({ uuid: "weekA00001", name: "周榜玩家", score: 7, level: 7 }));
+    ok(s.status === 200 && !s.error, `提交失败 ${s.status} ${s.error ?? ""}`);
+    const w = await getBoard("b=level&period=week&uuid=weekA00001");
+    ok(w.status === 200 && w.body.period === "week", `period 字段应为 week:${w.body.period}`);
+    ok((w.body.top ?? []).some(r => r.is_me && r.score === 7), "本周榜应含刚提交的玩家");
+    const all = await getBoard("b=level&uuid=weekA00001");
+    ok(all.body.period === "all", `缺省 period 应为 all,实际 ${all.body.period}`);
+    ok((all.body.top ?? []).some(r => r.is_me), "终身榜同样可见(双写)");
+  });
+
+  await check("S20 周榜同周只升不降(低分不覆盖)", async () => {
+    await post(sub({ uuid: "weekB00002", score: 9, level: 9 }));
+    await post(sub({ uuid: "weekB00002", score: 3, level: 3 }));   // 降分提交
+    const w = await getBoard("b=level&period=week&uuid=weekB00002");
+    const me = (w.body.top ?? []).find(r => r.is_me);
+    ok(me?.score === 9, `本周榜应保留高分 9,实际 ${me?.score}`);
+  });
+
+  await check("S21 周榜与终身榜互不污染(非法 period 回落 all)", async () => {
+    const w1 = await getBoard("b=level&period=week");
+    const a1 = await getBoard("b=level&period=all");
+    ok(Array.isArray(w1.body.top) && Array.isArray(a1.body.top), "两榜均应返回数组");
+    const bad = await getBoard("b=level&period=nonsense");
+    ok(bad.body.period === "all", `非法 period 应回落 all,实际 ${bad.body.period}`);
+  });
 } catch (err) {
   fail++;
   console.log(`FAIL 启动: ${err instanceof Error ? err.message : String(err)}`);

@@ -270,3 +270,13 @@ export function resolveOffline(g: Game, dtSec: number): ResolveReport | null {
   if (rep.kills <= 0 && rep.deaths <= 0 && rep.gold <= 0) return null;
   return rep;
 }
+
+// ---------------------------------------------------------------- 图鉴二期(2.3)
+/** 每点亮一种怪:atk/hp 各 +BAL.codex_per%(mods 管道,recalc 时重算) */
+export function codexMods(monKills: Record<string, number>): StatMod[] {
+  let found = 0;
+  for (const v of Object.values(monKills)) if (v > 0) found++;
+  if (!found) return [];
+  const v = BAL.codex_per * found;
+  return [{ stat: "atk", op: "pct", v }, { stat: "hp", op: "pct", v }];
+}

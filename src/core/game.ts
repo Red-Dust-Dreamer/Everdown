@@ -8,7 +8,8 @@ import { battleTick, spawnMonster, tierOf, mobGold } from "./combat.ts";
 import type { Monster } from "./combat.ts";
 import {
   ACTIVE_DEF, ACTIVE_SKILLS, ACHIEVEMENTS, BAL, CAPS, CLASSES, PASSIVE_DEF, PASSIVE_SKILLS,
-  RARITIES, RARITY_IDX, STAT_NAMES, TOWER, ALTAR_LINES, POTIONS,
+  RARITIES, RARITY_IDX, REDEEM_CODES, SIGNIN_REWARDS, STAT_NAMES, TITLES,
+  WEEKLY_CHEST, WEEKLY_GOALS, TOWER, ALTAR_LINES, POTIONS,
 } from "./data.ts";
 import { Item, rollItem } from "./items.ts";
 import * as RL from "./relics.ts";
@@ -20,6 +21,25 @@ import * as systems from "./systems.ts";
 import * as S from "./skills.ts";
 
 export const SAVE_VERSION = 8;
+
+/** 本地日期键 YYYY-MM-DD(签到口径,按玩家本地时区) */
+function todayKey(): string {
+  const t = new Date();
+  return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+}
+/** ISO 周标识(周一为一周之始):如 2026-W41(周常口径) */
+function isoWeekKey(t: Date): string {
+  const d = new Date(t.getFullYear(), t.getMonth(), t.getDate());
+  d.setDate(d.getDate() + 4 - (d.getDay() || 7));       // 本周四(ISO 定年口径)
+  const year = d.getFullYear();
+  const jan1 = new Date(year, 0, 1);
+  const week = Math.ceil(((d.getTime() - jan1.getTime()) / 86400000 + 1) / 7);
+  return `${year}-W${week}`;
+}
+/** 称号 id → 显示名(未知 id 返回原值) */
+function titleName(id: string): string {
+  return TITLES.find(t => t.id === id)?.name ?? id;
+}
 export const EVENT_CAP = 2000;
 
 /** 手动模式待确认换装:自动换装关闭时,更强掉落弹新旧对比由玩家定夺 */
@@ -89,6 +109,26 @@ export class Game {
   settings: Record<string, any> = { auto_equip: true, auto_sell_idx: -1 };
   /** 分怪击杀计数(图鉴用):monster id → 累计击杀;普通/精英/头目变体合并计 */
   monKills: Record<string, number> = {};
+  /** 每日签到:7 日循环位置(0..6);断签(隔天未领)由 rollDaily 重置 */
+  signinPos = 0;
+  /** 最后领取日(本地日期 YYYY-MM-DD);""=从未 */
+  signinLast = "";
+  /** 当前 ISO 周标识(周一为界);变化时周常清零 */
+  weekKey = "";
+  /** 周常计数:metric → 本周值 */
+  weekly: Record<string, number> = {};
+  /** 已领周宝箱(chest3/chest6) */
+  weeklyClaimed: string[] = [];
+  /** 已获称号(id 列表,见 TITLES) */
+  titles: string[] = [];
+  /** 佩戴中称号 id;""=无 */
+  title = "";
+  /** 世系档案:每次转生记一条(最近在前,最多 50 条) */
+  lineage: { cls: string; level: number; zone: number; kills: number; dur: number }[] = [];
+  /** 本世开始的终身游玩时长(世系耗时统计) */
+  runStartPlaytime = 0;
+  /** 已兑换码(FNV 哈希,防重复) */
+  redeemed: number[] = [];
   /** 自动化运行时(不序列化):分钟级汇总日志 + 上次 flush 时刻 */
   private autoSum = { enh: 0, skill: 0, altar: 0, at: 0 };
   /** 成就跨档基线(null=未建):会话内首检静默建基线,此后升档才发提示;不序列化,重载不补发 */
@@ -189,6 +229,20 @@ export class Game {
     }
     const cid = newClass && CLASSES[newClass] ? newClass : this.classId!;
     const n = this.rebirths + 1;
+    // —— 世系档案:记下这一世(最近在前,封顶 50 条)+ 周常/称号 ——
+    this.lineage.unshift({ cls: this.classId ?? "?", level: this.level,
+      zone: this.stats.max_zone, kills: this.stats.kills,
+      dur: Math.max(0, Math.round(this.playtime - this.runStartPlaytime)) });
+    if (this.lineage.length > 50) this.lineage.length = 50;
+    this.runStartPlaytime = this.playtime;
+    this.weeklyBump("rebirths", 1);
+    for (const t of TITLES) {
+      const th = t.cond.match(/转生 (\d+) 次/);
+      if (th && n >= Number(th[1]) && !this.titles.includes(t.id)) {
+        this.titles.push(t.id);
+        this.log(`👑 获得称号「${t.name}」(${t.cond})`, "bright_yellow");
+      }
+    }
     // —— 重置(本局成长)——
     this.level = 1;
     this.xp = 0;
@@ -289,9 +343,14 @@ export class Game {
         agg[k] = (agg[k] ?? 0) + v;
       }
     }
-    // 统一修饰管道:成就 + 被动技能 + 遗物 + 外部挂口;先加后乘,再截断
+    // 统一修饰管道:成就 + 图鉴 + 祭坛 + 被动技能 + 遗物 + 外部挂口;先加后乘,再截断
+    // 成就新维度的三个口径同步(终身统计已有数据,只是此前不进 stats 快照)
+    this.stats.rebirths = this.rebirths;
+    this.stats.max_floor = this.tower.max_floor;
+    this.stats.playtime = Math.trunc(this.playtime);
     const mods = [
       ...systems.achievementMods(this.stats),
+      ...systems.codexMods(this.monKills),
       ...systems.altarMods(this.altarLv),
       ...(this.classId ? S.passiveMods(this) : []),
       ...RL.relicMods(this.relics),
@@ -524,6 +583,7 @@ export class Game {
     this.gold -= cost;
     it.plus += 1;
     this.stats.enhance_total += 1;
+    this.weeklyBump("enhance", 1);   // 周常:本周强化次数
     this.questProgress("enhance", 1);
     this.recalcHero();
     if (!quiet) {
@@ -547,6 +607,7 @@ export class Game {
       spent += cost;
       n += 1;
       this.stats.enhance_total += 1;
+      this.weeklyBump("enhance", 1);
       this.questProgress("enhance", 1);
     }
     if (n > 0) {
@@ -651,7 +712,10 @@ export class Game {
         // 只有推过死亡高水位才算真新进度并清零受阻计数;
         // "死→退层→杀满→推回原层"的原地震荡不再清零
         if (tierOf(this.zone, this.stage) > this.deathTier) this.deathsRow = 0;
-        this.stats.max_zone = Math.max(this.stats.max_zone, this.zone);
+        if (this.zone > this.stats.max_zone) {
+          this.stats.max_zone = this.zone;
+          this.weeklyBump("zones", 1);   // 周常:本周推进新区数
+        }
         this.toast(`进入第 ${this.zone} 区`);
       } else if (this.stageKills >= BAL.kills_per_stage) {
         this.stage += 1;
@@ -847,14 +911,41 @@ export class Game {
     this.log(`遗物 ${relic.display()} 替换 ${old.display()}`, "bright_magenta");
   }
 
-  /** 处理换装对比弹窗的选择(take=true 换上新的,false 保留旧的) */
-  resolveSwap(take: boolean): void {
+  /** 强化继承手续费:把 +n 转到新件,按新件自身强化费用曲线的 50% 计
+   *  (曲线与 Item.enhanceCost 同式:base × (1+a·k+b·k²),k=新件当前级位) */
+  inheritCost(target: Item, n: number): number {
+    const base = BAL.enhance_cost0 + BAL.enhance_cost_t * target.tier;
+    let sum = 0;
+    for (let k = 0; k < n; k++) {
+      sum += base * (1 + BAL.enhance_plus_a * k + BAL.enhance_plus_b * k * k);
+    }
+    return Math.round(sum * 0.5);
+  }
+
+  /** 处理换装对比弹窗的选择(take=true 换上新的,false 保留旧的);
+   *  inherit=true 时把旧件强化 +N 转移到新件(收新件费用曲线 50% 手续费,旧件清零) */
+  resolveSwap(take: boolean, inherit = false): void {
     const p = this.pendingSwap;
     if (!p) return;
     this.pendingSwap = null;
     if (p.kind === "item") {
       if (take) {
         if (!this.bag.includes(p.item!)) { this.toast("新装备已不在背包"); return; }
+        const old = p.slot ? this.equip[p.slot] : undefined;
+        if (inherit && old && old.plus > 0 && p.item) {
+          const n = Math.min(old.plus, BAL.plus_max);
+          const fee = this.inheritCost(p.item, n);
+          if (this.gold < fee) {
+            this.toast(`金币不足,无法继承(需 ◈${fmt(fee)});按普通换装处理`);
+          } else {
+            this.gold -= fee;
+            p.item.plus = n;
+            old.plus = 0;
+            this.log(`⚒ 强化继承:${p.item.name} 直接 +${n}(手续费 ◈${fmt(fee)},旧件清零)`,
+              "bright_yellow");
+            this.toast(`继承成功 +${n}(◈${fmt(fee)})`);
+          }
+        }
         this.equipItem(p.item!);
       }
       return;   // 保留:新装备留在背包
@@ -1176,12 +1267,107 @@ export class Game {
   rollDaily(): void {
     const t = new Date();
     const d = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
+    // 断签检测(独立于悬赏日期变化:上次领取不是昨天且已隔天 → 7 日进度重置)
+    if (this.signinLast && this.signinLast !== d) {
+      const dayStart = (dt: Date): number =>
+        new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime();
+      const last = new Date(this.signinLast + "T00:00:00");
+      const gap = Math.round((dayStart(t) - dayStart(last)) / 86400000);   // 日历日差
+      if (gap > 1) {
+        this.signinPos = 0;
+        this.log("📅 连续签到中断,7 日进度从头开始", "dim");
+      }
+    }
     if (d !== this.questDailyDate) {
       this.questDailyDate = d;
       this.questDailyCount = 0;
       this.questRerollCount = 0;
       this.towerKeysBought = 0;
     }
+    // ISO 周(周一为一周之始)变化 → 周常清零
+    const wk = isoWeekKey(t);
+    if (wk !== this.weekKey) {
+      if (this.weekKey) this.log("📅 新的一周,周常目标已刷新", "bright_cyan");
+      this.weekKey = wk;
+      this.weekly = {};
+      this.weeklyClaimed = [];
+    }
+  }
+
+  /** 今日签到是否可领 */
+  canSignin(): boolean {
+    return this.classId !== null && this.signinLast !== todayKey();
+  }
+  /** 领今日签到:发当日位奖励,位置 +1(循环);同日重复领拒绝 */
+  claimSignin(): void {
+    this.rollDaily();
+    if (!this.canSignin()) { this.toast("今日已领,明天再来"); return; }
+    const r = SIGNIN_REWARDS[this.signinPos % SIGNIN_REWARDS.length]!;
+    if (r.gold) { this.gold += r.gold; this.stats.gold_earned += r.gold; }
+    if (r.stones) this.stones += r.stones;
+    if (r.keys) this.tower.keys += r.keys;
+    if (r.potion) {
+      const def = POTIONS.find(p => p.id === r.potion);
+      if (def) S.addBuff(this, def.buff, def.pct, def.dur);
+    }
+    this.signinLast = todayKey();
+    const dayNo = this.signinPos + 1;
+    this.signinPos = (this.signinPos + 1) % SIGNIN_REWARDS.length;
+    this.recalcHero();
+    this.log(`📅 签到 第 ${dayNo}/7 天:${r.icon} ${r.label}`, "bright_green");
+    this.toast(`签到 +${r.label}`);
+  }
+
+  /** 周常计数入口(各系统打点;rollDaily 保证跨周即时清零) */
+  weeklyBump(metric: string, n: number): void {
+    this.rollDaily();
+    this.weekly[metric] = (this.weekly[metric] ?? 0) + n;
+  }
+  /** 本周已完成的目标数 */
+  weeklyDoneCount(): number {
+    let n = 0;
+    for (const g of WEEKLY_GOALS) if ((this.weekly[g.metric] ?? 0) >= g.target) n++;
+    return n;
+  }
+  /** 领周宝箱(chest3/chest6) */
+  claimWeeklyChest(id: string): void {
+    this.rollDaily();
+    const chest = WEEKLY_CHEST.find(c => c.id === id);
+    if (!chest) return;
+    if (this.weeklyClaimed.includes(id)) { this.toast("本周已领过"); return; }
+    if (this.weeklyDoneCount() < chest.need) { this.toast(`还差 ${chest.need - this.weeklyDoneCount()} 项目标`); return; }
+    this.weeklyClaimed.push(id);
+    this.stones += chest.stones;
+    if (chest.title && !this.titles.includes(chest.title)) this.titles.push(chest.title);
+    this.log(`🎁 周常宝箱(${chest.label}):✦${chest.stones} 重铸石` +
+      (chest.title ? ` + 称号「${titleName(chest.title)}」` : ""), "bright_green");
+    this.toast(`周宝箱 ✦${chest.stones}${chest.title ? ` + 称号` : ""}`);
+  }
+
+  /** 佩戴/卸下称号 */
+  setTitle(id: string): void {
+    if (id && !this.titles.includes(id)) return;
+    this.title = this.titles.includes(id) ? id : "";
+  }
+
+  /** 兑换码:FNV-1a 哈希比对;重复兑换拒绝 */
+  redeemCode(raw: string): void {
+    const code = raw.trim().toUpperCase();
+    if (!code) { this.toast("请输入兑换码"); return; }
+    let h = 0x811c9dc5;
+    for (let i = 0; i < code.length; i++) {
+      h ^= code.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    const def = REDEEM_CODES.find(c => c.hash === h);
+    if (!def) { this.toast("兑换码无效"); return; }
+    if (this.redeemed.includes(h)) { this.toast("该码已兑换过"); return; }
+    this.redeemed.push(h);
+    if (def.gold) { this.gold += def.gold; this.stats.gold_earned += def.gold; }
+    if (def.stones) this.stones += def.stones;
+    if (def.keys) this.tower.keys += def.keys;
+    this.log(`🎁 兑换成功:${def.label}`, "bright_green");
+    this.toast(`已兑换:${def.label}`);
   }
 
   questProgress(qtype: string, n: number): void {
@@ -1195,6 +1381,7 @@ export class Game {
           this.stones += q.stones;
           this.stats.gold_earned += q.gold;
           this.stats.quest_done += 1;
+          this.weeklyBump("quests", 1);
           this.log(`✔ 完成悬赏「${systems.questDesc(q)}」 +${fmt(q.gold)}金币 +${q.stones}重铸石`,
             "bright_cyan");
           this.questDailyCount += 1;
@@ -1271,6 +1458,16 @@ export class Game {
       stats: this.stats,
       mon_kills: this.monKills,
       settings: this.settings,
+      signin_pos: this.signinPos,
+      signin_last: this.signinLast,
+      week_key: this.weekKey,
+      weekly: this.weekly,
+      weekly_claimed: this.weeklyClaimed,
+      titles: this.titles,
+      title: this.title,
+      lineage: this.lineage,
+      run_start_playtime: this.runStartPlaytime,
+      redeemed: this.redeemed,
       stat_mods: this.statMods,
       quests: this.quests,
       quest_daily_count: this.questDailyCount,
@@ -1330,6 +1527,16 @@ export class Game {
     g.buffs = {};
     Object.assign(g.stats, d.stats ?? {});
     g.monKills = d.mon_kills ?? {};
+    g.signinPos = d.signin_pos ?? 0;
+    g.signinLast = d.signin_last ?? "";
+    g.weekKey = d.week_key ?? "";
+    g.weekly = d.weekly ?? {};
+    g.weeklyClaimed = d.weekly_claimed ?? [];
+    g.titles = d.titles ?? [];
+    g.title = d.title ?? "";
+    g.lineage = d.lineage ?? [];
+    g.runStartPlaytime = d.run_start_playtime ?? 0;
+    g.redeemed = d.redeemed ?? [];
     Object.assign(g.settings, d.settings ?? {});
     g.statMods = d.stat_mods ?? [];
     // 防御:损坏的遗物条目跳过(槽位置空),坏 tower 字段回默认 — 与 Python 侧同口径,

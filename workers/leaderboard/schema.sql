@@ -16,6 +16,24 @@ CREATE TABLE IF NOT EXISTS entries (
 CREATE INDEX IF NOT EXISTS idx_board_rank
   ON entries(board, score DESC, kills DESC, updated_at ASC);
 
+-- 周榜(2.3):每 uuid 每榜每周至多一行(跨周覆盖);终身榜仍在 entries
+CREATE TABLE IF NOT EXISTS entries_weekly (
+  board      TEXT    NOT NULL,
+  uuid       TEXT    NOT NULL,
+  week       TEXT    NOT NULL,           -- ISO 周标识,如 '2026-W41'(周一为界)
+  name       TEXT    NOT NULL,
+  score      INTEGER NOT NULL,
+  kills      INTEGER NOT NULL DEFAULT 0,
+  playtime   INTEGER NOT NULL DEFAULT 0,
+  level      INTEGER NOT NULL DEFAULT 1,
+  max_zone   INTEGER NOT NULL DEFAULT 1,
+  max_tower  INTEGER NOT NULL DEFAULT 0,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (board, uuid)
+);
+CREATE INDEX IF NOT EXISTS idx_weekly_rank
+  ON entries_weekly(week, board, score DESC, kills DESC);
+
 CREATE TABLE IF NOT EXISTS rate (
   key    TEXT    NOT NULL PRIMARY KEY,  -- '{uuid}:{小时桶}'
   bucket INTEGER NOT NULL,

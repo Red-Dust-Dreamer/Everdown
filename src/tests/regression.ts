@@ -17,7 +17,7 @@ import type { SaveHooks } from "../core/game.ts";
 import { View } from "../core/view.ts";
 import { handleKey } from "../core/host.ts";
 import { renderFrame } from "../core/render.ts";
-import { BAL, CLASSES } from "../core/data.ts";
+import { BAL, CLASSES, ACHIEVEMENTS, MONSTERS } from "../core/data.ts";
 import { Monster, battleTick } from "../core/combat.ts";
 import { pyRound, Item } from "../core/items.ts";
 import { Relic, rollRelic } from "../core/relics.ts";
@@ -797,8 +797,10 @@ function testRebirth(): void {
   const cleanBase = gClean.hero.atk;
   gClean.rebirths = 1;
   gClean.recalcHero();
-  close(gClean.hero.atk, cleanBase * (1 + BAL.rebirth_stat_pct / 100),
-    "转生倍率应作用于三围(+25%)");
+  const rebAch = ACHIEVEMENTS.find(a => a.id === "rebirther")!;
+  close(gClean.hero.atk,
+    cleanBase * (1 + BAL.rebirth_stat_pct / 100) * (1 + rebAch.per / 100),
+    "转生倍率应作用于三围(+25%;1 次转生另触发轮回大师第 1 档)");
   ok(g.hero.goldfind >= BAL.rebirth_gain_pct, "转生金币加成生效");
   ok(g.hero.xp_pct >= BAL.rebirth_gain_pct, "转生经验加成生效");
 
@@ -965,6 +967,165 @@ function testAutoLockCodex(): void {
     "旧档无 mon_kills 字段容错(空对象)");
 }
 
+// ================================================================ 19. 签到/周常/世系/称号/兑换码
+function testSigninWeekly(): void {
+  const dayKey = (off: number): string => {
+    const d = new Date(Date.now() + off * 86400000);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  };
+  const g = newGame(426248);
+  g.chooseClass("warrior");
+
+  // —— 签到:领取/防重/进度推进/断签重置 ——
+  ok(g.canSignin(), "新档今日可领");
+  const gold0 = g.gold;
+  g.claimSignin();
+  ok(!g.canSignin(), "领后当日不可再领");
+  eq(g.gold - gold0, 5000, "第 1 天奖励 5000 金到账");
+  g.claimSignin();
+  eq(g.gold - gold0, 5000, "重复领取被拒");
+  // 伪造"昨天领过"(pos 已是 1):今天可领第 2 天(2 重铸石)
+  g.signinLast = dayKey(-1);
+  const stones0 = g.stones;
+  ok(g.canSignin(), "隔一天签到进度保留");
+  g.claimSignin();
+  eq(g.stones - stones0, 2, "第 2 天奖励 2 重铸石(连续签到推进)");
+  eq(g.signinPos, 2, "进度推进到第 3 天");
+  // 断签(3 天前):rollDaily 重置
+  g.signinLast = dayKey(-3);
+  g.rollDaily();
+  eq(g.signinPos, 0, "断签后 7 日进度重置");
+  // 第 7 天:药剂奖励(buff 生效)
+  g.signinPos = 6;
+  g.signinLast = dayKey(-1);
+  g.claimSignin();
+  ok((g.buffs.atk ?? g.buffs.dmg_pct) !== undefined || Object.keys(g.buffs).length > 0,
+    "第 7 天药剂 buff 生效");
+  eq(g.signinPos, 0, "领完第 7 天循环回第 1 天");
+
+  // —— 周常:打点/计数/宝箱/称号/周重置 ——
+  g.weeklyBump("kills", 2000);
+  g.weeklyBump("boss", 40);
+  eq(g.weeklyDoneCount(), 2, "完成 2 项目标");
+  g.claimWeeklyChest("chest3");
+  ok(!g.weeklyClaimed.includes("chest3"), "未达 3 项不可领 chest3");
+  g.weeklyBump("quests", 8);
+  const st1 = g.stones;
+  g.claimWeeklyChest("chest3");
+  eq(g.stones - st1, 8, "chest3 发 8 重铸石");
+  g.claimWeeklyChest("chest3");
+  eq(g.stones - st1, 8, "重复领被拒");
+  g.weeklyBump("zones", 15);
+  g.weeklyBump("rebirths", 1);
+  g.weeklyBump("enhance", 150);
+  eq(g.weeklyDoneCount(), 6, "全部 6 项完成");
+  g.claimWeeklyChest("chest6");
+  eq(g.stones - st1, 8 + 20, "chest6 发 20 重铸石");
+  ok(g.titles.includes("t_week"), "周常全勤得称号「周征服者」");
+  // 周重置
+  g.weekKey = "2000-W1";
+  g.rollDaily();
+  eq(g.weeklyDoneCount(), 0, "跨周清零");
+  eq(g.weeklyClaimed.length, 0, "宝箱领取态清零");
+
+  // —— 兑换码:发放/防重/无效码 ——
+  const gold1 = g.gold, stones1 = g.stones, keys1 = g.tower.keys;
+  g.redeemCode("  abyss2026  ");   // 大小写与空白容错
+  eq(g.gold - gold1, 100000, "上线礼包 10 万金");
+  eq(g.stones - stones1, 5, "上线礼包 5 重铸石");
+  eq(g.tower.keys - keys1, 1, "上线礼包 1 塔钥匙");
+  g.redeemCode("ABYSS2026");
+  eq(g.gold - gold1, 100000, "重复兑换被拒");
+  g.redeemCode("NOT-A-CODE");
+  eq(g.redeemed.length, 1, "无效码不入账");
+
+  // —— 世系 + 称号(经真实转生)——
+  g.level = BAL.rebirth_min_level;
+  const killsBefore = g.stats.kills;
+  g.rebirth("mage");
+  eq(g.lineage.length, 1, "转生记入世系");
+  eq(g.lineage[0]!.cls, "warrior", "世系记录旧职业");
+  eq(g.lineage[0]!.kills, killsBefore, "世系记录终身击杀");
+  ok(g.titles.includes("t_reb1"), "首次转生得称号「轮回者」");
+  g.setTitle("t_reb1");
+  eq(g.title, "t_reb1", "佩戴称号");
+  g.setTitle("");
+  eq(g.title, "", "卸下称号");
+
+  // —— 存档往返 ——
+  g.signinPos = 3;
+  g.weeklyBump("kills", 5);
+  const d = JSON.parse(JSON.stringify(g.toDict()));
+  const g2 = Game.fromDict(d);
+  eq(g2.signinPos, 3, "往返:签到进度");
+  eq(g2.weekly.kills, 5, "往返:周常计数");
+  eq(g2.lineage.length, 1, "往返:世系");
+  eq(g2.redeemed.length, 1, "往返:兑换记录");
+  ok(g2.titles.includes("t_week"), "往返:称号");
+  eq(Game.fromDict({ ...d, signin_pos: undefined, weekly: undefined }).signinPos, 0,
+    "旧档无新字段容错(默认值)");
+}
+
+// ================================================================ 20. 强化继承 / 图鉴二期加成 / 成就新维度
+function testInheritCodex(): void {
+  const g = newGame(426249);
+  g.chooseClass("warrior");
+  // —— 继承:费用精确、+N 转移、旧件清零、金币不足回退 ——
+  const old = new Item("weapon", "rare", 20, 8, [{ id: "atk", val: 3 }], 5);
+  const nu = new Item("weapon", "epic", 40, 12, [{ id: "atk", val: 8 }]);
+  g.equip.weapon = old;
+  g.bag.push(nu);
+  g.gold = 10_000_000;
+  const fee = g.inheritCost(nu, 5);
+  ok(fee > 0, "继承费为正");
+  g.pendingSwap = { kind: "item", slot: "weapon", item: nu };
+  const goldA = g.gold;
+  g.resolveSwap(true, true);
+  eq(nu.plus, 5, "新件继承 +5");
+  eq(old.plus, 0, "旧件清零");
+  eq(g.gold, goldA - fee, "实扣 = inheritCost(新件曲线 50%)");
+  ok(g.equip.weapon === nu, "新件已装备");
+  // 金币不足:回退为普通换装(不继承)
+  const g2 = newGame(426250);
+  g2.chooseClass("warrior");
+  const old2 = new Item("weapon", "rare", 20, 8, [{ id: "atk", val: 3 }], 3);
+  const nu2 = new Item("weapon", "epic", 40, 12, [{ id: "atk", val: 8 }]);
+  g2.equip.weapon = old2;
+  g2.bag.push(nu2);
+  g2.gold = 0;
+  g2.pendingSwap = { kind: "item", slot: "weapon", item: nu2 };
+  g2.resolveSwap(true, true);
+  eq(nu2.plus, 0, "金币不足不继承");
+  ok(g2.equip.weapon === nu2, "但仍完成普通换装");
+
+  // —— 图鉴二期:每种已点亮怪攻/生命 +codex_per% ——
+  const g3 = newGame(426251);
+  g3.chooseClass("warrior");
+  const atk0 = g3.hero.atk;
+  g3.monKills.slime = 1;
+  g3.recalcHero();
+  close(g3.hero.atk, atk0 * (1 + BAL.codex_per / 100), "点亮 1 种:+0.3% 攻");
+  for (const id of Object.keys(MONSTERS)) g3.monKills[id] = 1;
+  g3.recalcHero();
+  close(g3.hero.atk, atk0 * (1 + BAL.codex_per * Object.keys(MONSTERS).length / 100),
+    "全图鉴:17 种 +5.1% 攻");
+
+  // —— 成就新维度:stats 口径同步 + 跨档提示 ——
+  g3.level = 50;
+  g3.rebirths = 1;
+  g3.tower.max_floor = 5;
+  g3.playtime = 3600;
+  g3.recalcHero();
+  eq(g3.stats.rebirths, 1, "stats.rebirths 同步");
+  eq(g3.stats.max_floor, 5, "stats.max_floor 同步");
+  eq(g3.stats.playtime, 3600, "stats.playtime 同步");
+  g3.checkAchTiers();   // 建基线
+  g3.rebirths = 5;
+  g3.recalcHero();
+  g3.checkAchTiers();
+  ok(toastTexts(g3).some(t => t.includes("轮回大师")), "轮回大师跨档发提示");
+}
+
 // ================================================================ runner
 const TESTS: [string, () => void][] = [
   ["1.RNG(MT19937 与 CPython 对拍)", testRng],
@@ -985,6 +1146,8 @@ const TESTS: [string, () => void][] = [
   ["16.祭坛批量(×N精确扣费/MAX至不足/×1委托/预估)", testAltarBatch],
   ["17.成就跨档反馈(基线/跨档/去重/重载静默)", testAchFeedback],
   ["18.自动化开关/装备锁定/批量分解/分怪图鉴", testAutoLockCodex],
+  ["19.签到/周常/世系/称号/兑换码", testSigninWeekly],
+  ["20.强化继承/图鉴二期加成/成就新维度", testInheritCodex],
 ];
 
 let failed = 0;

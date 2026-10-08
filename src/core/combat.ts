@@ -344,11 +344,13 @@ function onMonsterKilled(g: Game, mon: Monster): void {
 
   g.stats.kills += 1;
   g.monKills[mon.id] = (g.monKills[mon.id] ?? 0) + 1;   // 图鉴:分怪计数(普通/精英/头目合并)
+  g.weeklyBump("kills", 1);                              // 周常:本周击杀
   h.hp = Math.min(h.max_hp, h.hp + h.max_hp * 0.08);
   g.gold += Math.trunc(gold);
   g.stats.gold_earned += Math.trunc(gold);
   if (mon.boss) {
     g.stats.boss_kills += 1;
+    g.weeklyBump("boss", 1);                              // 周常:本周头目
     if (g.rng.random() < BAL.boss_stone_chance) g.stones += BAL.boss_stone_amt;
   }
   g.gainXp(Math.trunc(mobXp(mon.tier)

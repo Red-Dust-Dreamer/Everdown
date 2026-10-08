@@ -182,7 +182,20 @@ interface State {
     old_relic: RelicUI | null;
     new_relic: RelicUI | null;
     power_delta: number | null;   // 换新后的战力变化(基础口径,无临时 buff)
+    /** 强化继承:旧件 +N 与手续费(0=不可继承,不显示按钮) */
+    inherit_plus: number;
+    inherit_cost: number;
   } | null;
+  /** 每日签到:今日是否可领 + 循环位置(0..6)+ 上次领取日 */
+  signin: { can: boolean; pos: number; rewards: { icon: string; label: string }[] };
+  /** 周常:目标进度 + 已完成数 + 宝箱领取态 */
+  weekly: { goals: { id: string; name: string; cur: number; target: number }[];
+            done: number; claimed: string[];
+            chests: { id: string; label: string; need: number; stones: number }[] };
+  /** 世系档案 + 称号 */
+  lineage: { cls: string; level: number; zone: number; kills: number; dur: number }[];
+  titles: { id: string; name: string; cond: string; owned: boolean }[];
+  title: string;
 }
 
 // ---------------------------------------------------------------- 快照构建
@@ -335,6 +348,9 @@ function buildState(g: Game): State {
     }
   }
 
+  const pswItem = g.pendingSwap?.kind === "item" ? g.pendingSwap.item : null;
+  const pswOld = g.pendingSwap?.kind === "item" && g.pendingSwap.slot
+    ? g.equip[g.pendingSwap.slot] : undefined;
   const psw = g.pendingSwap ? {
     kind: g.pendingSwap.kind,
     slot_name: g.pendingSwap.kind === "item"
@@ -348,6 +364,11 @@ function buildState(g: Game): State {
       : null,
     new_relic: g.pendingSwap.newRelic ? relicUI(g.pendingSwap.newRelic) : null,
     power_delta: swapDelta,
+    /** 强化继承:+N 与手续费;旧件无强化或非装备换装为 0(不显示按钮) */
+    inherit_plus: pswItem && pswOld && pswOld.plus > 0
+      ? Math.min(pswOld.plus, D.BAL.plus_max) : 0,
+    inherit_cost: pswItem && pswOld && pswOld.plus > 0
+      ? g.inheritCost(pswItem, Math.min(pswOld.plus, D.BAL.plus_max)) : 0,
   } : null;
 
   return {
@@ -404,6 +425,21 @@ function buildState(g: Game): State {
     reforge_stones: D.BAL.reforge_stones, reforge_slots: D.BAL.reforge_slots,
     pending_offline: po,
     pending_swap: psw,
+    signin: {
+      can: g.canSignin(),
+      pos: g.signinPos,
+      rewards: D.SIGNIN_REWARDS.map(r => ({ icon: r.icon, label: r.label })),
+    },
+    weekly: {
+      goals: D.WEEKLY_GOALS.map(w => ({ id: w.id, name: w.name,
+        cur: Math.min(g.weekly[w.metric] ?? 0, w.target), target: w.target })),
+      done: g.weeklyDoneCount(),
+      claimed: [...g.weeklyClaimed],
+      chests: D.WEEKLY_CHEST.map(c => ({ id: c.id, label: c.label, need: c.need, stones: c.stones })),
+    },
+    lineage: g.lineage.slice(0, 12),
+    titles: D.TITLES.map(t => ({ ...t, owned: g.titles.includes(t.id) })),
+    title: g.title,
   };
 }
 
@@ -522,6 +558,18 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
       break;
     case "dismiss_offline": g.pendingOffline = null; break;
     case "swap_take": g.resolveSwap(true); break;
+    case "swap_inherit": g.resolveSwap(true, true); break;
+    case "signin_claim": g.claimSignin(); break;
+    case "weekly_chest": if (a) g.claimWeeklyChest(a); break;
+    case "set_title": g.setTitle(a ?? ""); break;
+    case "redeem": {
+      const input = document.querySelector("#redeem-input") as HTMLInputElement | null;
+      const code = (a ?? input?.value ?? "").trim();
+      if (!code) { g.toast("请输入兑换码"); break; }
+      g.redeemCode(code);
+      if (input) input.value = "";
+      break;
+    }
     case "swap_keep": g.resolveSwap(false); break;
     // —— 转生流程:角色页按钮 → 确认弹窗 → 择业(复用选职业卡,可保持原职业)——
     case "rebirth":
@@ -1458,8 +1506,28 @@ function renderHeroPage(st: State): void {
       `战力构成:输出 ${fmt(pw.offense)} · 生存 ${fmt(pw.defense)} · 功能 ${fmt(pw.utility)}` +
       `(按第 ${Math.max(1, st.stats.max_zone)} 区假人折算,含生效增益)</div>` : "") +
     rebirthBlockHtml(st) +
+    lineageBlockHtml(st) +
     `<h3 style="margin-top:16px"><span class="dot"></span>装备框 · 点击槽位查看属性与操作</h3>` +
     `<div class="gear-frame">${frame}</div>`;
+}
+
+/** 世系档案 + 称号:历代转生记录(最近 12 世)与可佩戴称号 */
+function lineageBlockHtml(st: State): string {
+  if (st.rebirths === 0 && st.lineage.length === 0) return "";
+  const titleChips = st.titles.map(t =>
+    `<button class="btn mini${st.title === t.id ? " sell-on" : ""}${t.owned ? "" : " dim"}"` +
+      ` data-cmd="set_title" data-a="${t.id}" ${t.owned ? "" : "disabled"} title="${esc(t.cond)}">` +
+      `${t.owned ? "👑" : "🔒"}${esc(t.name)}</button>`).join("") +
+    `<button class="btn mini${st.title === "" ? " sell-on" : ""}" data-cmd="set_title" data-a="">无称号</button>`;
+  const clsIcon: Record<string, string> = { warrior: "⚔", mage: "✦", ranger: "➤" };
+  const rows = st.lineage.map((e, i) =>
+    `<div class="lg-row"><span class="no">第${st.rebirths - i}世</span>` +
+    `<span class="cl">${clsIcon[e.cls] ?? "?"} ${e.cls === "warrior" ? "战士" : e.cls === "mage" ? "法师" : e.cls === "ranger" ? "射手" : e.cls}</span>` +
+    `<span class="dt">Lv.${e.level} · ${e.zone}区 · ${fmt(e.kills)}杀 · ${fmtTime(e.dur)}</span></div>`
+  ).join("");
+  return `<h3 style="margin-top:16px"><span class="dot"></span>👑 称号与世系</h3>` +
+    `<div class="title-chips">${titleChips}</div>` +
+    (rows ? `<div class="lineage-list">${rows}</div>` : "");
 }
 
 /** 转生块:当前加成 + 门槛进度 + 入口按钮(确认与择业在弹窗)。
@@ -1594,7 +1662,40 @@ function renderSkills(st: State): void {
 
 function renderQuest(st: State): void {
   if (!st.class_id) { $("quest-list").innerHTML = ""; $("ach-list").innerHTML = ""; return; }
-  let qs = "";
+  // —— 每日签到(7 日循环,断签重置;领过的格子亮起,今天可领的格子呼吸)——
+  const si = st.signin;
+  const todayPos = si.can ? si.pos : -1;   // can=false:今天已领,无高亮格
+  const signinCard =
+    `<div class="signin-card"><div class="si-head"><span>📅 每日签到</span>` +
+    `<button class="btn mini${si.can ? " sell-on" : ""}" data-cmd="signin_claim" ${si.can ? "" : "disabled"}>` +
+    `${si.can ? "领取今日" : "今日已领"}</button></div>` +
+    `<div class="si-grid">` + si.rewards.map((r, i) => {
+      // 已领判定:格子序号 < 下次位置;pos 即循环进度
+      const done = i < si.pos;
+      const isToday = i === todayPos;
+      return `<div class="si-cell${done ? " done" : ""}${isToday ? " today" : ""}">` +
+        `<span class="d">第${i + 1}天</span><span class="ic">${r.icon}</span>` +
+        `<span class="lb">${esc(r.label)}</span></div>`;
+    }).join("") + `</div>` +
+    `<div class="si-hint">连续签到进度保留;隔天未领则 7 日进度重置</div></div>`;
+  // —— 周常(周一 0 点重置;3 项/6 项两档宝箱)——
+  const wk = st.weekly;
+  const weeklyCard =
+    `<div class="weekly-card"><div class="si-head"><span>🗓 本周目标 · 已完成 ${wk.done}/${wk.goals.length}</span></div>` +
+    `<div class="wk-grid">` + wk.goals.map(g => {
+      const p = Math.min(100, g.cur / g.target * 100);
+      const ok = g.cur >= g.target;
+      return `<div class="wk-row${ok ? " ok" : ""}"><span class="nm">${esc(g.name)}${ok ? " ✓" : ""}</span>` +
+        `<div class="bar q"><div class="fill" style="width:${p}%"></div>` +
+        `<div class="num" style="font-size:10px">${fmt(g.cur)} / ${fmt(g.target)}</div></div></div>`;
+    }).join("") + `</div>` +
+    `<div class="wk-chests">` + wk.chests.map(c => {
+      const claimed = wk.claimed.includes(c.id);
+      const can = !claimed && wk.done >= c.need;
+      return `<button class="btn mini${can ? " sell-on" : ""}" data-cmd="weekly_chest" data-a="${c.id}"` +
+        ` ${can ? "" : "disabled"}>${claimed ? "✔" : "🎁"} ${esc(c.label)} ✦${c.stones}</button>`;
+    }).join("") + `</div></div>`;
+  let qs = signinCard + weeklyCard;
   for (const q of st.quests) {
     const p = Math.min(100, q.progress / q.target * 100);
     qs += `<div class="q-row"><div class="t"><span>${esc(q.desc)}</span>` +
@@ -1626,7 +1727,9 @@ function renderQuest(st: State): void {
   // 深渊图鉴(一期:纯收集;未遭遇=剪影+???)——17 种怪,击杀点亮
   const mons = Object.entries(D.MONSTERS);
   const found = mons.filter(([id]) => (st.mon_kills[id] ?? 0) > 0).length;
-  const codex = `<h3 style="margin-top:16px"><span class="dot"></span>深渊图鉴 · ${found}/${mons.length}</h3>` +
+  const codex = `<h3 style="margin-top:16px"><span class="dot"></span>深渊图鉴 · ${found}/${mons.length}` +
+    (found ? ` <span style="color:#6bff8f;font-size:12px">(攻/生命 +${(found * D.BAL.codex_per).toFixed(1)}%)</span>` : "") +
+    `</h3>` +
     `<div class="codex-grid">` + mons.map(([id, m]) => {
       const k = st.mon_kills[id] ?? 0;
       return `<div class="codex-cell${k ? "" : " unk"}"` +
@@ -1784,6 +1887,11 @@ function renderSettings(st: State): void {
       `<button class="btn" data-local="export">导出</button>` +
       `<button class="btn" data-local="import">导入</button>` +
       `<button class="btn danger" data-local="reset">重置</button></div></div>` +
+    `<div class="set-row"><div class="lbl">兑换码<div class="d">礼包码本地校验,每码限兑一次</div></div>` +
+      `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">` +
+      `<input id="redeem-input" placeholder="输入兑换码" maxlength="16" spellcheck="false"` +
+        ` style="background:#151522;border:1px solid var(--line2);border-radius:6px;color:#cfe0ff;padding:6px 10px;font-family:inherit;font-size:13px;width:150px">` +
+      `<button class="btn" data-cmd="redeem">🎁 兑换</button></div></div>` +
     `<h3 style="margin-top:16px"><span class="dot"></span>统计</h3>` +
     `<div class="stats-grid">` +
       kv("总击杀", fmt(s.kills)) + kv("头目击杀", fmt(s.boss_kills)) +
@@ -1933,6 +2041,18 @@ function renderSwapModal(p: NonNullable<State["pending_swap"]>): void {
     cols = relicCol(o, "当前遗物", false) + relicCol(n, "新掉落", true);
   }
   $("swap-body").innerHTML = `<div class="swap-grid">${cols}</div>`;
+  // 操作区:旧件有强化时追加「换上并继承」(手续费按新件曲线 50%)
+  const ops = $("swap-modal").querySelector(".swap-ops") as HTMLElement;
+  if (ops) {
+    const inherit = p.kind === "item" && p.inherit_plus > 0
+      ? `<button class="btn big sell-on" data-cmd="swap_inherit"` +
+        ` title="把旧件 +${p.inherit_plus} 转移到新件(手续费为强化新件到同级的 50%,旧件清零)">` +
+        `⚒ 换上+继承 +${p.inherit_plus}(◈${fmt(p.inherit_cost)})</button>`
+      : "";
+    ops.innerHTML = inherit +
+      `<button class="btn big ${inherit ? "" : "sell-on"}" data-cmd="swap_take">✦ 换上新的</button>` +
+      `<button class="btn big" data-cmd="swap_keep">保留旧的</button>`;
+  }
 }
 
 // ---------------------------------------------------------------- 装备框详情 / 换装对比
@@ -2337,8 +2457,12 @@ interface LbData { board: string; top: LbRow[]; you: { rank: number; inTop: bool
                   score: number; kills: number } | null }
 
 let lbBoard: "zone" | "level" | "tower" | "power" = "zone";
-const lbData: Partial<Record<"zone" | "level" | "tower" | "power", LbData>> = {};
-const lbErr: Partial<Record<"zone" | "level" | "tower" | "power", string>> = {};
+type LbPeriod = "all" | "week";
+let lbPeriod: LbPeriod = "all";
+/** 缓存按 (周期, 榜) 分键,切换即取,互不污染 */
+const lbData: Partial<Record<string, LbData>> = {};
+const lbErr: Partial<Record<string, string>> = {};
+const lbKey = (b: string, p: LbPeriod): string => `${p}:${b}`;
 let lbSubmitErr: string | null = null;  // 最近一次提交错误:常驻显示,不靠一闪而过的 toast
 let lbBusy = false;
 let lbEditing = false;        // 昵称编辑中:暂停本页重建,避免输入被打断
@@ -2445,26 +2569,23 @@ function ensureLeaderboardDom(): void {
   pageTower?.after(page);
 }
 
-async function lbFetch(board: "zone" | "level" | "tower" | "power"): Promise<string | null> {
+async function lbFetch(board: "zone" | "level" | "tower" | "power",
+                       period: LbPeriod = lbPeriod): Promise<string | null> {
+  const key = lbKey(board, period);
   try {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 8000);
-    const r = await fetch(`${LEADERBOARD_API}/board?b=${board}&uuid=${encodeURIComponent(lbUuid())}`,
+    const r = await fetch(
+      `${LEADERBOARD_API}/board?b=${board}&period=${period}&uuid=${encodeURIComponent(lbUuid())}`,
       { signal: ctl.signal });
     clearTimeout(t);
-    if (!r.ok) return lbFail(board, `HTTP ${r.status}`);
+    if (!r.ok) { lbErr[key] = `HTTP ${r.status}`; return lbErr[key]!; }
     const d = (await r.json()) as LbData & { error?: string };
-    if (d.error) return lbFail(board, d.error);
-    lbData[board] = d;
-    delete lbErr[board];
+    if (d.error) { lbErr[key] = d.error; return d.error; }
+    lbData[key] = d;
+    delete lbErr[key];
     return null;
-  } catch { return lbFail(board, "网络错误"); }
-}
-
-/** 拉榜失败:记到常驻错误态(UI 显示失败原因 + 重试按钮,不再永远「加载中」) */
-function lbFail(board: "zone" | "level" | "tower" | "power", msg: string): string {
-  lbErr[board] = msg;
-  return msg;
+  } catch { lbErr[key] = "网络错误"; return lbErr[key]!; }
 }
 
 /** 提交各榜(匿名 UUID,四榜并行);成功后刷新数据。返回错误文本或 null。 */
@@ -2552,7 +2673,7 @@ function renderLeaderboard(st: State): void {
 
   const lastSub = Number(localStorage.getItem("abyss_lblast") ?? 0);
   const cooldown = Math.max(0, 10 * 60_000 - (Date.now() - lastSub));
-  const d = lbData[lbBoard];
+  const d = lbData[lbKey(lbBoard, lbPeriod)];
   const you = d?.you ?? null;
 
   // —— 我的卡:昵称 + 提交 + 我的排名
@@ -2589,6 +2710,9 @@ function renderLeaderboard(st: State): void {
   // —— 榜单
   const segs = LB_BOARDS.map(b =>
     `<button class="btn mini ${b === lbBoard ? "on" : ""}" data-lb="board" data-a="${b}">${LB_BOARD_NAMES[b]}</button>`).join("");
+  // 周期切换(终身/本周;周榜=周一 0 点重置的平行榜,与终身榜并存)
+  const periodSegs = `<button class="btn mini ${lbPeriod === "all" ? "on" : ""}" data-lb="period" data-a="all">终身</button>` +
+    `<button class="btn mini ${lbPeriod === "week" ? "on" : ""}" data-lb="period" data-a="week">本周</button>`;
   let rows = "";
   if (d) {
     rows = d.top.map((r, i) => {
@@ -2607,18 +2731,18 @@ function renderLeaderboard(st: State): void {
         <b class="lb-score">${lbBoard === "power" ? fmt(r.score) : r.score}</b></div>`;
     }).join("");
     if (!rows) rows = `<div style="color:var(--dim);padding:26px;text-align:center">虚位以待——成为第一个上榜的深渊行者</div>`;
-  } else if (lbErr[lbBoard]) {
+  } else if (lbErr[lbKey(lbBoard, lbPeriod)]) {
     // 拉取失败:明确展示失败原因与重试入口,不再永远「加载中…」
-    rows = `<div class="lb-fail">⚠ ${LB_BOARD_NAMES[lbBoard]}加载失败:${esc(lbErr[lbBoard]!)}` +
+    rows = `<div class="lb-fail">⚠ ${LB_BOARD_NAMES[lbBoard]}加载失败:${esc(lbErr[lbKey(lbBoard, lbPeriod)]!)}` +
       `<br><button class="btn mini" data-lb="retry">重试</button></div>`;
   } else {
     rows = `<div style="color:var(--dim);padding:26px;text-align:center">加载中…</div>`;
   }
   list.innerHTML =
-    `<h3><span class="dot"></span>${LB_BOARD_NAMES[lbBoard]}
-      <span class="rt">${segs}</span></h3>${rows}
+    `<h3><span class="dot"></span>${LB_BOARD_NAMES[lbBoard]}${lbPeriod === "week" ? "(本周)" : ""}
+      <span class="rt">${segs}${periodSegs}</span></h3>${rows}
     <p style="color:var(--dim);font-size:11.5px;margin-top:10px">
-      匿名提交(设备标识,无需登录);仅保留每榜前 50 名,落榜数据不保留。</p>`;
+      匿名提交(设备标识,无需登录);仅保留每榜前 50 名,落榜数据不保留;周榜每周一 0 点重置。</p>`;
 }
 
 /** 进入排行榜页时自动拉取/按需提交(10 分钟节流) */
@@ -2642,6 +2766,10 @@ document.addEventListener("click", (e: MouseEvent) => {
   if (act === "board") {
     lbBoard = (el.dataset.a === "level" ? "level" : el.dataset.a === "tower" ? "tower"
       : el.dataset.a === "power" ? "power" : "zone");
+    void lbFetch(lbBoard).then(() => renderNow());
+    renderNow();
+  } else if (act === "period") {
+    lbPeriod = el.dataset.a === "week" ? "week" : "all";
     void lbFetch(lbBoard).then(() => renderNow());
     renderNow();
   } else if (act === "retry") {

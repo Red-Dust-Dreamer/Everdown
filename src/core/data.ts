@@ -298,13 +298,79 @@ export interface AchievementDef {
   stat: string; per: number;
 }
 export const ACHIEVEMENTS: AchievementDef[] = [
-  { id: "slayer", name: "深渊猎手", metric: "kills", thresholds: [100, 1000, 10000, 50000], stat: "atk", per: 4 },
-  { id: "zonewalk", name: "开疆拓土", metric: "max_zone", thresholds: [3, 6, 10, 15, 25], stat: "hp", per: 6 },
-  { id: "smith", name: "锻造宗师", metric: "enhance_total", thresholds: [10, 50, 200, 600], stat: "def", per: 5 },
-  { id: "boss", name: "弑主者", metric: "boss_kills", thresholds: [10, 50, 200, 800], stat: "crit", per: 2 },
-  { id: "tycoon", name: "深渊富豪", metric: "gold_earned", thresholds: [1e4, 1e5, 1e6, 1e8], stat: "goldfind", per: 5 },
-  { id: "death", name: "不死鸟", metric: "deaths", thresholds: [1, 10, 50, 200], stat: "hp", per: 3 },
+  { id: "slayer", name: "深渊猎手", metric: "kills", thresholds: [100, 1000, 10000, 50000, 150000, 500000], stat: "atk", per: 4 },
+  { id: "zonewalk", name: "开疆拓土", metric: "max_zone", thresholds: [3, 6, 10, 15, 25, 40, 60, 100], stat: "hp", per: 6 },
+  { id: "smith", name: "锻造宗师", metric: "enhance_total", thresholds: [10, 50, 200, 600, 2000], stat: "def", per: 5 },
+  { id: "boss", name: "弑主者", metric: "boss_kills", thresholds: [10, 50, 200, 800, 2400, 8000], stat: "crit", per: 2 },
+  { id: "tycoon", name: "深渊富豪", metric: "gold_earned", thresholds: [1e4, 1e5, 1e6, 1e8, 1e10], stat: "goldfind", per: 5 },
+  { id: "death", name: "不死鸟", metric: "deaths", thresholds: [1, 10, 50, 200, 800], stat: "hp", per: 3 },
+  // ---- 2.3 第二梯队:终身统计已有数据、此前无人消费的六个新维度 ----
+  { id: "rebirther", name: "轮回大师", metric: "rebirths", thresholds: [1, 5, 15, 40], stat: "atk", per: 4 },
+  { id: "climber", name: "登塔者", metric: "max_floor", thresholds: [5, 15, 30, 50], stat: "def", per: 5 },
+  { id: "bounty", name: "赏金猎人", metric: "quest_done", thresholds: [10, 50, 150, 400], stat: "goldfind", per: 5 },
+  { id: "alchemist", name: "炼金术士", metric: "reforge_total", thresholds: [5, 25, 100, 300], stat: "hp", per: 3 },
+  { id: "fatality", name: "致命一击", metric: "crit_hits", thresholds: [1000, 10000, 100000], stat: "crit", per: 2 },
+  { id: "dweller", name: "深渊住民", metric: "playtime", thresholds: [3600, 21600, 86400, 432000], stat: "xp_pct", per: 2 },
 ];
+
+// ---------------------------------------------------------------- 每日签到(2.3):7 日循环,断签重置
+export interface SigninReward {
+  icon: string; label: string;
+  gold?: number; stones?: number; keys?: number; potion?: string;
+}
+/** 奖励量级刻意保守(远低于当日挂机收入):仪式感优先,不加速无墙曲线 */
+export const SIGNIN_REWARDS: SigninReward[] = [
+  { icon: "◈", label: "5,000 金币", gold: 5000 },
+  { icon: "✦", label: "2 重铸石", stones: 2 },
+  { icon: "◈", label: "15,000 金币", gold: 15000 },
+  { icon: "🔑", label: "塔钥匙 ×2", keys: 2 },
+  { icon: "◈", label: "50,000 金币", gold: 50000 },
+  { icon: "✦", label: "5 重铸石", stones: 5 },
+  { icon: "🧪", label: "力量药剂 ×1(免费)", potion: "might" },
+];
+
+// ---------------------------------------------------------------- 周常(2.3):ISO 周一 0 点重置
+export interface WeeklyGoalDef {
+  id: string; name: string; target: number;
+  /** 计数口径(与 weeklyBump 调用点对应) */
+  metric: "kills" | "boss" | "quests" | "zones" | "rebirths" | "enhance";
+}
+export const WEEKLY_GOALS: WeeklyGoalDef[] = [
+  { id: "w_kill", name: "本周击杀 2000", target: 2000, metric: "kills" },
+  { id: "w_boss", name: "本周头目 40", target: 40, metric: "boss" },
+  { id: "w_quest", name: "本周悬赏 8", target: 8, metric: "quests" },
+  { id: "w_zone", name: "本周推进 15 区", target: 15, metric: "zones" },
+  { id: "w_reb", name: "本周转生 1 次", target: 1, metric: "rebirths" },
+  { id: "w_enh", name: "本周强化 150 次", target: 150, metric: "enhance" },
+];
+/** 周宝箱:完成 3 项 ✦8;全 6 项 ✦20 + 称号「周征服者」 */
+export const WEEKLY_CHEST = [
+  { id: "chest3", need: 3, stones: 8, label: "完成 3 项" },
+  { id: "chest6", need: 6, stones: 20, label: "全部完成", title: "t_week" },
+];
+
+// ---------------------------------------------------------------- 称号(2.3):转生世数 + 周常全勤
+export interface TitleDef { id: string; name: string; cond: string; }
+export const TITLES: TitleDef[] = [
+  { id: "t_reb1", name: "轮回者", cond: "转生 1 次" },
+  { id: "t_reb5", name: "深渊行者", cond: "转生 5 次" },
+  { id: "t_reb15", name: "涅槃之焰", cond: "转生 15 次" },
+  { id: "t_reb40", name: "万劫归一", cond: "转生 40 次" },
+  { id: "t_week", name: "周征服者", cond: "周常全部完成" },
+];
+
+// ---------------------------------------------------------------- 兑换码(2.3):本地哈希校验,零后端
+/** 单机游戏,防君子不防小人;码表哈希内嵌,声称记录进存档防重复 */
+export interface RedeemDef {
+  /** FNV-1a 32bit 哈希(码统一大写去空白) */
+  hash: number; label: string;
+  gold?: number; stones?: number; keys?: number;
+}
+export const REDEEM_CODES: RedeemDef[] = [
+  { hash: 2332319329, label: "上线礼包:◈10万 + ✦5 + 🔑1", gold: 100000, stones: 5, keys: 1 },
+  { hash: 3102457229, label: "深潜者礼包:✦3", stones: 3 },
+  { hash: 456085019, label: "首杀礼包:◈2万", gold: 20000 },
+];   // 由 scripts/gen_redeem.ts 生成注入
 
 // ---------------------------------------------------------------- 悬赏任务
 export interface QuestTypeDef {
@@ -424,6 +490,9 @@ export const BAL = {
   auto_enhance_lv: 20,     // 自动强化解锁等级
   auto_skill_lv: 30,       // 自动升技能解锁等级
   auto_altar_lv: 40,       // 自动献祭解锁等级
+
+  // ---- 图鉴二期(2.3):每点亮一种怪的永久加成(攻/生命各按此系数 × 已点亮数) ----
+  codex_per: 0.3,          // 每种 +0.3%;全 17 种 = 各 +5.1%(轻量,不扰动主线曲线)
 } as const;
 
 export const VIRTUAL_STATS = ["skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct"] as const;
