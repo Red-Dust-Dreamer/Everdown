@@ -522,6 +522,15 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
       gearView = null;
       break;
     }
+    case "gear_take_inherit": {
+      // 手动对比的继承换装:借用 resolveSwap 的继承通道(费用/清零/金币不足回退同一口径)
+      if (gearView?.mode === "cmp-item" && gearView.item && g.bag.includes(gearView.item)) {
+        g.pendingSwap = { kind: "item", slot: gearView.item.slot, item: gearView.item };
+        g.resolveSwap(true, true);
+      }
+      gearView = null;
+      break;
+    }
     case "gear_take_relic": {
       if (gearView?.mode === "cmp-relic" && gearView.relic) {
         const i = g.relicBag.indexOf(gearView.relic);
@@ -2164,8 +2173,15 @@ function renderGearModal(st: State): void {
       gearItemCol(n, "新的装备", "new") +
       `</div>` + powerDeltaLine(delta) +
       (cur ? `<div class="sw-score" style="text-align:center">新装备评分 ${fmt(n.score)}${scoreLine}</div>` : "");
+    // 当前件有强化 → 提供「换上+继承」(与新件费用曲线 50% 手续费转移 +N,旧件清零)
+    const inheritBtn = cur && cur.plus > 0 && gearView?.mode === "cmp-item" && gearView.item
+      ? `<button class="btn big sell-on" data-cmd="gear_take_inherit"` +
+        ` title="把当前 +${cur.plus} 转移到新件(手续费为强化新件到同级的 50%,旧件清零)">` +
+        `⚒ 换上+继承 +${cur.plus}(◈${fmt(g.inheritCost(gearView.item, Math.min(cur.plus, D.BAL.plus_max)))})</button>`
+      : "";
     ops.innerHTML =
-      `<button class="btn big sell-on" data-cmd="gear_take_item">✦ 换上新的</button>` +
+      inheritBtn +
+      `<button class="btn big${inheritBtn ? "" : " sell-on"}" data-cmd="gear_take_item">✦ 换上新的</button>` +
       `<button class="btn big" data-cmd="gear_close">保留现在的</button>`;
     return;
   }
