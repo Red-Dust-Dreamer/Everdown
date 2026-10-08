@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>深渊挂机 · Abyss Idle</title>
+<link rel="manifest" href="/Everdown/manifest.webmanifest">
+<link rel="icon" href="/Everdown/icons/favicon-96.png" type="image/png">
+<link rel="apple-touch-icon" href="/Everdown/icons/apple-touch-icon.png">
+<meta name="theme-color" content="#0a0a0f">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="深渊挂机">
+<link rel="preload" href="/Everdown/fonts/abyss-mono.woff2" as="font" type="font/woff2" crossorigin>
+  <script type="module" crossorigin src="/Everdown/assets/main-Eu7bUUxz.js"></script>
+  <link rel="modulepreload" crossorigin href="/Everdown/assets/overrides-RlLMXVO-.js">
+  <link rel="stylesheet" crossorigin href="/Everdown/assets/overrides-zI8zCmoN.css">
+</head>
+<body>
+
+<!-- 加载层(TS 核心本地加载,一闪即隐) -->
+<div id="loading">
+  <div class="load-logo">⚔ 深渊挂机</div>
+  <div class="load-bar"><i></i></div>
+  <div id="loading-msg">正在编织深渊…</div>
+</div>
+
+<!-- 顶栏 -->
+<header id="topbar">
+  <span class="logo">⚔ 深渊挂机</span>
+  <span class="zone-chip" id="zone-chip"></span>
+  <button class="btn mode-btn" id="speed-btn" data-cmd="speed" title="游戏速度(10级解锁×2,30级×3)">×1</button>
+  <span class="sp"></span>
+  <span class="res res-lv" id="res-lv"></span>
+  <span class="res res-gold" id="res-gold"></span>
+  <span class="res res-stone" id="res-stone"></span>
+  <span class="res res-time" id="res-time"></span>
+  <button class="btn" data-local="save">存档</button>
+  <button class="btn" id="help-btn" title="帮助 / 机制说明">?</button>
+  <button class="btn" id="gear-btn" data-tab="settings" title="设置(快捷键 9)">⚙</button>
+  <button class="btn warn" id="pause-btn" data-local="pause">暂停</button>
+</header>
+
+<div id="main">
+  <!-- 导航(手机端变为底部标签栏;设置在顶栏 ⚙ 与快捷键 9) -->
+  <nav id="nav">
+    <div class="nav-item on" data-tab="battle"><span class="ic">⚔</span><span class="tx">战斗</span><span class="kbd">1</span></div>
+    <div class="nav-item" data-tab="hero"><span class="ic">🧙</span><span class="tx">角色</span><span class="kbd">2</span></div>
+    <div class="nav-item" data-tab="bag"><span class="ic">🎒</span><span class="tx">背包</span><span class="kbd">3</span></div>
+    <div class="nav-item" data-tab="skill"><span class="ic">✦</span><span class="tx">技能</span><span class="kbd">4</span></div>
+    <div class="nav-item" data-tab="quest"><span class="ic">📜</span><span class="tx">悬赏</span><span class="kbd">5</span></div>
+  </nav>
+
+  <!-- 内容区:各页容器由 main.ts 填充 -->
+  <div id="content">
+    <div class="page on" id="page-battle">
+      <div id="battle-top">
+        <div class="col" id="col-hero">
+          <div class="card" id="hero-card"></div>
+          <div class="card grow" id="equip-mini"></div>
+        </div>
+        <div id="stage-wrap">
+          <div class="card" id="stage-track"></div>
+        <div id="stage">
+          <div class="aura"></div>
+          <div id="hero-art"><img alt="英雄" draggable="false"><span class="glyph"></span></div>
+          <div id="stage-inner"></div>
+            <div id="fx-layer"></div>
+            <canvas id="fx-canvas"></canvas>
+            <div id="floaters"></div>
+          </div>
+          <div class="card" id="skillbar-card"></div>
+        </div>
+        <div class="col" id="col-right">
+          <div class="card" id="quests-mini"></div>
+          <div class="card grow" id="log-card">
+            <h3><span class="dot"></span>战斗日志</h3>
+            <div id="log-body"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="page" id="page-hero"><div class="card grow" id="hero-detail"></div></div>
+    <div class="page" id="page-bag"><div class="card grow" id="bag-list"></div></div>
+    <div class="page" id="page-skill">
+      <div class="card" id="loadout-card"></div>
+      <div class="card grow" id="skill-pools"></div>
+    </div>
+    <div class="page" id="page-quest">
+      <div class="card" id="quest-list"></div>
+      <div class="card grow" id="ach-list"></div>
+    </div>
+    <div class="page" id="page-settings"><div class="card grow" id="settings-panel"></div></div>
+  </div>
+</div>
+
+<!-- 职业选择(新档)/ 转生择业(共用卡片;文案与「保持原职业」按模式切换) -->
+<div class="overlay" id="class-select">
+  <div class="modal wide">
+    <h2>选择你的职业</h2>
+    <p class="dim" id="cls-sub">选择将决定你的技能池与成长方向(50 级后可通过转生更换)</p>
+    <div class="cls-grid" id="cls-grid"></div>
+    <div class="swap-ops" id="cls-keep" style="display:none">
+      <button class="btn big" data-cmd="rebirth_keep" id="cls-keep-btn">保持原职业</button>
+    </div>
+  </div>
+</div>
+
+<!-- 转生确认(保留/重置清单;确认后进入择业) -->
+<div class="overlay" id="rebirth-modal">
+  <div class="modal">
+    <h2>♻ 发起转生?</h2>
+    <p class="dim">重置本局成长,换取永久倍率。<b>收获随本世深度加权</b>:130 区为基准档
+    (+25% 三围/+10% 金币经验),越深越多,最高 ×4 档;推进受阻时转生收益最大</p>
+    <div id="rebirth-body">
+      <div class="rb-keep"><b>保留:</b>成就与加成 · 祭坛等级 · 遗物与背包 · 深渊塔最高层 · 重铸石 · 背包容量 · 排行榜记录</div>
+      <div class="rb-reset"><b>重置:</b>等级 · 装备与背包物品 · 金币 · 技能等级 · 当前区域(从第 1 区重来)</div>
+      <div class="rb-note">转生时可更换职业(也可保持)——这是全游戏唯一的换职业机会。</div>
+      <div class="rb-timing" id="rebirth-timing"></div>
+    </div>
+    <div class="swap-ops">
+      <button class="btn big sell-on" data-cmd="rebirth_go">选择下一世职业 →</button>
+      <button class="btn big" data-cmd="rebirth_cancel">再想想</button>
+    </div>
+  </div>
+</div>
+
+<!-- 新手引导(3 步;新档选完职业弹出) -->
+<div class="overlay" id="intro-modal">
+  <div class="modal">
+    <div id="intro-body"></div>
+    <div class="intro-dots" id="intro-dots"></div>
+    <button class="btn big sell-on" id="intro-next" data-cmd="intro_next">下一步</button>
+  </div>
+</div>
+
+<!-- 帮助 / 机制说明(顶栏 ? 打开;点遮罩关闭) -->
+<div class="overlay" id="help-modal">
+  <div class="modal wide">
+    <h2>❔ 机制速查</h2>
+    <div class="help-body">
+      <h4>核心循环</h4>
+      <p>英雄自动战斗不停歇:推进模式击败敌人深入深渊,挂机模式停在指定层刷金币与装备。
+      掉落靠评分自动换装(新装备比当前强 5% 才换),你主要负责花金币变强、看掉落、推边界。</p>
+      <h4>金币就是战力</h4>
+      <p>挂机赚来的金币不会自动变强,要花出去:强化装备(战斗页装备框 → ⚒)、升级已装配技能(技能页)、
+      祭坛献祭(金币换永久加成,保留到转生之后)。卡墙推进变慢时,第一反应永远是"金币花了吗"。</p>
+      <h4>卡墙了怎么办</h4>
+      <p>连续战败会自动转挂机(这是保护,不是惩罚)。强化/技能/祭坛跟上后会自动恢复推进;
+      若等级到 50 且长期受阻,考虑转生(角色页)——带着永久加成重爬更快,还能换职业。</p>
+      <h4>等级压制</h4>
+      <p>怪物强度随区域与层级上涨,属性跟不上时伤害会越来越刮痧——这就是该回头强化/转生的信号,
+      不是 bug。</p>
+      <h4>装备与锁定</h4>
+      <p>背包里点 🔒 可锁定心爱的装备,锁定件不会被一键出售/批量分解。
+      分解比出售金币略高,史诗以上还出重铸石(洗练词缀用);一键按钮共用品质档选择。</p>
+      <h4>重铸石与幸运</h4>
+      <p>重铸石来自分解(史诗+)与头目掉落,在装备详情里洗练词缀;幸运提升高品质掉落率(有上限)。</p>
+      <h4>每日循环</h4>
+      <p>悬赏任务每日有完成上限、可刷新 3 次;深渊塔钥匙每日 3 把(0 点重置);药剂 30 分钟增益,价格翻倍递增。</p>
+      <h4>存档安全</h4>
+      <p>存档在浏览器本地,设置页可导出 JSON 备份;绑定云账号(设置页)后多设备漫游,换机不丢档。</p>
+    </div>
+    <button class="btn big sell-on" id="help-close">明白了</button>
+  </div>
+</div>
+
+<!-- 卡墙教练卡(一次性:首次推进受阻,或金币闲置从未强化) -->
+<div class="overlay" id="coach-modal">
+  <div class="modal">
+    <h2>⚒ 金币就是战力!</h2>
+    <p class="dim">你已攒下 <b id="coach-gold" style="color:var(--gold)">0</b> 金币,却一次强化都没做过——
+    推进变慢的根源往往在这:挂机赚来的金币不会自动变强,要花出去。</p>
+    <p class="dim" style="font-size:12px">两条花钱主线:强化装备(战斗页装备框点开 → ⚒ 强化/⚒×10)、
+    升级技能(技能页,已装配的技能每级都实打实提战力)。卡墙时尤其该花。</p>
+    <div class="swap-ops">
+      <button class="btn big sell-on" data-cmd="coach_enhance_all">⚒ 全身强化×10(立刻变强)</button>
+      <button class="btn big" data-cmd="coach_close">知道了</button>
+    </div>
+  </div>
+</div>
+
+<!-- 离线报告 -->
+<div class="overlay" id="offline-modal">
+  <div class="modal">
+    <h2>🌙 离线收益</h2>
+    <div id="offline-body"></div>
+    <button class="btn big" data-cmd="dismiss_offline">收下,继续冒险</button>
+  </div>
+</div>
+
+<!-- 手动模式换装对比(自动换装关闭时,更强掉落弹此框;✕/ESC/点遮罩=稍后处理,物品留在背包) -->
+<div class="overlay" id="swap-modal">
+  <div class="modal wide">
+    <button class="modal-x" id="swap-close" title="稍后处理(物品留在背包)">✕</button>
+    <h2 id="swap-title">⚔ 发现更强的装备</h2>
+    <p class="dim" id="swap-sub">自动换装已关闭 — 要换上新的吗?</p>
+    <div id="swap-body"></div>
+    <div class="swap-ops">
+      <button class="btn big sell-on" data-cmd="swap_take">✦ 换上新的</button>
+      <button class="btn big" data-cmd="swap_keep">保留旧的</button>
+    </div>
+  </div>
+</div>
+
+<!-- 装备框:点击槽位看属性 / 背包换装对比(角色页装备框 + 背包装备按钮) -->
+<div class="overlay" id="gear-modal">
+  <div class="modal wide">
+    <button class="modal-x" id="gear-close" title="关闭">✕</button>
+    <h2 id="gear-title"></h2>
+    <p class="dim" id="gear-sub"></p>
+    <div id="gear-body"></div>
+    <div class="swap-ops" id="gear-ops"></div>
+  </div>
+</div>
+
+<!-- 云账号登录(配置齐全时启用;游客模式永远可用) -->
+<div class="overlay" id="login-modal">
+  <div class="modal">
+    <h2>☁ 云账号</h2>
+    <p class="dim">登录后存档多设备漫游;不登录照常游玩(本地存档)</p>
+    <div class="login-form">
+      <input id="login-email" type="email" placeholder="邮箱" autocomplete="email" maxlength="80">
+      <input id="login-pass" type="password" placeholder="密码(至少 6 位)" autocomplete="current-password" maxlength="72">
+      <div id="login-err" class="login-err"></div>
+      <div class="login-ops">
+        <button class="btn big sell-on" id="login-go">登录</button>
+        <button class="btn big" id="login-reg">注册</button>
+      </div>
+      <div class="login-ops">
+        <button class="btn" id="login-gh">🐙 GitHub 登录</button>
+      </div>
+    </div>
+    <button class="btn big" id="login-close" style="margin-top:10px">先不登录,继续玩</button>
+  </div>
+</div>
+
+<!-- toast -->
+<div id="toast"></div>
+
+<input type="file" id="file-input" accept=".json" style="display:none">
+</body>
+</html>
