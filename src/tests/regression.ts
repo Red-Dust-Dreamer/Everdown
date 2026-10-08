@@ -867,6 +867,29 @@ function testAltarBatch(): void {
   eq(g1.gold, g2.gold, "×1 与单次等价(扣费)");
 }
 
+// ================================================================ 17. 成就跨档反馈(基线静默/跨档提示/不重复/重载静默)
+function testAchFeedback(): void {
+  const g = newGame(426245);
+  g.chooseClass("warrior");
+  ok(toastTexts(g).length === 0, "未跨档前无成就提示");
+  g.stats.kills = 99;
+  g.checkAchTiers();                       // 首检:静默建基线(kills<100,0 档)
+  ok(toastTexts(g).length === 0, "首检建基线不发");
+  g.stats.kills = 100;                     // 跨第 1 档(100)
+  g.checkAchTiers();
+  ok(toastTexts(g).some(t => t.includes("深渊猎手") && t.includes("第 1 档")), "跨档发 toast");
+  g.stats.kills = 150;                     // 同档内增长
+  g.checkAchTiers();
+  eq(toastTexts(g).filter(t => t.includes("深渊猎手")).length, 1, "同档不重复发");
+  g.stats.kills = 1000;                    // 跨第 2 档(1000)
+  g.checkAchTiers();
+  eq(toastTexts(g).filter(t => t.includes("深渊猎手")).length, 2, "跨新档再发");
+  // 存档往返后重载:首检重建基线,历史档不补发
+  const g2 = Game.fromDict(g.toDict());
+  g2.checkAchTiers();
+  eq(toastTexts(g2).length, 0, "重载后基线重建静默");
+}
+
 // ================================================================ runner
 const TESTS: [string, () => void][] = [
   ["1.RNG(MT19937 与 CPython 对拍)", testRng],
@@ -885,6 +908,7 @@ const TESTS: [string, () => void][] = [
   ["14.怪物技能debuff(减速/眩晕/存档口径)", testMobSkillDebuff],
   ["15.转生(门槛/重置/保留/倍率/存档v8)", testRebirth],
   ["16.祭坛批量(×N精确扣费/MAX至不足/×1委托/预估)", testAltarBatch],
+  ["17.成就跨档反馈(基线/跨档/去重/重载静默)", testAchFeedback],
 ];
 
 let failed = 0;

@@ -7,8 +7,8 @@ import { c, fmt } from "./ansi.ts";
 import { battleTick, spawnMonster, tierOf, mobGold } from "./combat.ts";
 import type { Monster } from "./combat.ts";
 import {
-  ACTIVE_DEF, ACTIVE_SKILLS, BAL, CAPS, CLASSES, PASSIVE_DEF, PASSIVE_SKILLS,
-  RARITIES, RARITY_IDX, TOWER, ALTAR_LINES, POTIONS,
+  ACTIVE_DEF, ACTIVE_SKILLS, ACHIEVEMENTS, BAL, CAPS, CLASSES, PASSIVE_DEF, PASSIVE_SKILLS,
+  RARITIES, RARITY_IDX, STAT_NAMES, TOWER, ALTAR_LINES, POTIONS,
 } from "./data.ts";
 import { Item, rollItem } from "./items.ts";
 import * as RL from "./relics.ts";
@@ -87,6 +87,8 @@ export class Game {
     gold_earned: 0, max_zone: 1, reforge_total: 0, quest_done: 0,
   };
   settings: Record<string, any> = { auto_equip: true, auto_sell_idx: -1 };
+  /** 成就跨档基线(null=未建):会话内首检静默建基线,此后升档才发提示;不序列化,重载不补发 */
+  private achBaseline: Record<string, number> | null = null;
   quests: systems.Quest[] = [];
   questDailyCount = 0;        // 今日已完成悬赏数(上限 BAL.quest_daily_limit)
   questRerollCount = 0;       // 今日悬赏刷新次数(上限 BAL.quest_reroll_max)
@@ -663,7 +665,7 @@ export class Game {
       this.stage = Math.max(1, Math.min(10, safe));
       this.farmStage = this.stage;
       this.log(`推进受阻(连续${BAL.death_row_to_farm}次战败未能深入),自动转入挂机模式` +
-        `(第${this.zone}区·${this.stage}层);装备提升后自动恢复推进。`,
+        `(第${this.zone}区·${this.stage}层);把攒下的金币花在强化/技能上,即可自动恢复推进。`,
         "bright_cyan");
     }
   }
@@ -931,6 +933,27 @@ export class Game {
   }
 
   // ================================================================ 金币消耗(祭坛/药剂/钥匙/悬赏刷新)
+  /** 成就跨档检测:对比 stats 与基线档位,升档发日志+toast。首检(新建/载入后)静默建基线 */
+  checkAchTiers(): void {
+    const base = this.achBaseline;
+    const next: Record<string, number> = {};
+    for (const a of ACHIEVEMENTS) {
+      const val = this.stats[a.metric] ?? 0;
+      let tiers = 0;
+      for (const t of a.thresholds) if (val >= t) tiers++;
+      next[a.id] = tiers;
+      if (base !== null && tiers > (base[a.id] ?? 0)) {
+        const statName = STAT_NAMES[a.stat] ?? a.stat;
+        const bonus = a.per * tiers;
+        const unit = a.stat === "crit" || a.stat === "goldfind" ? " 点" : "%";
+        this.log(`🏆 成就「${a.name}」升至第 ${tiers}/${a.thresholds.length} 档:` +
+          `${statName} 永久加成 +${bonus}${unit}`, "bright_yellow");
+        this.toast(`🏆 ${a.name} 第 ${tiers} 档(${statName} +${bonus}${unit})`);
+      }
+    }
+    this.achBaseline = next;
+  }
+
   /** 祭坛单线下一级费用:多项式(基费 + 线性 + 平方 + 深度项),无等级上限;
    *  lvOffset 供"连买 n 次总费用"逐级求和(不动真实等级) */
   altarCost(lineId: string, lvOffset = 0): number {
@@ -1118,6 +1141,7 @@ export class Game {
 
   tick(dt: number): void {
     this.rollDaily();   // 跨日即时解冻悬赏(无 RNG 消耗,不影响对拍)
+    this.checkAchTiers();   // 成就跨档即时反馈(6×阈值比较,开销可忽略)
     const speed = Math.min(this.settings.speed ?? 1, this.maxSpeed());
     for (let i = 0; i < speed; i++) {
       this.time += dt;

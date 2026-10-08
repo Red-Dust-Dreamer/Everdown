@@ -764,6 +764,13 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
 /* 按钮定宽居中:档位(×1/×100/MAX)与数值位数变化不改变按钮宽度,六行齐整 */
 .altar-row .btn{margin-left:auto;white-space:nowrap;min-width:170px;text-align:center}
 #altar-list .sell-bar .btn{min-width:46px;text-align:center;padding-left:6px;padding-right:6px}
+
+/* 存在感层红点:解锁未装配的技能/转生受阻/更高倍速/成就新档/云档提醒。
+   钉在入口元素上(::after),由 main.ts updateBadges 切换 has-badge */
+.nav-item,#gear-btn,#speed-btn{position:relative}
+.has-badge::after{content:"";position:absolute;top:5px;right:7px;width:8px;height:8px;
+  border-radius:50%;background:#ff5a5a;box-shadow:0 0 6px rgba(255,90,90,.85);
+  pointer-events:none;z-index:3}
 @media (max-width:768px){
   .altar-row .nx{order:4;flex:1 1 100%;margin-left:0;white-space:nowrap}
   .altar-row .btn{margin-left:0;flex:1;min-height:42px}

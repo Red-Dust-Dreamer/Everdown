@@ -132,6 +132,21 @@
   </div>
 </div>
 
+<!-- 卡墙教练卡(一次性:首次推进受阻,或金币闲置从未强化) -->
+<div class="overlay" id="coach-modal">
+  <div class="modal">
+    <h2>⚒ 金币就是战力!</h2>
+    <p class="dim">你已攒下 <b id="coach-gold" style="color:var(--gold)">0</b> 金币,却一次强化都没做过——
+    推进变慢的根源往往在这:挂机赚来的金币不会自动变强,要花出去。</p>
+    <p class="dim" style="font-size:12px">两条花钱主线:强化装备(战斗页装备框点开 → ⚒ 强化/⚒×10)、
+    升级技能(技能页,已装配的技能每级都实打实提战力)。卡墙时尤其该花。</p>
+    <div class="swap-ops">
+      <button class="btn big sell-on" data-cmd="coach_enhance_all">⚒ 全身强化×10(立刻变强)</button>
+      <button class="btn big" data-cmd="coach_close">知道了</button>
+    </div>
+  </div>
+</div>
+
 <!-- 离线报告 -->
 <div class="overlay" id="offline-modal">
   <div class="modal">

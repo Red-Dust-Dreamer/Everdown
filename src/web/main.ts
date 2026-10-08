@@ -450,6 +450,12 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
       break;   // 仅切 UI 档位,下一帧重渲染即生效
     }
     case "potion": if (a) g.usePotion(a); break;
+    case "coach_enhance_all": {          // 教练卡直达:全身各强化×10(钱不够自动停)
+      for (const s of Object.keys(g.equip)) g.enhanceMulti(s, 10);
+      $("coach-modal").classList.remove("show");
+      break;
+    }
+    case "coach_close": $("coach-modal").classList.remove("show"); break;
     case "tower_key": g.buyTowerKey(); break;
     case "quest_reroll": g.rerollQuests(); break;
     case "bag_expand": g.buyBagSlots(); break;
@@ -1157,6 +1163,61 @@ const INTRO_STEPS: [string, string, string][] = [
 ];
 let introStep: number | null = null;
 
+// ================================================================ 存在感层:红点角标 / 卡墙教练 / 云档提醒
+// 解锁了却没被看见的事(新技能/转生受阻/更高倍速/成就新档)用红点钉在入口上,
+// 而不是只发一条 200ms 就滚走的日志(手机端日志区限高 170px,一条刷没)。
+const COACH_KEY = "abyss_coach_stuck";
+const CLOUD_HINT_KEY = "abyss_cloud_hint";
+let cloudHintPending = false;   // 云档提醒已发但还没被看见(齿轮红点,进设置页即消)
+/** 本会话已看过的成就档位基线(悬赏页红点;首次渲染时静默建立) */
+let achSeenTiers: Record<string, number> | null = null;
+
+function setBadge(sel: string, on: boolean): void {
+  document.querySelector(sel)?.classList.toggle("has-badge", on);
+}
+
+function updateBadges(st: State): void {
+  if (achSeenTiers === null) {
+    achSeenTiers = Object.fromEntries(st.achievements.map(a => [a.id, a.tiers]));
+  }
+  // 技能页:有空位 且 有已解锁未装配的主动技能(刻意不装/满位不亮,避免永久红点)
+  setBadge('.nav-item[data-tab="skill"]',
+    st.loadout.active.length < st.loadout_slots &&
+    st.skills.active.some(s => s.unlocked && !s.equipped));
+  // 角色页:可转生且推进受阻(转生收益最大的时机)
+  setBadge('.nav-item[data-tab="hero"]', st.can_rebirth && st.stuck);
+  // 悬赏页:会话内有成就升到新档;正看着悬赏页时刷新基线(红点即消)
+  let achNew = false;
+  for (const a of st.achievements) if (a.tiers > (achSeenTiers[a.id] ?? 0)) achNew = true;
+  if (curTab === "quest") {
+    achSeenTiers = Object.fromEntries(st.achievements.map(a => [a.id, a.tiers]));
+  } else {
+    setBadge('.nav-item[data-tab="quest"]', achNew);
+  }
+  setBadge("#speed-btn", st.max_speed > st.speed);   // 更高档已解锁未启用
+  setBadge("#gear-btn", cloudHintPending);           // 云档提醒待看
+}
+
+/** 卡墙教练卡(一次性):首次受阻,或"金币攒到 8 千+从未强化"的龟速爬行兜底
+ *  (零操作实测:3 种子 1h 均止步 2-3 区、攒 1.5-3 万金币未花,部分全程不触发受阻信号) */
+function coachMaybe(st: State): void {
+  if (!st.class_id || localStorage.getItem(COACH_KEY)) return;
+  const goldIdle = st.stats.enhance_total === 0 && st.gold >= 8000 && st.level >= 6;
+  if (!st.stuck && !goldIdle) return;
+  localStorage.setItem(COACH_KEY, "1");   // 先落 flag 再弹,防 200ms 重渲染重复触发
+  $("coach-gold").textContent = fmt(st.gold);
+  $("coach-modal").classList.add("show");
+}
+
+/** 云存档里程碑提醒(一次性):累计 1 小时且未绑定云账号——丢档=全部进度,最该提醒的一刻 */
+function cloudHintMaybe(st: State): void {
+  if (!CLOUD_READY || cloudState.user || cloudHintPending) return;
+  if (localStorage.getItem(CLOUD_HINT_KEY) || st.playtime < 3600) return;
+  localStorage.setItem(CLOUD_HINT_KEY, "1");
+  cloudHintPending = true;
+  toast("☁ 已累计游戏 1 小时:到 设置 ⚙ 绑定云账号,存档永不丢失(也可手动导出)");
+}
+
 function renderNow(): void {
   const st = buildState(g);
   renderTop(st);
@@ -1171,6 +1232,9 @@ function renderNow(): void {
   renderSettings(st);
   renderOverlays(st);
   renderGearModal(st);
+  updateBadges(st);
+  coachMaybe(st);
+  cloudHintMaybe(st);
 }
 
 function renderTop(st: State): void {
@@ -1996,6 +2060,7 @@ function ensureTowerDom(): void {
 
 function switchTab(name: string): void {
   curTab = name;
+  if (name === "settings") cloudHintPending = false;   // 进设置页=云档提醒已看见
   document.querySelectorAll<HTMLElement>(".nav-item").forEach(n =>
     n.classList.toggle("on", n.dataset.tab === name));
   document.querySelectorAll<HTMLElement>(".page").forEach(p =>
@@ -2074,6 +2139,9 @@ document.addEventListener("keydown", (e: KeyboardEvent) => {
   if (t.tagName === "SELECT" || t.tagName === "INPUT") return;
   // ESC:关闭弹窗(换装对比/装备详情/转生确认与择业/新手引导)
   if (e.key === "Escape") {
+    if (document.querySelector("#coach-modal")?.classList.contains("show")) {
+      $("coach-modal").classList.remove("show"); return;
+    }
     if (rebirthAsk) { rebirthAsk = false; renderNow(); return; }
     if (rebirthPick) { rebirthPick = false; renderNow(); return; }
     if (introStep !== null) { introStep = null; renderNow(); return; }
