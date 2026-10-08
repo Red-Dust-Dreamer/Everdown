@@ -127,6 +127,8 @@ export class Game {
   lineage: { cls: string; level: number; zone: number; kills: number; dur: number }[] = [];
   /** 本世开始的终身游玩时长(世系耗时统计) */
   runStartPlaytime = 0;
+  /** 本世最远区域(方案B 转生深度权重用;转生时清 1) */
+  runMaxZone = 1;
   /** 已兑换码(FNV 哈希,防重复) */
   redeemed: number[] = [];
   /** 自动化运行时(不序列化):分钟级汇总日志 + 上次 flush 时刻 */
@@ -228,17 +230,21 @@ export class Game {
       return;
     }
     const cid = newClass && CLASSES[newClass] ? newClass : this.classId!;
-    const n = this.rebirths + 1;
+    // 方案B:本世深度加权 k —— 踩线(≈130区)=基准 1 档,越深越多,封顶 4 档
+    const depth = Math.max(1, this.runMaxZone);
+    const k = Math.min(BAL.rebirth_k_max,
+      Math.max(BAL.rebirth_k_min, depth / BAL.rebirth_depth_ref));
+    const n = this.rebirths + k;
     // —— 世系档案:记下这一世(最近在前,封顶 50 条)+ 周常/称号 ——
     this.lineage.unshift({ cls: this.classId ?? "?", level: this.level,
-      zone: this.stats.max_zone, kills: this.stats.kills,
+      zone: this.runMaxZone, kills: this.stats.kills,
       dur: Math.max(0, Math.round(this.playtime - this.runStartPlaytime)) });
     if (this.lineage.length > 50) this.lineage.length = 50;
     this.runStartPlaytime = this.playtime;
     this.weeklyBump("rebirths", 1);
     for (const t of TITLES) {
       const th = t.cond.match(/转生 (\d+) 次/);
-      if (th && n >= Number(th[1]) && !this.titles.includes(t.id)) {
+      if (th && Math.floor(n) >= Number(th[1]) && !this.titles.includes(t.id)) {
         this.titles.push(t.id);
         this.log(`👑 获得称号「${t.name}」(${t.cond})`, "bright_yellow");
       }
@@ -266,6 +272,7 @@ export class Game {
     // —— 保留(永久元进度):stones/altarLv/relics/relicBag/tower/bagExpLv/
     //    potionBought/stats(终身)/daily 计数;playtime 不重置(离线与包络都按终身时长计)
     this.rebirths = n;
+    this.runMaxZone = 1;
     this.rebirthHinted = false;
     this.classId = cid;
     this.skillCd = {};
@@ -283,10 +290,10 @@ export class Game {
     this.recalcHero();
     this.hero.hp = this.hero.max_hp;
     const cls = CLASSES[cid];
-    this.log(`♻ 第 ${n} 次转生!以 ${cls.name} 之名重生:` +
-      `攻击/生命/防御 +${BAL.rebirth_stat_pct * n}% · 金币/经验 +${BAL.rebirth_gain_pct * n}%`,
+    this.log(`♻ 转生!本世最远 ${depth} 区 → 收获 ×${k.toFixed(2)} 档;以 ${cls.name} 之名重生:` +
+      `攻击/生命/防御 +${(BAL.rebirth_stat_pct * n).toFixed(1)}% · 金币/经验 +${(BAL.rebirth_gain_pct * n).toFixed(1)}%`,
       "bright_magenta");
-    this.toast(`转生成功 · 第 ${n} 世`);
+    this.toast(`转生成功 · 收获 ×${k.toFixed(2)} 档`);
     this.spawn();
   }
 
@@ -714,6 +721,7 @@ export class Game {
         if (tierOf(this.zone, this.stage) > this.deathTier) this.deathsRow = 0;
         if (this.zone > this.stats.max_zone) {
           this.stats.max_zone = this.zone;
+          this.runMaxZone = Math.max(this.runMaxZone, this.zone);   // 方案B:本世最远
           this.weeklyBump("zones", 1);   // 周常:本周推进新区数
         }
         this.toast(`进入第 ${this.zone} 区`);
@@ -1467,6 +1475,7 @@ export class Game {
       title: this.title,
       lineage: this.lineage,
       run_start_playtime: this.runStartPlaytime,
+      run_max_zone: this.runMaxZone,
       redeemed: this.redeemed,
       stat_mods: this.statMods,
       quests: this.quests,
@@ -1536,6 +1545,7 @@ export class Game {
     g.title = d.title ?? "";
     g.lineage = d.lineage ?? [];
     g.runStartPlaytime = d.run_start_playtime ?? 0;
+    g.runMaxZone = d.run_max_zone ?? Math.max(1, g.zone);   // 旧档无字段:以当前区兜底
     g.redeemed = d.redeemed ?? [];
     Object.assign(g.settings, d.settings ?? {});
     g.statMods = d.stat_mods ?? [];

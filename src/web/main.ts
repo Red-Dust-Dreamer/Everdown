@@ -127,6 +127,8 @@ interface State {
   cls: { name: string; icon: string; desc: string; color: string };
   level: number; xp: number; xp_req: number;
   rebirths: number; can_rebirth: boolean; rebirth_min_level: number;
+  /** 本世最远区域(方案B 转生深度权重预览) */
+  run_max_zone: number;
   /** 推进受阻(自动转挂机中)= 游戏自身的"卡墙"信号;转生推荐的时机 */
   stuck: boolean;
   gold: number; stones: number; playtime: number; time: number;
@@ -376,6 +378,7 @@ function buildState(g: Game): State {
     level: g.level, xp: g.xp, xp_req: g.xpReq(),
     rebirths: g.rebirths, can_rebirth: g.canRebirth(),
     rebirth_min_level: D.BAL.rebirth_min_level,
+    run_max_zone: g.runMaxZone,
     stuck: g.mode === "farm" && g.autoFarm,
     gold: g.gold, stones: g.stones, playtime: g.playtime, time: g.time,
     zone: g.zone, stage: g.stage, stage_kills: g.stageKills,
@@ -1530,7 +1533,7 @@ function lineageBlockHtml(st: State): string {
     `<button class="btn mini${st.title === "" ? " sell-on" : ""}" data-cmd="set_title" data-a="">无称号</button>`;
   const clsIcon: Record<string, string> = { warrior: "⚔", mage: "✦", ranger: "➤" };
   const rows = st.lineage.map((e, i) =>
-    `<div class="lg-row"><span class="no">第${st.rebirths - i}世</span>` +
+    `<div class="lg-row"><span class="no">第${Math.max(1, Math.floor(st.rebirths) - i)}世</span>` +
     `<span class="cl">${clsIcon[e.cls] ?? "?"} ${e.cls === "warrior" ? "战士" : e.cls === "mage" ? "法师" : e.cls === "ranger" ? "射手" : e.cls}</span>` +
     `<span class="dt">Lv.${e.level} · ${e.zone}区 · ${fmt(e.kills)}杀 · ${fmtTime(e.dur)}</span></div>`
   ).join("");
@@ -1545,29 +1548,34 @@ function lineageBlockHtml(st: State): string {
 function rebirthBlockHtml(st: State): string {
   const statPct = D.BAL.rebirth_stat_pct * st.rebirths;
   const gainPct = D.BAL.rebirth_gain_pct * st.rebirths;
-  const nextStat = D.BAL.rebirth_stat_pct * (st.rebirths + 1);
-  const nextGain = D.BAL.rebirth_gain_pct * (st.rebirths + 1);
   const lvLeft = Math.max(0, st.rebirth_min_level - st.level);
+  // 方案B:本次转生收获档位 k = clamp(本世最远/锚点, 保底, 封顶)
+  const k = Math.min(D.BAL.rebirth_k_max,
+    Math.max(D.BAL.rebirth_k_min, st.run_max_zone / D.BAL.rebirth_depth_ref));
+  const kStat = Math.round(D.BAL.rebirth_stat_pct * k * 10) / 10;
+  const kGain = Math.round(D.BAL.rebirth_gain_pct * k * 10) / 10;
+  const r1 = (v: number): string => v === Math.trunc(v) ? String(v) : v.toFixed(1);
   const action = st.can_rebirth && st.stuck
-    ? `<button class="btn big sell-on" data-cmd="rebirth">♻ 转生(推荐)</button>`
+    ? `<button class="btn big sell-on" data-cmd="rebirth">♻ 转生(推荐,×${k.toFixed(2)} 档)</button>`
     : st.can_rebirth
-      ? `<button class="btn big" data-cmd="rebirth" title="随时可转;但未受阻时转生会放弃本局深度">♻ 发起转生</button>`
+      ? `<button class="btn big" data-cmd="rebirth" title="随时可转;但未受阻时转生会放弃本局深度,浅转收获打折">♻ 发起转生(×${k.toFixed(2)} 档)</button>`
       : `<button class="btn big" disabled title="等级达标后解锁">Lv.${st.rebirth_min_level} 解锁(还差 ${lvLeft} 级)</button>`;
   const timing = st.can_rebirth
     ? (st.stuck
         ? `<div class="rb-timing stuck">⛔ 推进受阻中 —— 现在是转生的好时机:带着永久加成与祭坛/遗物重爬,能推得更远。</div>`
-        : `<div class="rb-timing">⏳ 当前推进未受阻:现在转生会放弃本局深度。建议推进受阻(卡墙自动转挂机)时再转;仅想换职业则随时可转。</div>`)
+        : `<div class="rb-timing">⏳ 当前推进未受阻:继续推深能提高本次收获档位;仅想换职业则随时可转。</div>`)
     : "";
   return `<h3 style="margin-top:16px"><span class="dot"></span>♻ 转生 · 涅槃重生</h3>` +
     `<div class="rebirth-card${st.can_rebirth ? (st.stuck ? " ready stuck" : " ready") : ""}">` +
       `<div class="rb-info">` +
-        `<span>转生 <b>${st.rebirths}</b> 世</span>` +
-        `<span>攻击/生命/防御 <b>+${statPct}%</b></span>` +
-        `<span>金币/经验 <b>+${gainPct}%</b></span>` +
+        `<span>转生 <b>${r1(st.rebirths)}</b> 世</span>` +
+        `<span>攻击/生命/防御 <b>+${r1(Math.round(statPct * 10) / 10)}%</b></span>` +
+        `<span>金币/经验 <b>+${r1(Math.round(gainPct * 10) / 10)}%</b></span>` +
       `</div>` +
-      `<div class="rb-desc">重置本局成长(等级/装备/金币/技能等级),保留成就·祭坛·遗物·塔记录·背包容量;` +
-      `下一次:+${nextStat}% 三围 · +${nextGain}% 金币经验${st.rebirths === 0 ? ",并可选新职业" : ",可再换职业"}` +
-      `</div>` +
+      `<div class="rb-desc">重置本局成长(等级/装备/金币/技能等级),保留成就·祭坛·遗物·塔记录·背包容量${st.rebirths === 0 ? ";转生可换职业" : ""}。<br>` +
+      `<b>收获随本世深度:</b>本世最远 ${st.run_max_zone} 区 → 本次 ` +
+      `<b style="color:var(--gold)">×${k.toFixed(2)} 档(三围 +${kStat}% · 金币经验 +${kGain}%)</b>` +
+      `;${D.BAL.rebirth_depth_ref} 区=基准 ×1 档,封顶 ×${D.BAL.rebirth_k_max} 档。</div>` +
       timing + action +
     `</div>`;
 }

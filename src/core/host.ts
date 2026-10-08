@@ -172,14 +172,16 @@ export function handleKey(g: Game, key: string): KeyResult {
 }
 
 // ---------------------------------------------------------------- autopilot
-/** autoRebirth=true:等级到转生门槛即转生(保持当前职业)。
+/** autoRebirth=true:受阻(卡墙转挂机)才转生(方案B 最优参考策略)。
  *  仅供包络参考局(gen-lb-bounds)用 —— 真玩家转生时机自主,autopilot 默认不转。 */
 export function autopilot(g: Game, sim = false, autoRebirth = false): void {
   if (g.classId === null) {
     g.chooseClass("warrior");
     return;
   }
-  if (autoRebirth && g.canRebirth()) {
+  if (autoRebirth && g.canRebirth() && g.mode === "farm" && g.autoFarm) {
+    // 方案B 后的最优参考策略:受阻(卡墙自动转挂机)才转——转生收益按本世深度加权,
+    // 早转只拿浅档;gen-lb-bounds 用它做包络上界
     g.rebirth();
     return;
   }

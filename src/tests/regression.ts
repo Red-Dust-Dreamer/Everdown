@@ -760,8 +760,10 @@ function testRebirth(): void {
   g.rebirth();
   eq(g.rebirths, 0, "未达门槛 rebirth() 应被拒");
 
-  // 堆一批跨"重置/保留"两侧的进度
+  // 堆一批跨"重置/保留"两侧的进度(深度压到锚点 130 区 → 方案B k=1,等值旧口径)
   g.level = BAL.rebirth_min_level;         // 直接达标(确定性)
+  g.zone = BAL.rebirth_depth_ref;
+  g.runMaxZone = BAL.rebirth_depth_ref;
   g.gold = 98765;
   g.stones = 13;
   g.skillLv["w_strike"] = 5;
@@ -1039,8 +1041,10 @@ function testSigninWeekly(): void {
   g.redeemCode("NOT-A-CODE");
   eq(g.redeemed.length, 1, "无效码不入账");
 
-  // —— 世系 + 称号(经真实转生)——
+  // —— 世系 + 称号(经真实转生;深度=锚点 → k=1)——
   g.level = BAL.rebirth_min_level;
+  g.zone = BAL.rebirth_depth_ref;
+  g.runMaxZone = BAL.rebirth_depth_ref;
   const killsBefore = g.stats.kills;
   g.rebirth("mage");
   eq(g.lineage.length, 1, "转生记入世系");
@@ -1126,6 +1130,67 @@ function testInheritCodex(): void {
   ok(toastTexts(g3).some(t => t.includes("轮回大师")), "轮回大师跨档发提示");
 }
 
+// ================================================================ 21. 方案B:转生深度加权
+function testRebirthDepth(): void {
+  const mk = (zone: number): Game => {
+    const g = newGame(426252);
+    g.chooseClass("warrior");
+    g.level = BAL.rebirth_min_level;
+    g.zone = zone;
+    g.runMaxZone = zone;
+    return g;
+  };
+  // 锚点:130 区 = k=1(与旧固定 +25% 等值,老档零迁移的根据)
+  {
+    const g = mk(BAL.rebirth_depth_ref);
+    g.rebirth();
+    eq(g.rebirths, 1, "锚点深度 k=1");
+    eq(g.runMaxZone, 1, "转生后本世最远重置");
+    eq(g.zone, 1, "转生后区域重置");
+  }
+  // 深度加倍 → k 加倍;封顶 4;极浅保底 0.25
+  {
+    const g = mk(BAL.rebirth_depth_ref * 2);
+    g.rebirth();
+    eq(g.rebirths, 2, "深度×2 → k=2");
+    g.level = BAL.rebirth_min_level;
+    g.zone = BAL.rebirth_depth_ref * 10;
+    g.runMaxZone = BAL.rebirth_depth_ref * 10;
+    g.rebirth();
+    eq(g.rebirths, 2 + BAL.rebirth_k_max, "超封顶深度 → k=4");
+    const g2 = mk(10);
+    g2.rebirth();
+    eq(g2.rebirths, BAL.rebirth_k_min, "极浅转生保底 k=0.25(比旧口径 -94%)");
+  }
+  // 倍率口径:三围按加权世数 ×25%(k=2 → +50%)
+  {
+    const g = mk(BAL.rebirth_depth_ref * 2);
+    const base = newGame(426253);
+    base.chooseClass("warrior");
+    const baseAtk = base.hero.atk;
+    g.rebirth();
+    const rebAch = ACHIEVEMENTS.find(a => a.id === "rebirther")!;
+    close(g.hero.atk, baseAtk * (1 + BAL.rebirth_stat_pct * 2 / 100) * (1 + rebAch.per / 100),
+      "k=2 → 三围 +50%(另含轮回大师第 1 档)");
+    ok(g.hero.goldfind >= BAL.rebirth_gain_pct * 2, "k=2 → 金币加成 +20%");
+  }
+  // 老档整数世数天然等值:rebirths=2 的旧档重载后倍率仍是 +50%
+  {
+    const g = mk(BAL.rebirth_depth_ref);
+    g.rebirth();
+    g.level = BAL.rebirth_min_level;
+    g.zone = BAL.rebirth_depth_ref;
+    g.runMaxZone = BAL.rebirth_depth_ref;
+    g.rebirth();
+    eq(g.rebirths, 2, "两次锚点转生 → 加权 2.0");
+    const d = JSON.parse(JSON.stringify(g.toDict()));
+    const g2 = Game.fromDict(d);
+    eq(g2.rebirths, 2, "加权世数存档往返保真");
+    eq(g2.runMaxZone, 1, "本世最远往返保真");
+    close(g2.hero.atk, g.hero.atk, "往返后倍率一致(老档等值)");
+  }
+}
+
 // ================================================================ runner
 const TESTS: [string, () => void][] = [
   ["1.RNG(MT19937 与 CPython 对拍)", testRng],
@@ -1148,6 +1213,7 @@ const TESTS: [string, () => void][] = [
   ["18.自动化开关/装备锁定/批量分解/分怪图鉴", testAutoLockCodex],
   ["19.签到/周常/世系/称号/兑换码", testSigninWeekly],
   ["20.强化继承/图鉴二期加成/成就新维度", testInheritCodex],
+  ["21.方案B 转生深度加权(锚点/封顶/保底/等值迁移)", testRebirthDepth],
 ];
 
 let failed = 0;
