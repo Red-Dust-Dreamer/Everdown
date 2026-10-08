@@ -343,6 +343,7 @@ function onMonsterKilled(g: Game, mon: Monster): void {
   else if (mon.elite) gold *= BAL.elite_gold;
 
   g.stats.kills += 1;
+  g.monKills[mon.id] = (g.monKills[mon.id] ?? 0) + 1;   // 图鉴:分怪计数(普通/精英/头目合并)
   h.hp = Math.min(h.max_hp, h.hp + h.max_hp * 0.08);
   g.gold += Math.trunc(gold);
   g.stats.gold_earned += Math.trunc(gold);

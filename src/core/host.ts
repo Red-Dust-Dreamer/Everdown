@@ -1,5 +1,5 @@
 /** 平台无关宿主逻辑:按键分发 + autopilot(与 abyss/main.py 一致) */
-import { ACTIVE_SKILLS, PASSIVE_SKILLS, ACTIVE_DEF, BAL, SLOTS } from "./data.ts";
+import { ACTIVE_SKILLS, PASSIVE_SKILLS, ACTIVE_DEF, ALTAR_LINES, BAL, SLOTS } from "./data.ts";
 import type { ActiveSkill } from "./data.ts";
 import type { Game } from "./game.ts";
 
@@ -240,6 +240,14 @@ export function autopilot(g: Game, sim = false, autoRebirth = false): void {
         break;
       }
     }
+  }
+  // 祭坛:金币充裕(>4×费)时买最便宜的线(与玩家 auto_altar 同口径;
+  // 2.2.2 前机器人不买祭坛,包络对祭坛玩家偏紧,补上)
+  {
+    const cheapest = ALTAR_LINES
+      .map(l => ({ id: l.id, cost: g.altarCost(l.id) }))
+      .sort((a, b) => a.cost - b.cost)[0];
+    if (cheapest && g.gold > cheapest.cost * 4) g.altarUp(cheapest.id, true);
   }
   // farm→push 自动切回已内置于 Game.tick(maybeAutoPush),autopilot 不再重复
 }

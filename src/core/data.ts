@@ -419,6 +419,11 @@ export const BAL = {
   rebirth_min_level: 50,   // 转生门槛:英雄等级(×1速约 4h;开倍速专注玩约 2h,50 级大招转生前必体验)
   rebirth_stat_pct: 25,    // 每次转生:攻击/生命/防御 +25%(加法叠加)
   rebirth_gain_pct: 10,    // 每次转生:金币加成/经验加成 +10%(加法叠加)
+
+  // ---- 玩家自动化三开关(2.2.2):逐步放手,先强化→技能→祭坛 ----
+  auto_enhance_lv: 20,     // 自动强化解锁等级
+  auto_skill_lv: 30,       // 自动升技能解锁等级
+  auto_altar_lv: 40,       // 自动献祭解锁等级
 } as const;
 
 export const VIRTUAL_STATS = ["skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct"] as const;

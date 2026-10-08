@@ -87,6 +87,10 @@ export class Game {
     gold_earned: 0, max_zone: 1, reforge_total: 0, quest_done: 0,
   };
   settings: Record<string, any> = { auto_equip: true, auto_sell_idx: -1 };
+  /** 分怪击杀计数(图鉴用):monster id → 累计击杀;普通/精英/头目变体合并计 */
+  monKills: Record<string, number> = {};
+  /** 自动化运行时(不序列化):分钟级汇总日志 + 上次 flush 时刻 */
+  private autoSum = { enh: 0, skill: 0, altar: 0, at: 0 };
   /** 成就跨档基线(null=未建):会话内首检静默建基线,此后升档才发提示;不序列化,重载不补发 */
   private achBaseline: Record<string, number> | null = null;
   quests: systems.Quest[] = [];
@@ -450,7 +454,7 @@ export class Game {
     let n = 0, gold = 0;
     const keep: Item[] = [];
     for (const it of this.bag) {
-      if (RARITY_IDX[it.rarity] <= maxRid) { gold += it.sellPrice(); n++; }
+      if (!it.locked && RARITY_IDX[it.rarity] <= maxRid) { gold += it.sellPrice(); n++; }
       else keep.push(it);
     }
     if (n) {
@@ -464,9 +468,42 @@ export class Game {
     }
   }
 
+  /** 锁定/解锁背包装备:锁定件免于一键出售与批量分解(单件"分解"也会拦截) */
+  toggleLock(idx: number): void {
+    if (idx < 0 || idx >= this.bag.length) return;
+    const it = this.bag[idx];
+    it.locked = !it.locked;
+    this.toast(it.locked ? `🔒 已锁定 ${it.name}(不出售/不分解)` : `🔓 已解锁 ${it.name}`);
+  }
+
+  /** 一键分解 ≤ 所选品质(跳过锁定件):金币略高于出售价,史诗+附重铸石 */
+  dismantleJunk(maxRid = 3): void {
+    let n = 0, gold = 0, stones = 0;
+    const keep: Item[] = [];
+    for (const it of this.bag) {
+      if (!it.locked && RARITY_IDX[it.rarity] <= maxRid) {
+        const [g, s] = it.dismantle();
+        gold += g; stones += s; n++;
+      } else keep.push(it);
+    }
+    if (n) {
+      this.bag = keep;
+      this.gold += gold;
+      this.stones += stones;
+      this.stats.gold_earned += gold;
+      this.log(`一键分解 ${n} 件 ≤${RARITIES[maxRid].name} (+${fmt(gold)} 金币` +
+        `${stones ? `, +${stones} 重铸石` : ""})`, "bright_magenta");
+      this.toast(`分解 ${n} 件 +${fmt(gold)}金${stones ? `/${stones}石` : ""}`);
+    } else {
+      this.toast("没有可分解的装备(锁定件跳过)");
+    }
+  }
+
   dismantleItem(idx: number): void {
     if (idx >= 0 && idx < this.bag.length) {
-      const it = this.bag.splice(idx, 1)[0];
+      const it = this.bag[idx];
+      if (it.locked) { this.toast("已锁定,先解锁再分解"); return; }
+      this.bag.splice(idx, 1);
       const [gold, stones] = it.dismantle();
       this.gold += gold;
       this.stones += stones;
@@ -478,19 +515,21 @@ export class Game {
   }
 
   // ================================================================ 锻造
-  enhance(slot: string): void {
+  enhance(slot: string, quiet = false): void {
     const it = this.equip[slot];
-    if (!it) { this.toast("该部位没有装备"); return; }
-    if (it.plus >= BAL.plus_max) { this.toast(`已达强化上限 +${BAL.plus_max}`); return; }
+    if (!it) { if (!quiet) this.toast("该部位没有装备"); return; }
+    if (it.plus >= BAL.plus_max) { if (!quiet) this.toast(`已达强化上限 +${BAL.plus_max}`); return; }
     const cost = it.enhanceCost();
-    if (this.gold < cost) { this.toast(`金币不足 (需要 ${fmt(cost)})`); return; }
+    if (this.gold < cost) { if (!quiet) this.toast(`金币不足 (需要 ${fmt(cost)})`); return; }
     this.gold -= cost;
     it.plus += 1;
     this.stats.enhance_total += 1;
     this.questProgress("enhance", 1);
     this.recalcHero();
-    this.log(`⚒ ${it.name} 强化至 +${it.plus}`, "bright_yellow");
-    this.toast(`${it.name} +${it.plus}`);
+    if (!quiet) {
+      this.log(`⚒ ${it.name} 强化至 +${it.plus}`, "bright_yellow");
+      this.toast(`${it.name} +${it.plus}`);
+    }
   }
 
   /** 十连强化:连续强化至多 n 次(钱不够/到上限即停),一次性汇报 */
@@ -568,24 +607,26 @@ export class Game {
       + BAL.skill_cost_lv2 * lv * lv + BAL.skill_cost_t * t);
   }
 
-  skillUp(sid: string): void {
+  skillUp(sid: string, quiet = false): void {
     const d = ACTIVE_DEF[sid] ?? PASSIVE_DEF[sid];
     if (!d || d.cls !== this.classId || this.level < d.unlock) {
-      this.toast("技能未解锁");
+      if (!quiet) this.toast("技能未解锁");
       return;
     }
     if ((this.skillLv[sid] ?? 1) >= BAL.skill_lv_max) {
-      this.toast(`已达上限 Lv.${BAL.skill_lv_max}`);
+      if (!quiet) this.toast(`已达上限 Lv.${BAL.skill_lv_max}`);
       return;
     }
     const cost = this.skillCost(sid);
-    if (this.gold < cost) { this.toast(`金币不足 (需要 ${fmt(cost)})`); return; }
+    if (this.gold < cost) { if (!quiet) this.toast(`金币不足 (需要 ${fmt(cost)})`); return; }
     this.gold -= cost;
     this.skillLv[sid] = (this.skillLv[sid] ?? 1) + 1;
     this.recalcHero();
-    this.log(`技能升级:${d.name} Lv.${this.skillLv[sid]}(有效 ${S.effLv(this, sid)})`,
-      "bright_cyan");
-    this.toast(`${d.name} Lv.${this.skillLv[sid]}`);
+    if (!quiet) {
+      this.log(`技能升级:${d.name} Lv.${this.skillLv[sid]}(有效 ${S.effLv(this, sid)})`,
+        "bright_cyan");
+      this.toast(`${d.name} Lv.${this.skillLv[sid]}`);
+    }
   }
 
   // ================================================================ 推进
@@ -954,6 +995,55 @@ export class Game {
     this.achBaseline = next;
   }
 
+  /** 玩家自动化(设置页三开关,Lv 逐步解锁):每秒一拍,各系统至多买一档,
+   *  金币预留倍数防梭空;口径与开发机器人 autopilot(host.ts)一致——
+   *  强化最弱部位(>2×费)、升已装配技能(>4×费)、买最便宜祭坛线(>4×费)。
+   *  购买静默(防每秒刷屏),按分钟汇总一条日志 */
+  private autoTick(): void {
+    if (Math.trunc(this.time * 10) % 10 !== 0) return;   // 1 秒一拍
+    if (!this.classId) return;
+    if (this.settings.auto_enhance && this.level >= BAL.auto_enhance_lv) {
+      const items = Object.values(this.equip);
+      if (items.length) {
+        const weakest = items.reduce((a, b) => (b.plus < a.plus ? b : a));
+        if (weakest.plus < BAL.plus_max && this.gold > weakest.enhanceCost() * 2) {
+          this.enhance(weakest.slot, true);
+          this.autoSum.enh += 1;
+        }
+      }
+    }
+    if (this.settings.auto_skill && this.level >= BAL.auto_skill_lv && this.gold > 2000) {
+      for (const sid of [...this.loadout.active, ...this.loadout.passive]) {
+        if ((this.skillLv[sid] ?? 1) >= BAL.skill_lv_max) continue;
+        if (this.gold > this.skillCost(sid) * 4) {
+          this.skillUp(sid, true);
+          this.autoSum.skill += 1;
+          break;
+        }
+      }
+    }
+    if (this.settings.auto_altar && this.level >= BAL.auto_altar_lv) {
+      const cheapest = ALTAR_LINES
+        .map(l => ({ id: l.id, cost: this.altarCost(l.id) }))
+        .sort((a, b) => a.cost - b.cost)[0];
+      if (cheapest && this.gold > cheapest.cost * 4) {
+        this.altarUp(cheapest.id, true);
+        this.autoSum.altar += 1;
+      }
+    }
+    // 分钟级汇总:让玩家知道金币去哪了,而不刷购买流水
+    if (this.time - this.autoSum.at >= 60 && (this.autoSum.enh || this.autoSum.skill || this.autoSum.altar)) {
+      const parts: string[] = [];
+      if (this.autoSum.enh) parts.push(`强化×${this.autoSum.enh}`);
+      if (this.autoSum.skill) parts.push(`技能×${this.autoSum.skill}`);
+      if (this.autoSum.altar) parts.push(`献祭×${this.autoSum.altar}`);
+      this.log(`🤖 自动化(近 1 分钟):${parts.join(" · ")}`, "dim");
+      this.autoSum = { enh: 0, skill: 0, altar: 0, at: this.time };
+    } else if (this.autoSum.at === 0) {
+      this.autoSum.at = this.time;
+    }
+  }
+
   /** 祭坛单线下一级费用:多项式(基费 + 线性 + 平方 + 深度项),无等级上限;
    *  lvOffset 供"连买 n 次总费用"逐级求和(不动真实等级) */
   altarCost(lineId: string, lvOffset = 0): number {
@@ -986,17 +1076,19 @@ export class Game {
     }
     return lo;
   }
-  altarUp(lineId: string): void {
+  altarUp(lineId: string, quiet = false): void {
     const line = ALTAR_LINES.find(l => l.id === lineId);
-    if (!line) { this.toast("无此祭坛"); return; }
+    if (!line) { if (!quiet) this.toast("无此祭坛"); return; }
     const cost = this.altarCost(lineId);
-    if (this.gold < cost) { this.toast(`金币不足(需要 ${fmt(cost)})`); return; }
+    if (this.gold < cost) { if (!quiet) this.toast(`金币不足(需要 ${fmt(cost)})`); return; }
     this.gold -= cost;
     this.altarLv[lineId] = (this.altarLv[lineId] ?? 0) + 1;
     this.recalcHero();
-    this.log(`🕯 ${line.name} Lv.${this.altarLv[lineId]}(+${line.per}${line.op === "pct" ? "%" : " 点"}${line.stat})`,
-      "bright_magenta");
-    this.toast(`${line.name} Lv.${this.altarLv[lineId]}`);
+    if (!quiet) {
+      this.log(`🕯 ${line.name} Lv.${this.altarLv[lineId]}(+${line.per}${line.op === "pct" ? "%" : " 点"}${line.stat})`,
+        "bright_magenta");
+      this.toast(`${line.name} Lv.${this.altarLv[lineId]}`);
+    }
   }
 
   /** 献祭 N 次:连升至多 n 级(金币不够自动停);times=Infinity 为 MAX 档(买到买不起为止,
@@ -1142,6 +1234,7 @@ export class Game {
   tick(dt: number): void {
     this.rollDaily();   // 跨日即时解冻悬赏(无 RNG 消耗,不影响对拍)
     this.checkAchTiers();   // 成就跨档即时反馈(6×阈值比较,开销可忽略)
+    this.autoTick();        // 玩家自动化三开关(内部 1 秒一拍)
     const speed = Math.min(this.settings.speed ?? 1, this.maxSpeed());
     for (let i = 0; i < speed; i++) {
       this.time += dt;
@@ -1176,6 +1269,7 @@ export class Game {
       equip: Object.fromEntries(Object.entries(this.equip).map(([k, v]) => [k, v.toDict()])),
       bag: this.bag.map(i => i.toDict()),
       stats: this.stats,
+      mon_kills: this.monKills,
       settings: this.settings,
       stat_mods: this.statMods,
       quests: this.quests,
@@ -1235,6 +1329,7 @@ export class Game {
     for (const s of ACTIVE_SKILLS) g.skillCd[s.id] = 0;
     g.buffs = {};
     Object.assign(g.stats, d.stats ?? {});
+    g.monKills = d.mon_kills ?? {};
     Object.assign(g.settings, d.settings ?? {});
     g.statMods = d.stat_mods ?? [];
     // 防御:损坏的遗物条目跳过(槽位置空),坏 tower 字段回默认 — 与 Python 侧同口径,

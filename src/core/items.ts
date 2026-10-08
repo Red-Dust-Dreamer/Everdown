@@ -40,6 +40,8 @@ export class Item {
   mainId: StatKey | null;
   /** skill_lv 词缀绑定的技能 id(roll 时随机,主动/被动);null=旧档未绑定,保持全技能聚合 */
   skillSid: string | null = null;
+  /** 玩家锁定:免于一键出售/批量分解(不掉落时产生,只由玩家手动上锁) */
+  locked = false;
 
   constructor(slot: string, rarity: string, tier: number, mainVal: number,
               affixes: AffixRoll[], plus = 0, name: string | null = null,
@@ -169,13 +171,16 @@ export class Item {
       name: this.name,
       ...(this.mainId ? { main_id: this.mainId } : {}),
       ...(this.skillSid ? { skill_sid: this.skillSid } : {}),
+      ...(this.locked ? { locked: true } : {}),
     };
   }
 
   static fromDict(d: any): Item {
-    return new Item(d.slot, d.rarity, d.tier, d.main_val,
+    const it = new Item(d.slot, d.rarity, d.tier, d.main_val,
       d.affixes.map((a: any) => ({ id: a[0] as StatKey, val: a[1] })),
       d.plus ?? 0, d.name, undefined, d.main_id ?? null, d.skill_sid ?? null);
+    it.locked = d.locked ?? false;
+    return it;
   }
 
   rarityColor() {

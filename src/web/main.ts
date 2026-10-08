@@ -111,6 +111,7 @@ interface ItemUI {
   innate: { name: string; val: number } | null;
   score: number; sell: number; ecost: number; dgold: number; dstones: number;
   pb: number; pb_next: number;
+  locked: boolean;
 }
 interface SkillUI {
   id: string; name: string; icon: string; kind: string; unlock: number; cd: number;
@@ -167,6 +168,8 @@ interface State {
   relic_bag_cap: number;
   relic_bag_cost: number | null;   // 下一级扩容费用;null = 已满级
   stats: Record<string, number>;
+  /** 分怪击杀计数(图鉴):monster id → 累计击杀 */
+  mon_kills: Record<string, number>;
   settings: Record<string, unknown>;
   reforge_stones: number; reforge_slots: readonly number[];
   pending_offline: { sec: number; kills: number; deaths: number; gold: number; xp: number;
@@ -213,6 +216,7 @@ function itemUI(it: Item): ItemUI {
             val: Math.round((st[mstat] ?? 0) * 10) / 10,
             pct: (PCT_MAINS as readonly string[]).includes(mstat) },
     affixes, innate,
+    locked: it.locked,
     score: Math.trunc(it.score()), sell: it.sellPrice(),
     ecost: it.enhanceCost(), dgold, dstones,
     pb: Math.round(pb * 1000) / 10,
@@ -396,7 +400,7 @@ function buildState(g: Game): State {
     relic_bag: g.relicBag.map(relicUI),
     relic_bag_cap: g.relicBagCap(),
     relic_bag_cost: g.relicBagCost(),
-    stats: { ...g.stats }, settings: { ...g.settings },
+    stats: { ...g.stats }, mon_kills: g.monKills, settings: { ...g.settings },
     reforge_stones: D.BAL.reforge_stones, reforge_slots: D.BAL.reforge_slots,
     pending_offline: po,
     pending_swap: psw,
@@ -428,6 +432,8 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
     case "sell": g.sellItem(Number(a)); break;
     case "dismantle": g.dismantleItem(Number(a)); break;
     case "sell_junk": g.sellJunk(junkSellMax); break;
+    case "dismantle_junk": g.dismantleJunk(junkSellMax); break;
+    case "item_lock": g.toggleLock(Number(a)); break;
     case "junk_pick": {
       const i = Number(a);
       if (i >= 0 && i < D.RARITIES.length) junkSellMax = i;
@@ -494,6 +500,16 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
       g.settings.auto_equip = !g.settings.auto_equip;
       g.toast(g.settings.auto_equip ? "自动换装:开" : "自动换装:关");
       break;
+    case "auto_sys": {
+      const names: Record<string, string> = {
+        auto_enhance: "自动强化", auto_skill: "自动升技能", auto_altar: "自动献祭",
+      };
+      if (a && names[a]) {
+        g.settings[a] = !g.settings[a];
+        g.toast(`${names[a]}:${g.settings[a] ? "开" : "关"}`);
+      }
+      break;
+    }
     case "cycle_sell": {
       const idx = g.settings.auto_sell_idx ?? -1;
       g.settings.auto_sell_idx = (idx + 2) % 6 - 1;
@@ -1492,6 +1508,8 @@ function renderBag(st: State): void {
       `<div class="sub">${it.slot_name} · ${it.rname} · ${it.affixes.length}词缀 · T${it.tier}</div>` +
       `<div class="lines">${esc(itemMainLine(it))}<br>${esc(itemAffixLine(it) || "")}</div>` +
       `<div class="ops">` +
+        `<button class="btn mini${it.locked ? " lock-on" : ""}" data-cmd="item_lock" data-a="${i}"` +
+          ` title="锁定:免于一键出售/批量分解">${it.locked ? "🔒" : "🔓"}</button>` +
         `<button class="btn mini" data-cmd="gear_cmp_item" data-a="${i}" title="对比当前装备后再决定">装备▾</button>` +
         `<button class="btn mini" data-cmd="dismantle" data-a="${i}">分解◈${fmt(it.dgold)}${it.dstones ? "✦" + it.dstones : ""}</button>` +
         `<button class="btn mini" data-cmd="sell" data-a="${i}">出售</button>` +
@@ -1507,9 +1525,10 @@ function renderBag(st: State): void {
       (st.bag_expand_cost !== null
         ? `<button class="btn mini" data-cmd="bag_expand" title="金币扩容 +10 格">扩容 ◈${fmt(st.bag_expand_cost)}</button>`
         : `<span style="color:var(--dim);font-size:11px">背包已满级</span>`) +
-      `<button class="btn" data-cmd="sell_junk">一键出售 ≤${D.RARITIES[junkSellMax].name}</button></span></h3>` +
-    `<div class="sell-bar"><span class="lbl">出售品质</span>${picks}` +
-      `<span class="hint">(卖出该品质及以下)</span></div>` +
+      `<button class="btn" data-cmd="sell_junk">一键出售 ≤${D.RARITIES[junkSellMax].name}</button>` +
+      `<button class="btn" data-cmd="dismantle_junk" title="分解金币略高于出售价;史诗+附重铸石;锁定件跳过">分解 ≤${D.RARITIES[junkSellMax].name}✦</button></span></h3>` +
+    `<div class="sell-bar"><span class="lbl">品质档</span>${picks}` +
+      `<span class="hint">(出售/分解 ≤ 该品质;🔒 锁定件两侧都跳过)</span></div>` +
     (cards ? `<div class="bag-grid">${cards}</div>`
            : `<div style="color:var(--dim);padding:30px;text-align:center">背包空空如也</div>`);
 }
@@ -1604,7 +1623,20 @@ function renderQuest(st: State): void {
       `<div class="ach-bonus">${esc(a.stat)} +${a.stat.includes("点") ? a.bonus : pctTxt(a.bonus)}` +
       (a.next !== null ? ` <span class="nx">(每档+${a.per})</span>` : "") + `</div></div>`;
   }
-  $("ach-list").innerHTML = `<h3><span class="dot"></span>成就(永久加成)</h3>` + ach;
+  // 深渊图鉴(一期:纯收集;未遭遇=剪影+???)——17 种怪,击杀点亮
+  const mons = Object.entries(D.MONSTERS);
+  const found = mons.filter(([id]) => (st.mon_kills[id] ?? 0) > 0).length;
+  const codex = `<h3 style="margin-top:16px"><span class="dot"></span>深渊图鉴 · ${found}/${mons.length}</h3>` +
+    `<div class="codex-grid">` + mons.map(([id, m]) => {
+      const k = st.mon_kills[id] ?? 0;
+      return `<div class="codex-cell${k ? "" : " unk"}"` +
+        ` title="${k ? `${m.name} · 技能:${m.skill.name}` : "尚未遭遇"}">` +
+        `<img src="${BASE_URL}mon/${id}.png" alt="" loading="lazy">` +
+        `<span class="nm">${k ? esc(m.name) : "???"}</span>` +
+        `<span class="kc">${k ? fmt(k) : "—"}</span></div>`;
+    }).join("") + `</div>`;
+
+  $("ach-list").innerHTML = `<h3><span class="dot"></span>成就(永久加成)</h3>` + ach + codex;
 }
 
 const AUTO_SELL_NAMES = ["关闭", "出售「普通」及以下", "出售「精良」及以下",
@@ -1695,10 +1727,23 @@ function renderSettings(st: State): void {
   if (!st.class_id) { $("settings-panel").innerHTML = ""; return; }
   const autoSellIdx = Number(st.settings.auto_sell_idx ?? -1);
   const s = st.stats;
+  // 自动化三开关:Lv 逐步解锁(放置承诺随进度兑现);未解锁显示门槛占位
+  const autoRow = (key: string, label: string, desc: string, lv: number) =>
+    `<div class="set-row"><div class="lbl">${label}<div class="d">${desc}</div></div>` +
+    (st.level >= lv
+      ? `<div class="toggle${st.settings[key] ? " on" : ""}" data-cmd="auto_sys" data-a="${key}"></div>`
+      : `<span class="btn" style="min-width:104px;text-align:center;opacity:.45;cursor:default">Lv.${lv} 解锁</span>`) +
+    `</div>`;
   $("settings-panel").innerHTML =
     `<h3><span class="dot"></span>设置</h3>` +
     `<div class="set-row"><div class="lbl">自动换装<div class="d">新掉落评分高于当前 5% 时自动穿上</div></div>` +
       `<div class="toggle${st.settings.auto_equip ? " on" : ""}" data-cmd="auto_equip"></div></div>` +
+    autoRow("auto_enhance", "自动强化", "金币 > 2×费用时强化最弱部位(每秒至多一件,Lv20 解锁)",
+      D.BAL.auto_enhance_lv) +
+    autoRow("auto_skill", "自动升技能", "金币 > 4×费用时升级已装配技能(每秒至多一个,Lv30 解锁)",
+      D.BAL.auto_skill_lv) +
+    autoRow("auto_altar", "自动献祭", "金币 > 4×费用时买最便宜的祭坛线,六线均衡(Lv40 解锁)",
+      D.BAL.auto_altar_lv) +
     `<div class="set-row"><div class="lbl">掉落自动出售<div class="d">低稀有度装备掉落即折现;点击循环切换档位</div></div>` +
       (autoSellIdx < 0
         ? `<button class="btn sell-off" data-cmd="cycle_sell" style="min-width:130px;text-align:center">已关闭</button>`
@@ -2071,6 +2116,9 @@ function switchTab(name: string): void {
 document.addEventListener("click", (e: MouseEvent) => {
   const target = e.target as HTMLElement;
   if (target.id === "gear-btn") { switchTab("settings"); return; }
+  if (target.id === "help-btn") {
+    $("help-modal").classList.add("show"); return;
+  }
   const nav = target.closest(".nav-item");
   if (nav) {
     switchTab((nav as HTMLElement).dataset.tab ?? curTab);
@@ -2139,6 +2187,9 @@ document.addEventListener("keydown", (e: KeyboardEvent) => {
   if (t.tagName === "SELECT" || t.tagName === "INPUT") return;
   // ESC:关闭弹窗(换装对比/装备详情/转生确认与择业/新手引导)
   if (e.key === "Escape") {
+    if (document.querySelector("#help-modal")?.classList.contains("show")) {
+      $("help-modal").classList.remove("show"); return;
+    }
     if (document.querySelector("#coach-modal")?.classList.contains("show")) {
       $("coach-modal").classList.remove("show"); return;
     }
@@ -2710,6 +2761,11 @@ function boot(): void {
   setupLoginModal();
   // 换装对比弹窗逃生通道:✕ 与点遮罩 = 稍后处理(物品留在背包),不再整屏锁死
   $("swap-close").addEventListener("click", () => { g.resolveSwap(false); renderNow(); });
+  // 帮助弹窗:按钮与点遮罩都能关
+  $("help-close").addEventListener("click", () => $("help-modal").classList.remove("show"));
+  $("help-modal").addEventListener("click", (e: Event) => {
+    if (e.target === e.currentTarget) $("help-modal").classList.remove("show");
+  });
   $("swap-modal").addEventListener("click", (e: Event) => {
     if (e.target === e.currentTarget) { g.resolveSwap(false); renderNow(); }
   });

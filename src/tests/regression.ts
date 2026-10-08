@@ -890,6 +890,81 @@ function testAchFeedback(): void {
   eq(toastTexts(g2).length, 0, "重载后基线重建静默");
 }
 
+// ================================================================ 18. 自动化三开关 / 装备锁定 / 批量分解 / 分怪图鉴
+function testAutoLockCodex(): void {
+  const g = newGame(426246);
+  g.chooseClass("warrior");
+  const w = new Item("weapon", "fine", 30, 10, [{ id: "atk", val: 5 }]);
+  const a = new Item("armor", "fine", 30, 10, [{ id: "hp", val: 30 }]);
+  g.bag.push(w, a);
+  g.equipItem(w);
+  g.equipItem(a);
+
+  // —— 门槛之下不动作
+  g.settings.auto_enhance = true;
+  g.settings.auto_skill = true;
+  g.settings.auto_altar = true;
+  g.level = 10;                       // < auto_enhance_lv(20)
+  g.gold = 1_000_000;
+  for (let i = 0; i < 20; i++) g.tick(0.1);
+  eq(g.stats.enhance_total, 0, "Lv10 时自动强化不动作(等级门槛)");
+  ok(Object.values(g.skillLv).every(v => v <= 1), "Lv10 时自动技能不动作");
+  eq(Object.values(g.altarLv).reduce((x, y) => x + y, 0), 0, "Lv10 时自动献祭不动作");
+
+  // —— 门槛之上:开始工作且购买静默(不逐次 toast)
+  g.level = 45;
+  g.events.length = 0;
+  for (let i = 0; i < 30; i++) g.tick(0.1);   // 3 秒 = 3 拍
+  ok(g.stats.enhance_total > 0, "自动强化开始工作");
+  ok(Object.values(g.skillLv).some(v => v > 1), "自动升技能开始工作");
+  ok(Object.values(g.altarLv).some(v => v > 0), "自动献祭开始工作");
+  ok(!toastTexts(g).some(t => t.includes("Lv.") || t.includes("祭坛")),
+    "自动化购买静默(汇总日志,不逐次 toast)");
+
+  // —— 装备锁定:三个销毁/出售通道全跳过
+  const keep = new Item("weapon", "common", 10, 5, [{ id: "atk", val: 2 }]);
+  g.bag.push(keep);
+  g.toggleLock(g.bag.indexOf(keep));
+  ok(keep.locked, "toggleLock 上锁");
+  g.sellJunk(5);                                     // 全品质一键出售
+  ok(g.bag.includes(keep), "锁定件不被一键出售");
+  g.dismantleJunk(5);                                // 全品质批量分解
+  ok(g.bag.includes(keep), "锁定件不被批量分解");
+  g.dismantleItem(g.bag.indexOf(keep));
+  ok(g.bag.includes(keep), "锁定件不被单件分解");
+  g.toggleLock(g.bag.indexOf(keep));
+  g.dismantleItem(g.bag.indexOf(keep));
+  ok(!g.bag.includes(keep), "解锁后可正常分解");
+
+  // —— 批量分解:史诗+出重铸石,数额与逐件一致
+  const epic = new Item("weapon", "epic", 40, 12, [{ id: "atk", val: 8 }], 10);
+  g.bag.push(epic);
+  const stones0 = g.stones;
+  g.dismantleJunk(3);                                // ≤史诗
+  eq(g.stones - stones0, 2, "史诗+10 分解出 2 颗重铸石(rid-2=1 + plus≥10=1)");
+
+  // —— 锁定状态序列化:往返保真;未锁定不写字段(省字节)
+  const li = new Item("weapon", "rare", 20, 8, [{ id: "atk", val: 3 }]);
+  li.locked = true;
+  ok(Item.fromDict(li.toDict()).locked, "锁定状态存档往返保真");
+  ok(!("locked" in new Item("weapon", "common", 1, 1, []).toDict()), "未锁定不序列化 locked");
+
+  // —— 分怪图鉴:击杀计数 + 存档往返
+  const g2 = newGame(426247);
+  g2.chooseClass("warrior");
+  let guard = 0;
+  while (g2.stats.kills === 0 && guard++ < 800) g2.tick(0.1);
+  ok(g2.stats.kills > 0, "战斗击杀发生");
+  const ids = Object.keys(g2.monKills);
+  eq(ids.length, 1, "分怪计数记录了首杀怪物 id");
+  eq(g2.monKills[ids[0] ?? ""], 1, "该怪计数 =1");
+  const d2 = JSON.parse(JSON.stringify(g2.toDict()));
+  ok((d2.mon_kills ?? {})[ids[0] ?? ""] === 1, "mon_kills 进存档");
+  eq(Game.fromDict(d2).monKills[ids[0] ?? ""], 1, "mon_kills 往返保真");
+  eq(Game.fromDict({ ...d2, mon_kills: undefined }).monKills[ids[0] ?? ""], undefined,
+    "旧档无 mon_kills 字段容错(空对象)");
+}
+
 // ================================================================ runner
 const TESTS: [string, () => void][] = [
   ["1.RNG(MT19937 与 CPython 对拍)", testRng],
@@ -909,6 +984,7 @@ const TESTS: [string, () => void][] = [
   ["15.转生(门槛/重置/保留/倍率/存档v8)", testRebirth],
   ["16.祭坛批量(×N精确扣费/MAX至不足/×1委托/预估)", testAltarBatch],
   ["17.成就跨档反馈(基线/跨档/去重/重载静默)", testAchFeedback],
+  ["18.自动化开关/装备锁定/批量分解/分怪图鉴", testAutoLockCodex],
 ];
 
 let failed = 0;

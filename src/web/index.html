@@ -35,6 +35,7 @@
   <span class="res res-stone" id="res-stone"></span>
   <span class="res res-time" id="res-time"></span>
   <button class="btn" data-local="save">存档</button>
+  <button class="btn" id="help-btn" title="帮助 / 机制说明">?</button>
   <button class="btn" id="gear-btn" data-tab="settings" title="设置(快捷键 9)">⚙</button>
   <button class="btn warn" id="pause-btn" data-local="pause">暂停</button>
 </header>
@@ -129,6 +130,37 @@
     <div id="intro-body"></div>
     <div class="intro-dots" id="intro-dots"></div>
     <button class="btn big sell-on" id="intro-next" data-cmd="intro_next">下一步</button>
+  </div>
+</div>
+
+<!-- 帮助 / 机制说明(顶栏 ? 打开;点遮罩关闭) -->
+<div class="overlay" id="help-modal">
+  <div class="modal wide">
+    <h2>❔ 机制速查</h2>
+    <div class="help-body">
+      <h4>核心循环</h4>
+      <p>英雄自动战斗不停歇:推进模式击败敌人深入深渊,挂机模式停在指定层刷金币与装备。
+      掉落靠评分自动换装(新装备比当前强 5% 才换),你主要负责花金币变强、看掉落、推边界。</p>
+      <h4>金币就是战力</h4>
+      <p>挂机赚来的金币不会自动变强,要花出去:强化装备(战斗页装备框 → ⚒)、升级已装配技能(技能页)、
+      祭坛献祭(金币换永久加成,保留到转生之后)。卡墙推进变慢时,第一反应永远是"金币花了吗"。</p>
+      <h4>卡墙了怎么办</h4>
+      <p>连续战败会自动转挂机(这是保护,不是惩罚)。强化/技能/祭坛跟上后会自动恢复推进;
+      若等级到 50 且长期受阻,考虑转生(角色页)——带着永久加成重爬更快,还能换职业。</p>
+      <h4>等级压制</h4>
+      <p>怪物强度随区域与层级上涨,属性跟不上时伤害会越来越刮痧——这就是该回头强化/转生的信号,
+      不是 bug。</p>
+      <h4>装备与锁定</h4>
+      <p>背包里点 🔒 可锁定心爱的装备,锁定件不会被一键出售/批量分解。
+      分解比出售金币略高,史诗以上还出重铸石(洗练词缀用);一键按钮共用品质档选择。</p>
+      <h4>重铸石与幸运</h4>
+      <p>重铸石来自分解(史诗+)与头目掉落,在装备详情里洗练词缀;幸运提升高品质掉落率(有上限)。</p>
+      <h4>每日循环</h4>
+      <p>悬赏任务每日有完成上限、可刷新 3 次;深渊塔钥匙每日 3 把(0 点重置);药剂 30 分钟增益,价格翻倍递增。</p>
+      <h4>存档安全</h4>
+      <p>存档在浏览器本地,设置页可导出 JSON 备份;绑定云账号(设置页)后多设备漫游,换机不丢档。</p>
+    </div>
+    <button class="btn big sell-on" id="help-close">明白了</button>
   </div>
 </div>
 
