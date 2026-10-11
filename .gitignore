@@ -31,3 +31,6 @@ abyss-idle-taptap-*.zip
 
 # wrangler 本地开发状态(miniflare 模拟 D1/KV 数据)
 .wrangler/
+
+# ZCode 工具产物(工作流草稿/运行记录/隔离区,勿提交)
+.zcode/

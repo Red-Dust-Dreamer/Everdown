@@ -17,8 +17,9 @@ import type { SaveHooks } from "../core/game.ts";
 import { View } from "../core/view.ts";
 import { handleKey } from "../core/host.ts";
 import { renderFrame } from "../core/render.ts";
-import { BAL, CLASSES, ACHIEVEMENTS, MONSTERS } from "../core/data.ts";
+import { BAL, CLASSES, ACHIEVEMENTS, MONSTERS, ACTIVE_DEF } from "../core/data.ts";
 import { Monster, battleTick } from "../core/combat.ts";
+import { castActive, skillDesc, dotVal } from "../core/skills.ts";
 import { pyRound, Item } from "../core/items.ts";
 import { Relic, rollRelic } from "../core/relics.ts";
 import { fmt, dwidth } from "../core/ansi.ts";
@@ -751,6 +752,67 @@ function testMobSkillDebuff(): void {
   ok((g2.hero.stun_until ?? 0) <= g2.time, "重载存档后眩晕不残留");
 }
 
+// ================================================================ 22. 持续伤害技能(燃烧/流血/灼命)
+function testDotSkills(): void {
+  const g = newGame(1024);
+  g.chooseClass("mage");
+  const h = g.hero;
+
+  // 傀儡怪:血厚不还手(隔离开普攻,只看 dot)
+  const mkMon = (): Monster =>
+    new Monster("傀儡", ["  "], "green", 1e9, 0, 0, 9999, false, false, 1, null, "slime");
+  const isolate = () => {   // 清空主动装配+英雄长眩晕:纯 dot 结算,无普攻/技能干扰
+    g.loadout.active = [];
+    h.stun_until = g.time + 100;
+    g.monster = mkMon();
+  };
+
+  // ---- 施放即挂 dot:字段/数值/时长 ----
+  isolate();
+  const storm = ACTIVE_DEF["m_storm"];
+  castActive(g, storm, g.monster!);
+  const mon = g.monster as Monster;
+  ok(mon.dotUntil > g.time, "烈焰风暴施放后挂上燃烧");
+  eq(mon.dotPct, dotVal(storm, 1), "燃烧每跳% = dot_base(lv1)");
+  ok(mon.dotIcon === "🔥" && mon.dotLabel === "燃烧", "燃烧图标/标签");
+
+  // ---- 跳伤结算:0.5s 一跳,1.55s 内恰 3 跳,数值 = atk×dot%×技能增伤 ----
+  h.hp = h.max_hp;
+  const hp0 = mon.hp;
+  const atk0 = atkNow(g);
+  for (let t = 0; t < 1.55; t += 0.05) { g.time += 0.05; battleTick(g, 0.05); }
+  close(hp0 - mon.hp, atk0 * mon.dotPct / 100 * 3 * (1 + (h.skill_dmg ?? 0) / 100),
+    "1.55s 内 3 跳燃烧总伤 = atk×dot%×3×(1+技能增伤)", 1e-6);   // 大血量减法有 ULP 量化
+
+  // ---- dot 打死怪:击杀走正常结算 ----
+  g.monster = mkMon();
+  (g.monster as Monster).hp = atkNow(g) * 0.2;   // 一跳内必死(每跳约 atk×30%)
+  (g.monster as Monster).dotPct = mon.dotPct;
+  (g.monster as Monster).dotUntil = g.time + 5;
+  (g.monster as Monster).dotNextAt = g.time + 0.5;
+  (g.monster as Monster).dotTick = 0.5;
+  for (let t = 0; t < 1.2 && g.monster; t += 0.05) { g.time += 0.05; battleTick(g, 0.05); }
+  ok(g.monster === null || (g.monster as Monster).hp <= 0 || g.stats.kills > 0,
+    "dot 伤害可击杀(傀儡被烧死)");
+
+  // ---- 流血吸血:每跳回血 ----
+  isolate();
+  const blood = ACTIVE_DEF["w_blood"];
+  castActive(g, blood, g.monster!);   // 借用傀儡直接挂流血(职业字段不影响结算)
+  const mon2 = g.monster as Monster;
+  ok(mon2.dotLifesteal === 30, "嗜血流血带 30% 吸血");
+  h.hp = 1;
+  const hp1 = mon2.hp;
+  for (let t = 0; t < 0.55; t += 0.05) { g.time += 0.05; battleTick(g, 0.05); }
+  ok(h.hp > 1, "流血跳伤按 30% 回血");
+  ok(mon2.hp < hp1, "流血在掉血");
+
+  // ---- 描述占位符:{d} 已替换、无残留 ----
+  const desc = skillDesc(g, storm);
+  ok(!desc.includes("{d}") && !desc.includes("{v}"), "描述占位符全部替换");
+  ok(desc.includes("燃烧"), "烈焰风暴描述含燃烧");
+}
+
 // ================================================================ 15. 转生(门槛/重置/保留/倍率/存档 v8)
 function testRebirth(): void {
   const mem = memHooks();
@@ -1214,6 +1276,7 @@ const TESTS: [string, () => void][] = [
   ["19.签到/周常/世系/称号/兑换码", testSigninWeekly],
   ["20.强化继承/图鉴二期加成/成就新维度", testInheritCodex],
   ["21.方案B 转生深度加权(锚点/封顶/保底/等值迁移)", testRebirthDepth],
+  ["22.持续伤害技能(燃烧跳伤/吸血/击杀/描述)", testDotSkills],
 ];
 
 let failed = 0;

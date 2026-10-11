@@ -14,6 +14,7 @@ import { heroPower, powerWithEquip, powerWithRelic } from "../core/power.ts";
 import type { PowerBreakdown } from "../core/power.ts";
 import { plusBonus, Item, PCT_MAINS } from "../core/items.ts";
 import type { Relic } from "../core/relics.ts";
+import { DpsMeter } from "./dps-meter.ts";
 import pkg from "../../package.json";
 import confetti from "canvas-confetti";
 import { CLOUD_READY } from "./cloud.config.ts";
@@ -140,7 +141,8 @@ interface State {
   power: PowerBreakdown | null;
   monster: { id: string; name: string; art: string[]; hp: number; max_hp: number; tier: number;
              boss: boolean; elite: boolean; atk: number; def: number; color: string;
-             skill?: string } | null;
+             skill?: string;
+             dot: { icon: string; label: string; remain: number } | null } | null;
   buffs: { key: string; name: string; pct: number; remain: number }[];
   equip: Record<string, ItemUI>;
   bag: ItemUI[];
@@ -300,6 +302,10 @@ function buildState(g: Game): State {
     elite: g.monster.elite, atk: g.monster.atk, def: g.monster.def_,
     color: g.monster.color,
     skill: g.monster.skill ? `${g.monster.skill.icon} ${g.monster.skill.name}` : undefined,
+    dot: g.monster.dotUntil > g.time ? {
+      icon: g.monster.dotIcon || "🔥", label: g.monster.dotLabel || "持续",
+      remain: Math.max(0, g.monster.dotUntil - g.time),
+    } : null,
   } : null;
 
   const skills = g.classId ? {
@@ -630,7 +636,8 @@ const VOL_KEY = "abyss_vol";          // 总音量 0-100(SFX+BGM 共用母线)
 const SFX_FILES = ["attack-hit", "skill-heavy", "skill-magic", "skill-arrow",
                    "skill-burst", "skill-buff", "skill-shield", "skill-execute",
                    "skill-fire", "skill-ice", "skill-zap", "skill-roar",
-                   "skill-ult", "skill-drain", "skill-mark", "skill-dash"] as const;
+                   "skill-ult", "skill-drain", "skill-mark", "skill-dash",
+                   "dot-burn", "dot-bleed"] as const;
 type SfxKey = typeof SFX_FILES[number];
 const SFX_STYLE: Record<SfxKey, { gain: number; rateLo: number; rateHi: number; throttleMs: number }> = {
   "attack-hit":    { gain: 0.5,  rateLo: 0.92, rateHi: 1.08, throttleMs: 70 },
@@ -649,6 +656,8 @@ const SFX_STYLE: Record<SfxKey, { gain: number; rateLo: number; rateHi: number; 
   "skill-drain":   { gain: 0.78, rateLo: 0.9,  rateHi: 1.0,  throttleMs: 120 },
   "skill-mark":    { gain: 0.72, rateLo: 0.98, rateHi: 1.05, throttleMs: 120 },
   "skill-dash":    { gain: 0.72, rateLo: 0.95, rateHi: 1.1,  throttleMs: 120 },
+  "dot-burn":      { gain: 0.78, rateLo: 0.95, rateHi: 1.04, throttleMs: 140 },
+  "dot-bleed":     { gain: 0.75, rateLo: 0.92, rateHi: 1.02, throttleMs: 140 },
 };
 let sfxOn = localStorage.getItem(SFX_KEY) !== "0";
 let bgmOn = localStorage.getItem(BGM_KEY) !== "0";
@@ -755,12 +764,12 @@ function playAttackHit(crit = false): void {
 /** 技能施放(cast:<id>):按技能映射表专属音,未配置的回落到 类型/职业 默认分音 */
 const SFX_SKILL: Partial<Record<string, SfxKey>> = {
   // 战士
-  w_blood: "skill-drain",   // 嗜血打击:吸血吞咽感
+  w_blood: "dot-bleed",    // 嗜血打击:撕裂挂流血
   w_fatal: "skill-ult",     // 致命一击(必暴)
   w_roar: "skill-roar",     // 毁灭怒吼(全属性大招)
   // 法师
   m_fire: "skill-fire",     // 火球术
-  m_storm: "skill-fire",    // 烈焰风暴
+  m_storm: "dot-burn",      // 烈焰风暴:点燃挂燃烧
   m_ice: "skill-ice",       // 寒冰箭
   m_nova: "skill-ice",      // 冰霜新星(冻结)
   m_chain: "skill-zap",     // 闪电链
@@ -819,6 +828,16 @@ for (const ev of ["pointerdown", "keydown"] as const)
 const ANSI_RE = /\x1b\[[0-9;]*m/g;
 const LOG_CAP = 100;   // 日志保留条数(近 100 条可回看)
 
+// 伤害统计面板:消费核心 "dmg" 结构化事件(见 Game.dmg);只统计不改状态
+const dpsMeter = new DpsMeter();
+let dmgOpen = false;
+function setDmgPanel(open: boolean): void {
+  dmgOpen = open;
+  $("dmg-panel").classList.toggle("open", open);
+  $("dmg-btn").classList.toggle("on", open);
+  if (open) $("dmg-body").innerHTML = dpsMeter.html();
+}
+
 function drainEvents(): void {
   if (!g.events.length) return;
   const evs = g.events.splice(0, g.events.length);
@@ -833,6 +852,8 @@ function drainEvents(): void {
       spawnFloater(text, color);
     } else if (kind === "toast") {
       toast(text);
+    } else if (kind === "dmg") {
+      dpsMeter.record(text, g.time);
     } else if (kind === "anim") {
       if (text === "mob_flash") flashMon();
       else if (text === "hero_attack") {
@@ -858,6 +879,12 @@ function drainEvents(): void {
         }
       } else if (text.startsWith("loot:")) {
         playLootBeam(text.slice(5));
+      } else if (text.startsWith("dot:")) {
+        // 挂上持续伤害的一瞬:怪物位置一小撮同色粒子上浮(状态徽章/泛光由渲染层常驻)
+        const def = SKILL_DEF.get(text.slice(4));
+        if (def) fxBoom({ colors: FX_COLORS[def.color] ?? FX_COLORS.white,
+          particleCount: 14, origin: stageOrigin(), angle: 90, spread: 46,
+          startVelocity: 24, gravity: 0.25, drift: 0, ticks: 280, scalar: 0.8 });
       }
     }
   }
@@ -1256,12 +1283,12 @@ function updateBadges(st: State): void {
   if (achSeenTiers === null) {
     achSeenTiers = Object.fromEntries(st.achievements.map(a => [a.id, a.tiers]));
   }
-  // 技能页:有空位 且 有已解锁未装配的主动技能(刻意不装/满位不亮,避免永久红点)
-  setBadge('.nav-item[data-tab="skill"]',
-    st.loadout.active.length < st.loadout_slots &&
-    st.skills.active.some(s => s.unlocked && !s.equipped));
-  // 角色页:可转生且推进受阻(转生收益最大的时机)
-  setBadge('.nav-item[data-tab="hero"]', st.can_rebirth && st.stuck);
+  // 技能分栏:有空位 且 有已解锁未装配的主动技能(刻意不装/满位不亮,避免永久红点)
+  const skillReady = st.loadout.active.length < st.loadout_slots &&
+    st.skills.active.some(s => s.unlocked && !s.equipped);
+  setBadge('.subnav-item[data-sub="skill"]', skillReady);
+  // 角色页:可转生且推进受阻(转生收益最大的时机);技能分栏有新装配机会时也亮,钉住入口
+  setBadge('.nav-item[data-tab="hero"]', (st.can_rebirth && st.stuck) || skillReady);
   // 悬赏页:会话内有成就升到新档;正看着悬赏页时刷新基线(红点即消)
   let achNew = false;
   for (const a of st.achievements) if (a.tiers > (achSeenTiers[a.id] ?? 0)) achNew = true;
@@ -1308,6 +1335,7 @@ function renderNow(): void {
   renderSettings(st);
   renderOverlays(st);
   renderGearModal(st);
+  if (dmgOpen) $("dmg-body").innerHTML = dpsMeter.html();
   updateBadges(st);
   coachMaybe(st);
   cloudHintMaybe(st);
@@ -1441,10 +1469,16 @@ function renderBattle(st: State): void {
         ` onerror="this.closest('.mon-art').classList.add('imgfail')">` +
         `<pre class="ascii">${esc(mon.art.join("\n"))}</pre>`
       : `<pre class="ascii">${esc(mon.art.join("\n"))}</pre>`;
+    // 持续伤害徽章(燃烧/流血/灼命):名称行小徽标 + 立绘着状态泛光
+    const dotCls = mon.dot
+      ? { "🔥": "burn", "🩸": "bleed", "◎": "mark" }[mon.dot.icon] ?? "burn" : "";
+    const dotTag = mon.dot
+      ? `<span class="dot-badge ${dotCls}">${mon.dot.icon}${esc(mon.dot.label)} ${mon.dot.remain.toFixed(1)}s</span>`
+      : "";
     inner =
       `<div class="mon-name c-${mon.color}">${esc(mon.name)}${tag}` +
-        `<span class="tier">T${mon.tier}</span>${skTag}</div>` +
-      `<div class="mon-art${mon.id ? " spr" : ""}${size}">${artHtml}</div>` +
+        `<span class="tier">T${mon.tier}</span>${skTag}${dotTag}</div>` +
+      `<div class="mon-art${mon.id ? " spr" : ""}${size}${dotCls ? " dotting-" + dotCls : ""}">${artHtml}</div>` +
       `<div style="width:min(320px,72vw)"><div class="bar hp lg"><div class="fill" style="width:${hpPctM}%"></div>` +
         `<div class="num">${fmt(Math.max(0, mon.hp))} / ${fmt(mon.max_hp)}</div></div></div>`;
   }
@@ -1464,7 +1498,7 @@ function renderBattle(st: State): void {
   $("skillbar-card").innerHTML =
     `<h3><span class="dot"></span>技能 · 自动施放中</h3>` +
     (sk ? `<div id="skillbar">${sk}</div>`
-        : `<span style="color:var(--dim)">技能页装配主动技能</span>`);
+        : `<span style="color:var(--dim)">角色页·技能分栏装配主动技能</span>`);
 
   let q = "";
   for (const quest of st.quests) {
@@ -1918,7 +1952,7 @@ function renderSettings(st: State): void {
       kv("暴击次数", fmt(s.crit_hits ?? 0)) + kv("游玩时长", fmtTime(st.playtime)) +
     `</div>` +
     `<p class="set-hint" style="color:var(--dim);font-size:12px;margin-top:14px">` +
-      `<span class="kbd-hint">快捷键:1-8 切页 · 9 设置 · F 推进/挂机 · P 暂停 · S 存档 · M 音效 · </span>v${pkg.version}</p>`;
+      `<span class="kbd-hint">快捷键:1-5 切页 · 6 设置 · F 推进/挂机 · P 暂停 · S 存档 · M 音效 · </span>v${pkg.version}</p>`;
 }
 
 function renderOverlays(st: State): void {
@@ -2237,7 +2271,7 @@ function ensureTowerDom(): void {
   const towerNav = document.createElement("div");
   towerNav.className = "nav-item";
   towerNav.dataset.tab = "tower";
-  towerNav.innerHTML = `<span class="ic">🗼</span><span class="tx">塔</span><span class="kbd">6</span>`;
+  towerNav.innerHTML = `<span class="ic">🗼</span><span class="tx">塔</span><span class="kbd">4</span>`;
   questNav?.after(towerNav);
   const pageQuest = document.getElementById("page-quest");
   const towerPage = document.createElement("div");
@@ -2249,12 +2283,24 @@ function ensureTowerDom(): void {
 
 function switchTab(name: string): void {
   curTab = name;
+  if (name !== "battle") setDmgPanel(false);   // 伤害抽屉只在战斗页存在,切页收起(手机端 fixed 不随页面隐藏)
   if (name === "settings") cloudHintPending = false;   // 进设置页=云档提醒已看见
   document.querySelectorAll<HTMLElement>(".nav-item").forEach(n =>
     n.classList.toggle("on", n.dataset.tab === name));
   document.querySelectorAll<HTMLElement>(".page").forEach(p =>
     p.classList.toggle("on", p.id === "page-" + name));
   if (name === "leaderboard") void lbEnter();   // 进入排行榜页:拉榜 + 按需提交
+}
+
+// 角色页内部分栏(属性/背包/技能/祭坛):导航瘦身后角色页承担"角色菜单"
+let heroSub: "stats" | "bag" | "skill" | "altar" = "stats";
+function switchHeroSub(sub: string): void {
+  heroSub = sub as typeof heroSub;
+  document.querySelectorAll<HTMLElement>("#hero-subnav .subnav-item").forEach(n =>
+    n.classList.toggle("on", n.dataset.sub === sub));
+  document.querySelectorAll<HTMLElement>("#page-hero .subview").forEach(v =>
+    v.classList.toggle("on", v.id === "sub-" + sub));
+  renderNow();
 }
 
 document.addEventListener("click", (e: MouseEvent) => {
@@ -2268,6 +2314,8 @@ document.addEventListener("click", (e: MouseEvent) => {
     switchTab((nav as HTMLElement).dataset.tab ?? curTab);
     return;
   }
+  const sub = target.closest<HTMLElement>(".subnav-item");
+  if (sub) { switchTab("hero"); switchHeroSub(sub.dataset.sub!); return; }
   const gearEl = target.closest<HTMLElement>("[data-gear]");
   if (gearEl) {
     const [kind, val] = (gearEl.dataset.gear ?? "").split(":");
@@ -2345,9 +2393,9 @@ document.addEventListener("keydown", (e: KeyboardEvent) => {
     if (document.querySelector("#gear-modal")?.classList.contains("show")) {
       gearView = null; renderNow(); return;
     }
+    if (dmgOpen) { setDmgPanel(false); return; }
   }
-  const tabs = ["battle", "hero", "bag", "skill", "quest", "tower",
-                 "leaderboard", "altar", "settings"];
+  const tabs = ["battle", "hero", "quest", "tower", "leaderboard", "settings"];
   const idx = e.key >= "1" && e.key <= "9" ? +e.key - 1 : -1;
   if (idx >= 0) {
     const item = document.querySelector(`.nav-item[data-tab="${tabs[idx]}"]`) as HTMLElement | null;
@@ -2505,24 +2553,8 @@ function lbMyName(): string {
   return localStorage.getItem("abyss_lbname") ?? `深渊行者#${lbUuid().slice(0, 4).toUpperCase()}`;
 }
 
-function ensureAltarDom(): void {
-  if (document.querySelector('.nav-item[data-tab="altar"]')) return;
-  const lbNav = document.querySelector('.nav-item[data-tab="leaderboard"]');
-  const nav = document.createElement("div");
-  nav.className = "nav-item";
-  nav.dataset.tab = "altar";
-  nav.innerHTML = `<span class="ic">🕯</span><span class="tx">祭坛</span><span class="kbd">8</span>`;
-  lbNav?.after(nav);
-  const pageLb = document.getElementById("page-leaderboard");
-  const page = document.createElement("div");
-  page.className = "page";
-  page.id = "page-altar";
-  page.innerHTML = `<div class="card" id="potions-card"></div>
-                    <div class="card grow" id="altar-list"></div>`;
-  pageLb?.after(page);
-}
-
 // ================================================================ 深渊祭坛(金币→永久属性)+ 药剂
+// (祭坛容器 #potions-card/#altar-list 静态放在角色页「祭坛」分栏 #sub-altar 里,不再单独占导航位)
 /** 祭坛批量档(会话级 UI 状态,默认 ×10 与旧双按钮习惯一致):1/10/100/Infinity(MAX) */
 let altarBatch: number = 10;
 
@@ -2582,7 +2614,7 @@ function ensureLeaderboardDom(): void {
   const nav = document.createElement("div");
   nav.className = "nav-item";
   nav.dataset.tab = "leaderboard";
-  nav.innerHTML = `<span class="ic">🏆</span><span class="tx">排行</span><span class="kbd">7</span>`;
+  nav.innerHTML = `<span class="ic">🏆</span><span class="tx">排行</span><span class="kbd">5</span>`;
   towerNav?.after(nav);
   const pageTower = document.getElementById("page-tower");
   const page = document.createElement("div");
@@ -2907,9 +2939,9 @@ function boot(): void {
   }
   g.towerRefreshKeys();   // 每日钥匙刷新(登录时一次)
 
-  ensureTowerDom();   // 注入第 8 个「塔」tab 与页面容器
-  ensureLeaderboardDom();   // 注入第 9 个「排行」tab 与页面容器
-  ensureAltarDom();          // 注入第 10 个「祭坛」tab 与页面容器
+  ensureTowerDom();   // 注入第 4 个「塔」tab 与页面容器
+  ensureLeaderboardDom();   // 注入第 5 个「排行」tab 与页面容器
+  // (祭坛不再占导航:容器静态放在角色页「祭坛」分栏)
   $("loading").classList.add("hide");
   renderNow();
 
@@ -2928,6 +2960,13 @@ function boot(): void {
   $("gear-modal").addEventListener("click", (e: Event) => {
     const t = e.target as HTMLElement;
     if (t.id === "gear-close" || t.id === "gear-modal") { gearView = null; renderNow(); }
+  });
+  // 伤害统计面板:📊 唤出/收起(抽屉不锁页面,战斗照常);重置只清统计不影响战斗
+  $("dmg-btn").addEventListener("click", () => setDmgPanel(!dmgOpen));
+  $("dmg-close").addEventListener("click", () => setDmgPanel(false));
+  $("dmg-reset").addEventListener("click", () => {
+    dpsMeter.reset();
+    $("dmg-body").innerHTML = dpsMeter.html();
   });
   // 启动:仅当本机存有 Supabase 会话令牌(sb- 前缀,登录过)才加载 SDK 恢复会话;
   // 游客(绝大多数)首屏不为 ~200KB 的 SDK 买单。点登录时由 ensureCloud 按需加载。

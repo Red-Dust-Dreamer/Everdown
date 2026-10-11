@@ -28,6 +28,13 @@ export class Monster implements S.MonLike {
   atkDownUntil = 0;
   defDownPct = 0;
   defDownUntil = 0;
+  dotPct = 0;        // 持续伤害(燃烧/流血/灼命):每跳% 攻击力
+  dotUntil = 0;
+  dotNextAt = 0;
+  dotTick = 0.5;
+  dotLifesteal = 0;
+  dotIcon = "";
+  dotLabel = "";
   skill: MobSkill | null;
   skillTimer: number;
   id: string;   // 怪物图鉴 id(供 Web 宿主映射立绘;不参与任何计算)
@@ -139,6 +146,12 @@ export function battleTick(g: Game, dt: number): void {
     }
   }
 
+  // 持续伤害(燃烧/流血/灼命):独立节拍,不吃出手顺序与控制,冻结中也照烧
+  while (mon.dotUntil > g.time && mon.dotNextAt <= g.time) {
+    mon.dotNextAt += mon.dotTick;
+    if (S.dotTickDamage(g, mon)) break;
+  }
+
   if (mon.hp <= 0) {
     onMonsterKilled(g, mon);
     return;
@@ -182,8 +195,10 @@ function castMonsterSkill(g: Game, mon: Monster): void {
     const absorb = Math.min(shield, total);
     h.shield = shield - absorb;
     total -= absorb;
+    if (absorb > 0) g.dmg("absorb", absorb);
   }
   h.hp -= total;
+  g.dmg("mskill", total);
   g.addFloater(`${sk.icon} -${fmt(total)}`, "bright_red");
   g.log(`敌方 ${mon.name} 施放了【${sk.name}】!`, "bright_red");
   if (sk.lifesteal && total > 0) {
@@ -246,6 +261,7 @@ function heroAttack(g: Game, mon: Monster): void {
   }
   dmg *= S.dmgMultipliers(g, mon);
   mon.hp -= dmg;
+  g.dmg("atk", dmg, crit);
   g.emit("anim", "hero_attack");
   g.emit("anim", "mob_flash");
   if (crit) {
@@ -256,13 +272,16 @@ function heroAttack(g: Game, mon: Monster): void {
     if (ce > 0 && g.rng.random() * 100 < ce) {
       const extra = _dmg(atk, mon.def_ * (1 - pierce));
       mon.hp -= extra;
+      g.dmg("crit_extra", extra);
       g.addFloater("⚡追击 -" + fmt(extra), "bright_cyan");
     }
   } else {
     g.addFloater("-" + fmt(dmg), "white");
   }
   if (h.lifesteal > 0 && h.hp < h.max_hp) {
-    h.hp = Math.min(h.max_hp, h.hp + dmg * h.lifesteal / 100);
+    const heal = Math.min(h.max_hp - h.hp, dmg * h.lifesteal / 100);
+    h.hp += heal;
+    if (heal > 0) g.dmg("heal", heal);
   }
 }
 
@@ -300,10 +319,12 @@ function monsterAttack(g: Game, mon: Monster): void {
     const absorb = Math.min(shield, raw);
     h.shield = shield - absorb;
     raw -= absorb;
+    if (absorb > 0) g.dmg("absorb", absorb);
     if (absorb >= 1) g.addFloater("🛡-" + fmt(absorb), "bright_cyan");
   }
   if (raw <= 0) return;
   h.hp -= raw;
+  g.dmg("mob", raw);
   g.addFloater("-" + fmt(raw), "red");
   g.emit("anim", "mob_attack");
   // 不屈:致命伤概率保留1血(内置CD)

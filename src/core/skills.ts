@@ -51,6 +51,9 @@ export function skillDesc(g: Game, def: ActiveSkill | PassiveSkill): string {
   const lv = effLv(g, def.id);
   const show = skillVal(def, lv);
   let txt = def.desc.replace("{v}", fmtVal(show));
+  if ("dot_base" in def && def.dot_base) {
+    txt = txt.replace("{d}", fmtVal(dotVal(def as ActiveSkill, lv)));
+  }
   if (equipSkillLv(g) > 0) {
     txt += c(`(含装备+${equipSkillLv(g)})`, "bright_black");
   }
@@ -151,7 +154,7 @@ export function atkNow(g: Game): number {
 export function castActive(g: Game, sdef: ActiveSkill, mon: MonLike & {
   def_: number; atkDownPct: number; atkDownUntil: number;
   defDownPct: number; defDownUntil: number; stunUntil: number;
-}): void {
+} & DotMon): void {
   g.emit("anim", "cast:" + sdef.id);
   const lv = effLv(g, sdef.id);
   const kind = sdef.kind;
@@ -162,7 +165,9 @@ export function castActive(g: Game, sdef: ActiveSkill, mon: MonLike & {
     }
     if (sdef.lifesteal && total > 0) {
       const heal = total * sdef.lifesteal / 100;
+      const applied = Math.max(0, Math.min(g.hero.max_hp - g.hero.hp, heal));
       g.hero.hp = Math.min(g.hero.max_hp, g.hero.hp + heal);
+      if (applied > 0) g.dmg("heal", applied);
       if (heal >= 1) g.addFloater("✚" + fmt(heal), "bright_green");
     }
     applyDebuffs(g, mon, sdef);
@@ -174,12 +179,15 @@ export function castActive(g: Game, sdef: ActiveSkill, mon: MonLike & {
       mon.markedPct = sdef.mark;
       mon.markedUntil = g.time + (sdef.mark_dur ?? 0);
     }
+    if (sdef.dot_base) applyDot(g, mon, sdef, lv);
   } else if (kind === "buff") {
     addBuff(g, sdef.stat!, skillVal(sdef, lv), sdef.dur!);
     g.log(`${sdef.icon} ${sdef.name}!`, sdef.color);
   } else if (kind === "heal") {
     const heal = g.hero.max_hp * skillVal(sdef, lv) / 100;
+    const applied = Math.max(0, Math.min(g.hero.max_hp - g.hero.hp, heal));
     g.hero.hp = Math.min(g.hero.max_hp, g.hero.hp + heal);
+    if (applied > 0) g.dmg("heal", applied);
     g.addFloater("✚" + fmt(heal), "bright_green");
   } else if (kind === "shield") {
     g.hero.shield = (g.hero.shield ?? 0) + g.hero.max_hp * skillVal(sdef, lv) / 100;
@@ -210,6 +218,7 @@ function skillHit(g: Game, mon: any, sdef: ActiveSkill, pct: number): number {
     onCrit(g);
   }
   mon.hp -= raw;
+  g.dmg(sdef.id, raw, crit);
   g.emit("anim", "skill_hit");   // 与普攻 hero_attack 区分:宿主可分别配特效/音效
   g.emit("anim", "mob_flash");
   if (crit) {
@@ -218,7 +227,9 @@ function skillHit(g: Game, mon: any, sdef: ActiveSkill, pct: number): number {
     g.addFloater(`${sdef.icon} -${fmt(raw)}`, "white");
   }
   if (g.hero.lifesteal > 0 && g.hero.hp < g.hero.max_hp) {
-    g.hero.hp = Math.min(g.hero.max_hp, g.hero.hp + raw * g.hero.lifesteal / 100);
+    const heal = Math.min(g.hero.max_hp - g.hero.hp, raw * g.hero.lifesteal / 100);
+    g.hero.hp += heal;
+    if (heal > 0) g.dmg("heal", heal);
   }
   return raw;
 }
@@ -229,6 +240,66 @@ export function onCrit(g: Game): void {
   if (hookDef(g, "on_crit_dmg_next")) {
     g.hero.next_hit_bonus = hookVal(g, "on_crit_dmg_next");
   }
+}
+
+// ---------------------------------------------------------------- 持续伤害(dot)
+/** dot 每跳% = dot_base + dot_per*(lv-1) */
+export function dotVal(sdef: ActiveSkill, lv: number): number {
+  return (sdef.dot_base ?? 0) + (sdef.dot_per ?? 0) * (lv - 1);
+}
+
+/** 挂 dot(后施放覆盖先施放;单职业单 dot 来源,天然无叠加问题) */
+function applyDot(g: Game, mon: DotMon, sdef: ActiveSkill, lv: number): void {
+  mon.dotPct = dotVal(sdef, lv);
+  mon.dotUntil = g.time + (sdef.dot_dur ?? 0);
+  mon.dotTick = sdef.dot_tick ?? 0.5;
+  mon.dotNextAt = g.time + mon.dotTick;
+  mon.dotLifesteal = sdef.dot_lifesteal ?? 0;
+  mon.dotIcon = sdef.dot_icon ?? "🔥";
+  mon.dotLabel = sdef.dot_label ?? "持续";
+  g.emit("anim", "dot:" + sdef.id);
+}
+
+export interface DotMon extends MonLike {
+  hp: number;
+  dotPct: number; dotUntil: number; dotNextAt: number; dotTick: number;
+  dotLifesteal: number; dotIcon: string; dotLabel: string;
+}
+
+/** dot 专属乘区:增益/头目/印记/残血目标均吃;不吃暴击与 next_hit(不吃防御) */
+function dotMultipliers(g: Game, mon: MonLike): number {
+  let mult = 1.0;
+  mult *= 1 + buffPct(g, "dmg_pct") / 100;
+  if (g.hero.hp < g.hero.max_hp * 0.5) {
+    mult *= 1 + hookVal(g, "low_hp_dmg") / 100;
+  }
+  if (mon.boss || mon.elite) {
+    mult *= 1 + hookVal(g, "boss_dmg") / 100;
+    if (mon.markedPct && mon.markedUntil > g.time) {
+      mult *= 1 + mon.markedPct / 100;
+    }
+    mult *= 1 + (g.hero.boss_dmg_r ?? 0) / 100;
+  }
+  if (hookDef(g, "low_target_dmg") && mon.hpPct() < 0.4) {
+    mult *= 1 + hookVal(g, "low_target_dmg") / 100;
+  }
+  return mult;
+}
+
+/** 结算一跳 dot;返回目标是否被打死(击杀结算由调用方走 onMonsterKilled) */
+export function dotTickDamage(g: Game, mon: DotMon): boolean {
+  let raw = atkNow(g) * mon.dotPct / 100;
+  raw *= 1 + (g.hero.skill_dmg ?? 0) / 100;
+  raw *= dotMultipliers(g, mon);
+  mon.hp -= raw;
+  g.dmg("dot", raw);
+  g.addFloater(`${mon.dotIcon} -${fmt(raw)}`, "bright_red");
+  if (mon.dotLifesteal > 0 && g.hero.hp < g.hero.max_hp) {
+    const heal = Math.min(g.hero.max_hp - g.hero.hp, raw * mon.dotLifesteal / 100);
+    g.hero.hp += heal;
+    if (heal > 0) g.dmg("heal", heal);
+  }
+  return mon.hp <= 0;
 }
 
 function applyDebuffs(g: Game, mon: any, sdef: ActiveSkill): void {

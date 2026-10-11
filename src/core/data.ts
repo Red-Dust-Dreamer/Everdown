@@ -128,6 +128,11 @@ export interface ActiveSkill {
   atk_down?: number; atk_down_dur?: number; freeze?: number; must_crit?: boolean;
   vs_elite?: number; mark?: number; mark_dur?: number;
   stat?: StatKey; dur?: number; threshold?: number;
+  // 持续伤害(燃烧/流血/灼命):瞬间小伤害 + 挂 dot;
+  // 每跳% = dot_base + dot_per*(lv-1),持续 dot_dur 秒、每 dot_tick 秒一跳;
+  // dot_lifesteal=每跳伤害按%回血(嗜血);dot_icon/dot_label=表现层徽章与飘字
+  dot_base?: number; dot_per?: number; dot_dur?: number; dot_tick?: number;
+  dot_lifesteal?: number; dot_icon?: string; dot_label?: string;
 }
 export const ACTIVE_SKILLS: ActiveSkill[] = [
   // ---- 战士 ----
@@ -136,7 +141,7 @@ export const ACTIVE_SKILLS: ActiveSkill[] = [
   { id: "w_warcry", cls: "warrior", name: "战吼", icon: "🔥", unlock: 8, cd: 24, color: "bright_red", kind: "buff", stat: "atk", base: 45, per: 8, dur: 8, desc: "8秒内攻击力 +{v}%" },
   { id: "w_taunt", cls: "warrior", name: "嘲讽打击", icon: "💢", unlock: 12, cd: 15, color: "bright_yellow", kind: "damage", base: 150, per: 35, atk_down: 15, atk_down_dur: 6, desc: "{v}% 伤害并降低敌人攻击 15%,持续6秒" },
   { id: "w_exec", cls: "warrior", name: "处决", icon: "☠", unlock: 16, cd: 30, color: "bright_magenta", kind: "execute", base: 500, per: 0, threshold: 20, desc: "生命低于20%的敌人直接斩杀(否则 {v}% 伤害)" },
-  { id: "w_blood", cls: "warrior", name: "嗜血打击", icon: "🩸", unlock: 20, cd: 12, color: "bright_red", kind: "damage", base: 250, per: 55, lifesteal: 30, desc: "{v}% 伤害,并将伤害的 30% 转为自身生命" },
+  { id: "w_blood", cls: "warrior", name: "嗜血打击", icon: "🩸", unlock: 20, cd: 12, color: "bright_red", kind: "damage", base: 80, per: 18, lifesteal: 30, dot_base: 22, dot_per: 4, dot_dur: 5, dot_tick: 0.5, dot_lifesteal: 30, dot_icon: "🩸", dot_label: "流血", desc: "{v}% 伤害并撕裂:流血 5 秒,每 0.5 秒 {d}%,全部伤害的 30% 转为自身生命" },
   { id: "w_wall", cls: "warrior", name: "护盾壁垒", icon: "🛡", unlock: 26, cd: 20, color: "bright_cyan", kind: "shield", base: 25, per: 2, desc: "获得 {v}% 最大生命的护盾" },
   { id: "w_fury", cls: "warrior", name: "狂暴", icon: "⚡", unlock: 32, cd: 30, color: "bright_red", kind: "buff", stat: "haste", base: 40, per: 4, dur: 10, desc: "10秒内攻速 +{v}%" },
   { id: "w_fatal", cls: "warrior", name: "致命一击", icon: "💥", unlock: 40, cd: 20, color: "bright_yellow", kind: "damage", base: 380, per: 72, must_crit: true, desc: "{v}% 伤害,必定暴击" },
@@ -147,7 +152,7 @@ export const ACTIVE_SKILLS: ActiveSkill[] = [
   { id: "m_ice", cls: "mage", name: "寒冰箭", icon: "❄", unlock: 8, cd: 12, color: "bright_cyan", kind: "damage", base: 180, per: 45, atk_down: 25, atk_down_dur: 5, desc: "{v}% 伤害并降低敌人攻击 18%,持续5秒" },
   { id: "m_surge", cls: "mage", name: "奥术涌动", icon: "✦", unlock: 12, cd: 25, color: "bright_blue", kind: "buff", stat: "dmg_pct", base: 50, per: 5, dur: 8, desc: "8秒内造成的所有伤害 +{v}%" },
   { id: "m_chain", cls: "mage", name: "闪电链", icon: "⚡", unlock: 16, cd: 12, color: "bright_yellow", kind: "damage", base: 240, per: 60, vs_elite: 1.5, desc: "{v}% 伤害,对精英与头目 ×1.5" },
-  { id: "m_storm", cls: "mage", name: "烈焰风暴", icon: "🌀", unlock: 20, cd: 15, color: "bright_red", kind: "damage", base: 330, per: 76, desc: "烈焰席卷,造成 {v}% 攻击力伤害" },
+  { id: "m_storm", cls: "mage", name: "烈焰风暴", icon: "🌀", unlock: 20, cd: 15, color: "bright_red", kind: "damage", base: 90, per: 22, dot_base: 24, dot_per: 5, dot_dur: 6, dot_tick: 0.5, dot_icon: "🔥", dot_label: "燃烧", desc: "烈焰席卷:{v}% 伤害并点燃,燃烧 6 秒,每 0.5 秒 {d}%" },
   { id: "m_nova", cls: "mage", name: "冰霜新星", icon: "❄", unlock: 26, cd: 35, color: "bright_cyan", kind: "damage", base: 150, per: 35, freeze: 3, desc: "{v}% 伤害并冻结敌人 3 秒" },
   { id: "m_shield", cls: "mage", name: "法力护盾", icon: "🛡", unlock: 32, cd: 22, color: "bright_blue", kind: "shield", base: 30, per: 2.5, desc: "获得 {v}% 最大生命的护盾" },
   { id: "m_meteor", cls: "mage", name: "陨石术", icon: "☄", unlock: 40, cd: 26, color: "bright_red", kind: "damage", base: 510, per: 100, desc: "召唤陨石,造成 {v}% 攻击力伤害" },
@@ -155,7 +160,7 @@ export const ACTIVE_SKILLS: ActiveSkill[] = [
   // ---- 射手 ----
   { id: "r_volley", cls: "ranger", name: "疾风连射", icon: "➤", unlock: 1, cd: 8, color: "bright_green", kind: "multi", base: 90, per: 20, hits: 3, desc: "连射3箭,每箭 {v}% 攻击力伤害" },
   { id: "r_pierce", cls: "ranger", name: "穿透箭", icon: "➤", unlock: 5, cd: 12, color: "bright_green", kind: "damage", base: 280, per: 65, def_down: 20, def_down_dur: 5, desc: "{v}% 伤害并降低敌人防御 20%,持续5秒" },
-  { id: "r_mark", cls: "ranger", name: "猎杀印记", icon: "◎", unlock: 8, cd: 18, color: "bright_yellow", kind: "damage", base: 80, per: 20, mark: 25, mark_dur: 10, desc: "标记目标:10秒内对其伤害 +25%(附带 {v}% 伤害)" },
+  { id: "r_mark", cls: "ranger", name: "猎杀印记", icon: "◎", unlock: 8, cd: 18, color: "bright_yellow", kind: "damage", base: 50, per: 12, mark: 25, mark_dur: 10, dot_base: 14, dot_per: 3, dot_dur: 8, dot_tick: 0.5, dot_icon: "◎", dot_label: "灼命", desc: "灼命印记:灼烧 8 秒,每 0.5 秒 {d}%,期间对其伤害 +25%,附带 {v}% 伤害" },
   { id: "r_back", cls: "ranger", name: "后跳射击", icon: "↩", unlock: 12, cd: 10, color: "bright_green", kind: "damage", base: 200, per: 45, lifesteal: 50, desc: "{v}% 伤害,并将伤害的 50% 转为自身生命" },
   { id: "r_rain", cls: "ranger", name: "箭雨", icon: "☔", unlock: 16, cd: 14, color: "bright_green", kind: "multi", base: 105, per: 22, hits: 5, desc: "箭雨覆盖:5连击,每箭 {v}% 攻击力伤害" },
   { id: "r_hawk", cls: "ranger", name: "鹰眼", icon: "👁", unlock: 24, cd: 25, color: "bright_yellow", kind: "buff", stat: "crit", base: 15, per: 1.5, dur: 10, desc: "10秒内暴击率 +{v} 点" },

@@ -88,6 +88,11 @@ export function heroDps(g: Game, mobDef: number, mobHp: number, bossOrElite: boo
     const v = d.base + (d.per ?? 0) * (effLvOf(g, sid) - 1);
     if (kind === "damage" || kind === "multi") {
       let dmgPct = v * (d.hits ?? 1);
+      if (d.dot_base) {
+        // dot 全额折算进离线 DPS(实际在线有溢出/延迟,离线口径从宽,量级一致)
+        const ticks = (d.dot_dur ?? 0) / (d.dot_tick ?? 0.5);
+        dmgPct += (d.dot_base + (d.dot_per ?? 0) * (effLvOf(g, sid) - 1)) * ticks;
+      }
       if (d.must_crit) dmgPct *= 1 + h.crit_dmg / 100;
       else if (d.vs_elite && bossOrElite) dmgPct *= d.vs_elite;
       skillDps += h.atk * dmgPct / 100 / cd * skillMult;

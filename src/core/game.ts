@@ -181,6 +181,11 @@ export class Game {
   log(text: string, color = "white"): void { this.emit("log", text, color); }
   toast(text: string): void { this.emit("toast", text); }
   addFloater(text: string, color: string): void { this.emit("floater", text, color); }
+  /** 伤害统计事件(纯表现层,宿主 DPS 面板用;不参与任何结算/RNG/存档):
+   *  text = "src[!] value" — src 尾缀 ! 标记本次暴击;来源表见 web/dps-meter.ts */
+  dmg(src: string, val: number, crit = false): void {
+    this.emit("dmg", (crit ? src + "!" : src) + " " + Math.round(val * 100) / 100);
+  }
 
   // ================================================================ 修饰器挂口
   addStatMod(src: string, stat: string, op: "add" | "pct", v: number): void {
@@ -211,7 +216,7 @@ export class Game {
     this.hero.hp = this.hero.max_hp;
     const cls = CLASSES[cid];
     this.log(`你成为了 ${cls.name} —— ${cls.desc}`, cls.color);
-    this.log("按 H 查看按键说明;技能页(5)可更换装配与升级技能。", "bright_black");
+    this.log("按 H 查看按键说明;角色页(2)·技能分栏可更换装配与升级技能。", "bright_black");
     this.spawn();
   }
 
@@ -416,12 +421,12 @@ export class Game {
         const pool = which === "active" ? ACTIVE_SKILLS : PASSIVE_SKILLS;
         for (const s of pool) {
           if (s.cls === this.classId && s.unlock === this.level) {
-            this.log(`★ 技能可解锁:${s.name}(技能页装配)`, "bright_cyan");
+            this.log(`★ 技能可解锁:${s.name}(角色页·技能分栏装配)`, "bright_cyan");
           }
         }
       }
       if ((BAL.loadout_unlock as readonly number[]).includes(this.level)) {
-        this.log("★ 装配槽 +1(技能页可装配更多技能)", "bright_cyan");
+        this.log("★ 装配槽 +1(角色页·技能分栏可装配更多技能)", "bright_cyan");
       }
       if (this.level > 1 && (BAL.speed_unlock as readonly number[]).includes(this.level)) {
         const tier = (BAL.speed_unlock as readonly number[]).indexOf(this.level) + 1;

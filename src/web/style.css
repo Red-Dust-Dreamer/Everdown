@@ -127,6 +127,19 @@ body{
 .page{display:none;flex:1;min-width:0;min-height:0;flex-direction:column;gap:12px}
 .page.on{display:flex}
 
+/* 角色页内部分栏(属性/背包/技能/祭坛):导航瘦身后角色页承担"角色菜单" */
+#hero-subnav{display:flex;gap:8px;flex:none}
+.subnav-item{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;
+  padding:9px 8px;border-radius:8px;background:var(--panel);border:1px solid var(--line);
+  color:var(--dim);cursor:pointer;user-select:none;-webkit-user-select:none;
+  touch-action:manipulation;position:relative;font-size:13px}
+.subnav-item .ic{font-size:15px}
+.subnav-item:hover{background:#16162466;color:var(--txt)}
+.subnav-item.on{background:linear-gradient(180deg,#2a1622,#1b1b2a);color:#fff;
+  border-color:#4a2333;box-shadow:inset 0 -2px 0 var(--red)}
+.subview{display:none;flex:1;min-width:0;min-height:0;flex-direction:column;gap:12px}
+.subview.on{display:flex}
+
 /* ---------------- 卡片 ---------------- */
 .card{background:linear-gradient(180deg,var(--panel2),var(--panel));
   border:1px solid var(--line);border-radius:12px;padding:13px 15px;min-width:0;flex:none}
@@ -186,6 +199,26 @@ body{
 .mon-art.spr .ascii{display:none;margin:0;white-space:pre}
 .mon-art.spr.imgfail img{display:none}
 .mon-art.spr.imgfail .ascii{display:block}
+
+/* 持续伤害(dot)状态:名称行徽章 + 立绘着状态泛光(燃烧火橙/流血暗红/灼命金) */
+.dot-badge{font-size:11px;font-weight:700;padding:2px 8px;border-radius:4px;
+  animation:dotBadgePulse 1s ease-in-out infinite}
+.dot-badge.burn{background:#3a2415;color:#ffb35c;border:1px solid #5c3a1e}
+.dot-badge.bleed{background:#3a1518;color:#ff7a85;border:1px solid #5c1e26}
+.dot-badge.mark{background:#3a3315;color:#ffe066;border:1px solid #5c4a1e}
+@keyframes dotBadgePulse{0%,100%{opacity:.75}50%{opacity:1}}
+.mon-art.dotting-burn img,.mon-art.dotting-burn .ascii{
+  animation:dotBurn .55s ease-in-out infinite alternate}
+.mon-art.dotting-bleed img,.mon-art.dotting-bleed .ascii{
+  animation:dotBleed .9s ease-in-out infinite}
+.mon-art.dotting-mark img,.mon-art.dotting-mark .ascii{
+  animation:dotMark 1.1s ease-in-out infinite}
+@keyframes dotBurn{from{filter:drop-shadow(0 0 6px rgba(255,120,30,.55))}
+  to{filter:drop-shadow(0 0 16px rgba(255,80,10,.95)) brightness(1.12)}}
+@keyframes dotBleed{0%,100%{filter:drop-shadow(0 0 5px rgba(200,20,40,.4))}
+  50%{filter:drop-shadow(0 2px 12px rgba(255,30,60,.85)) brightness(.92) saturate(1.3)}}
+@keyframes dotMark{0%,100%{filter:drop-shadow(0 0 6px rgba(255,220,90,.4))}
+  50%{filter:drop-shadow(0 0 15px rgba(255,220,90,.9)) brightness(1.08)}}
 /* 英雄模型:舞台左侧与怪物对峙;普攻/技能前冲到怪物跟前打击后归位
    (立绘 hero/<class>.png 缺省时回退职业徽记字符) */
 #hero-art{position:absolute;left:13%;top:50%;transform:translateY(-50%);z-index:1;
@@ -440,6 +473,53 @@ body{
 .q-row .t .rew{color:var(--gold);white-space:nowrap}
 .q-row .t .rew .st{color:#e06bff}
 
+/* ---------------- 伤害统计面板(舞台角落弹窗) ---------------- */
+/* 📊 角标在舞台左上角;面板就地在其下方弹出(用户标红圈处)—— 紧凑半透明小窗,
+   只占舞台左上空白角,不遮怪物/血条/日志栏,战斗页其余部分照常可点 */
+#dmg-btn{position:absolute;top:10px;left:10px;z-index:5;width:34px;height:34px;
+  border-radius:8px;background:#141422cc;border:1px solid var(--line2);color:var(--dim);
+  font-size:15px;line-height:1;cursor:pointer;opacity:.62;transition:opacity .15s;
+  display:flex;align-items:center;justify-content:center;touch-action:manipulation;
+  user-select:none;-webkit-user-select:none}
+#dmg-btn:hover{opacity:1}
+#dmg-btn:active{transform:scale(.94)}
+#dmg-btn.on{opacity:1;color:var(--gold);border-color:#5c4a1e}
+#dmg-panel{position:absolute;top:48px;left:10px;z-index:30;
+  width:min(252px,68vw);max-height:min(320px,62%);display:flex;flex-direction:column;
+  overflow:hidden;background:linear-gradient(180deg,#151522f0,#10101af2);
+  border:1px solid var(--line2);border-radius:10px;
+  box-shadow:0 10px 30px rgba(0,0,0,.5);
+  opacity:0;transform:translateY(-6px);
+  transition:opacity .18s ease,transform .18s ease;
+  pointer-events:none}
+#dmg-panel.open{opacity:1;transform:none;pointer-events:auto}
+.dmg-head{display:flex;align-items:center;gap:6px;padding:7px 8px 6px 10px;
+  border-bottom:1px solid var(--line);flex:none}
+.dmg-head .tt{font-size:12px;color:var(--dim);font-weight:600;letter-spacing:1px;
+  margin-right:auto;display:flex;align-items:center;gap:6px;white-space:nowrap}
+.dmg-head .dot{width:6px;height:6px;border-radius:50%;background:var(--red);
+  box-shadow:0 0 8px var(--red);flex:none}
+#dmg-body{flex:1;min-height:0;overflow-y:auto;padding:8px 10px 10px;font-size:12px}
+.dmg-sec{font-size:10.5px;color:var(--dim);letter-spacing:2px;margin:9px 0 5px}
+.dps-hero{display:flex;align-items:baseline;justify-content:space-between;
+  background:#15152299;border:1px solid #20202f;border-radius:8px;padding:6px 9px}
+.dps-hero .k{color:var(--dim);font-size:11px}
+.dps-hero b{font-size:16px;color:var(--gold);font-variant-numeric:tabular-nums}
+.dmg-sub{display:flex;gap:8px;flex-wrap:wrap;color:var(--dim);font-size:11px;margin-top:5px}
+.dmg-sub b{color:var(--txt);font-variant-numeric:tabular-nums}
+.drow{display:grid;grid-template-columns:minmax(56px,auto) 1fr auto 30px;gap:6px;
+  align-items:center;padding:3px 0;font-variant-numeric:tabular-nums}
+.drow .nm{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11.5px}
+.drow .dbar{height:4px;border-radius:2px;background:#1a1a2a;overflow:hidden}
+.drow .dbar i{display:block;height:100%;border-radius:2px;
+  background:linear-gradient(90deg,#8a3a2a,var(--red))}
+.drow .ps{color:var(--txt);font-size:11px;white-space:nowrap}
+.drow .sh{color:var(--dim);font-size:10.5px;text-align:right;white-space:nowrap}
+#dmg-body .stat-grid{grid-template-columns:1fr 1fr;gap:4px 6px}
+#dmg-body .kv{font-size:11px;padding:3px 7px;border-radius:5px}
+.dmg-note{color:var(--dim);font-size:11px;margin-top:5px}
+.dmg-empty{color:var(--dim);text-align:center;padding:18px 8px;font-size:12px}
+
 /* ---------------- 通用文本色 ---------------- */
 .c-black{color:#000}.c-bright_black{color:#7a7a8c}.c-white{color:#e8e8ee}
 .c-bright_white{color:#fff}.c-red{color:#e05555}.c-bright_red{color:#ff6b6b}
@@ -677,6 +757,11 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
   #log-card{order:3}
   #log-body{max-height:170px;overflow-y:auto}
 
+  /* 伤害统计:沿用舞台左上角弹窗(桌面手机同款);角标放大便于点按;
+     高度再收紧,手机端不擦到怪物血条 */
+  #dmg-btn{width:38px;height:38px;font-size:17px}
+  #dmg-panel{top:52px;max-height:min(280px,54%)}
+
   /* 网格全部单列/双列化 */
   .bag-grid{grid-template-columns:repeat(auto-fill,minmax(158px,1fr));gap:7px}
   .skill-pools{grid-template-columns:1fr;gap:10px}
@@ -767,7 +852,7 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
 
 /* 存在感层红点:解锁未装配的技能/转生受阻/更高倍速/成就新档/云档提醒。
    钉在入口元素上(::after),由 main.ts updateBadges 切换 has-badge */
-.nav-item,#gear-btn,#speed-btn,#help-btn{position:relative}
+.nav-item,#gear-btn,#speed-btn,#help-btn,.subnav-item{position:relative}
 .has-badge::after{content:"";position:absolute;top:5px;right:7px;width:8px;height:8px;
   border-radius:50%;background:#ff5a5a;box-shadow:0 0 6px rgba(255,90,90,.85);
   pointer-events:none;z-index:3}

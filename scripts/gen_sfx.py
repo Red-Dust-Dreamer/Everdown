@@ -13,7 +13,7 @@ import os
 
 SR = 22050
 NORM = 0.85
-OUT = os.path.join(os.path.dirname(__file__), "..", "..", "src", "web", "public", "sfx")
+OUT = os.path.join(os.path.dirname(__file__), "..", "src", "web", "public", "sfx")
 
 random.seed(20261004)   # 固定种子:产物可复现
 
@@ -230,6 +230,42 @@ def gen_dash():
     return mix([1.2 * mul(whoosh2, swell)[i] for i in range(n)], [0.35 * v for v in tone])
 
 
+def gen_dot_burn():
+    """点燃(dot 应用):火苗窜起嘶声 + 随机爆裂噼啪(烈焰风暴挂燃烧)"""
+    n = int(SR * 0.5)
+    base = lowpass(noise(n), 0.3)
+    swell, y = [], 0.0
+    for i, x in enumerate(base):
+        a = 0.08 + 0.55 * min(1.0, i / (n * 0.4))    # 截止上扫后驻留
+        y += a * (x - y)
+        swell.append(y)
+    body = mul(swell, env(n, 15, 220, 0.4, 240, 0.85))
+    pops = [0.0] * n                                   # 噼啪:随机窄噪声刺点
+    rnd = random.Random(20261009)
+    for at in [0.08, 0.17, 0.26, 0.35, 0.44]:
+        s = int(at * SR)
+        w = int(SR * 0.012)
+        for j in range(w):
+            if s + j < n:
+                pops[s + j] += (1 - j / w) * rnd.uniform(-1, 1)
+    return mix([1.1 * v for v in body], [0.8 * v for v in pops])
+
+
+def gen_dot_bleed():
+    """撕裂(dot 应用):两声湿钝撕扯 + 低频下坠滴落感(嗜血打击挂流血)"""
+    n = int(SR * 0.4)
+    tear1 = mul(lowpass(noise(int(SR * 0.14)), 0.18),
+                env(int(SR * 0.14), 4, 90, 0.0, 80, 1.0))
+    tear2 = mul(lowpass(noise(int(SR * 0.17)), 0.14),
+                env(int(SR * 0.17), 4, 110, 0.0, 90, 1.0))
+    drip = mul(osc("sine", int(SR * 0.2), glide(300, 90, 0.2)),
+               env(int(SR * 0.2), 6, 120, 0.0, 90, 1.0))
+    a = tear1 + [0.0] * (n - len(tear1))
+    b = [0.0] * int(SR * 0.2) + tear2 + [0.0] * (n - int(SR * 0.2) - len(tear2))
+    c2 = [0.0] * int(SR * 0.2) + drip + [0.0] * (n - int(SR * 0.4))
+    return mix([1.15 * v for v in a], [1.0 * v for v in b], [0.55 * v for v in c2])
+
+
 if __name__ == "__main__":
     render("skill-fire", gen_fire())
     render("skill-ice", gen_ice())
@@ -239,3 +275,5 @@ if __name__ == "__main__":
     render("skill-drain", gen_drain())
     render("skill-mark", gen_mark())
     render("skill-dash", gen_dash())
+    render("dot-burn", gen_dot_burn())
+    render("dot-bleed", gen_dot_bleed())
