@@ -520,6 +520,26 @@ body{
 .dmg-note{color:var(--dim);font-size:11px;margin-top:5px}
 .dmg-empty{color:var(--dim);text-align:center;padding:18px 8px;font-size:12px}
 
+/* 悬赏页 = 活动中心:功能入口行整行可点;有待领内容时行尾红点 */
+.qm-row{cursor:pointer;border-radius:8px}
+.qm-row:hover{background:#16162466}
+.qm-row:hover .btn{border-color:#3a6a4a}
+.qm-dot{width:8px;height:8px;border-radius:50%;background:#ff5a5a;
+  box-shadow:0 0 6px rgba(255,90,90,.85);flex:none;align-self:center;
+  animation:dotBadgePulse 1s ease-in-out infinite}
+
+/* 掉落自动出售品质弹窗:一行一档,当前档高亮;点选即生效 */.as-opt{display:flex;align-items:center;gap:10px;width:100%;text-align:left;
+  background:#15152299;border:1px solid #20202f;border-radius:8px;padding:10px 12px;
+  cursor:pointer;color:var(--txt);font-size:13px;font-family:inherit;margin-bottom:8px;
+  touch-action:manipulation;user-select:none;-webkit-user-select:none}
+.as-opt:last-child{margin-bottom:0}
+.as-opt:hover{border-color:#3a6a4a;background:#1a1a2a}
+.as-opt.on{border-color:var(--gold);background:#2a241599}
+.as-opt .as-tt{flex:none;font-weight:700;min-width:110px}
+.as-opt .as-ds{flex:1;min-width:0;color:var(--dim);font-size:11.5px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.as-opt .as-cur{flex:none;color:var(--gold);font-size:11.5px}
+
 /* ---------------- 通用文本色 ---------------- */
 .c-black{color:#000}.c-bright_black{color:#7a7a8c}.c-white{color:#e8e8ee}
 .c-bright_white{color:#fff}.c-red{color:#e05555}.c-bright_red{color:#ff6b6b}
@@ -683,9 +703,6 @@ select.sel{background:#1b1b2a;color:var(--txt);border:1px solid var(--line2);
   max-width:86vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 
-/* 暂停遮罩提示 */
-body.paused #stage{filter:saturate(.5) brightness(.75)}
-
 /* 滚动条 */
 ::-webkit-scrollbar{width:8px;height:8px}
 ::-webkit-scrollbar-thumb{background:#26263a;border-radius:4px}
@@ -728,11 +745,6 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
     padding-top:max(6px, env(safe-area-inset-top))}
   .logo{display:none}
   #topbar .btn{padding:6px 10px;font-size:12px}
-  #topbar [data-local="save"]{display:none}          /* 手机收进设置页 */
-  /* 单行溢出裁剪会把排在资源条后的按钮裁出屏:暂停提前到资源条之前,保证可达 */
-  #topbar #pause-btn{order:1;flex:none}
-  #topbar .sp{order:2}
-  #topbar .res{order:3}
   .zone-chip{max-width:none;font-size:12px;padding:3px 9px;flex:1 1 auto;
     min-width:0;overflow:hidden}
   .zone-chip span:first-child{white-space:nowrap}
@@ -852,7 +864,7 @@ body.paused #stage{filter:saturate(.5) brightness(.75)}
 
 /* 存在感层红点:解锁未装配的技能/转生受阻/更高倍速/成就新档/云档提醒。
    钉在入口元素上(::after),由 main.ts updateBadges 切换 has-badge */
-.nav-item,#gear-btn,#speed-btn,#help-btn,.subnav-item{position:relative}
+.nav-item,#gear-btn,#speed-btn,.subnav-item{position:relative}
 .has-badge::after{content:"";position:absolute;top:5px;right:7px;width:8px;height:8px;
   border-radius:50%;background:#ff5a5a;box-shadow:0 0 6px rgba(255,90,90,.85);
   pointer-events:none;z-index:3}

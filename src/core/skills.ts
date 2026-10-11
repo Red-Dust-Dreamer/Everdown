@@ -159,6 +159,14 @@ export function castActive(g: Game, sdef: ActiveSkill, mon: MonLike & {
   const lv = effLv(g, sdef.id);
   const kind = sdef.kind;
   if (kind === "damage" || kind === "multi") {
+    if (sdef.channel && sdef.hits) {
+      // 引导攻击(旋风斩):不立即结算,登记 burst 由 battleTick 按节拍逐跳出手;
+      // 引导期间不出手其他攻击(普攻/其他技能暂停,冷却照走)
+      const interval = sdef.channel / sdef.hits;
+      g.burst = { sid: sdef.id, left: sdef.hits, interval,
+        nextAt: g.time + interval, pct: skillVal(sdef, lv) };
+      return;
+    }
     let total = 0;
     for (let i = 0; i < (sdef.hits ?? 1); i++) {
       total += skillHit(g, mon, sdef, skillVal(sdef, lv));
@@ -203,7 +211,9 @@ export function castActive(g: Game, sdef: ActiveSkill, mon: MonLike & {
   }
 }
 
-function skillHit(g: Game, mon: any, sdef: ActiveSkill, pct: number): number {
+/** 一次技能直伤结算(暴击/乘区/无视防御/吸血/伤害统计全口径);
+ *  供 castActive 瞬发与 burst 引导逐跳复用 */
+export function skillHit(g: Game, mon: any, sdef: ActiveSkill, pct: number): number {
   const atk = atkNow(g);
   const pierce = Math.min((g.hero.armor_pierce ?? 0) / 100, 0.5);
   const defv = mon.def_ * (1 - pierce);

@@ -158,6 +158,8 @@ export class Game {
   lastSpawnTime: number | null = null;
   emaKill = 0;
   lastDeathTime = -999;
+  /** 引导攻击进行中(旋风斩等,不序列化):channel 秒内打满 hits 跳,期间不出手其他攻击 */
+  burst: { sid: string; left: number; interval: number; nextAt: number; pct: number } | null = null;
   pendingOffline: systems.ResolveReport | null = null;
   pendingSwap: PendingSwap | null = null;   // 手动模式换装对比(不序列化,存档时遗物兜底入包)
   autosaveAcc = 0;

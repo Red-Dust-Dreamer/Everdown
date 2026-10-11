@@ -23,7 +23,7 @@ import { castActive, skillDesc, dotVal } from "../core/skills.ts";
 import { pyRound, Item } from "../core/items.ts";
 import { Relic, rollRelic } from "../core/relics.ts";
 import { fmt, dwidth } from "../core/ansi.ts";
-import { buffPct, atkNow } from "../core/skills.ts";
+import { buffPct, atkNow, skillVal } from "../core/skills.ts";
 import { heroPower, powerWithEquip, powerWithRelic } from "../core/power.ts";
 import type { ResolveReport } from "../core/systems.ts";
 
@@ -891,6 +891,134 @@ function testRebirth(): void {
   eq(m.rebirths, 0, "v7 旧档 rebirths 默认 0");
 }
 
+// ================================================================ 23. 引导攻击(旋风斩:多跳/期间停其他攻击/断引)
+function testBurstSkill(): void {
+  const g = newGame(2048);
+  g.chooseClass("warrior");
+  const h = g.hero;
+  h.crit = 0;   // 关暴击,伤害断言确定性化
+
+  // 傀儡怪:血厚不还手(隔离观察引导跳伤)
+  const mkMon = (): Monster =>
+    new Monster("傀儡", ["  "], "green", 1e9, 0, 0, 9999, false, false, 1, null, "slime");
+  g.loadout.active = ["w_whirl", "w_strike"];   // 重击在列:验证引导期间不放其他技能
+  g.monster = mkMon();
+
+  // ---- 施放登记引导,不立即结算 ----
+  const whirl = ACTIVE_DEF["w_whirl"];
+  castActive(g, whirl, g.monster!);
+  ok(g.burst !== null, "旋风斩登记引导状态");
+  const burst = g.burst!;
+  eq(burst.left, 4, "待发 4 跳");
+  eq(burst.interval, 0.5, "每 0.5s 一跳(2 秒打满)");
+  eq(burst.pct, skillVal(whirl, 1), "每跳% = lv1 技能值");
+
+  // ---- 引导期间:无普攻、无其他技能掺入,跳伤按节拍落 ----
+  g.events.length = 0;
+  const mon = g.monster as Monster;
+  const hp0 = mon.hp;
+  const atk0 = atkNow(g);
+  const perHit = atk0 * burst.pct / 100 * (1 + (h.skill_dmg ?? 0) / 100);
+  for (let t = 0; t < 1.05; t += 0.05) { g.time += 0.05; battleTick(g, 0.05); }
+  eq(g.events.filter(e => e[0] === "anim" && e[1] === "hero_attack").length, 0,
+    "引导期间不普攻");
+  close(hp0 - mon.hp, perHit * 2, "1.05s 恰 2 跳(重击 260% 未掺入)", 1e-6);
+
+  // ---- 2.0s 打满 4 跳,引导结束(断言取在第 4 跳当拍,重击下一拍才会补发) ----
+  for (let t = 0; t < 0.95; t += 0.05) { g.time += 0.05; battleTick(g, 0.05); }
+  eq(g.burst, null, "4 跳打满引导结束");
+  close(hp0 - mon.hp, perHit * 4, "引导总伤 = 每跳×4", 1e-6);
+
+  // ---- 引导结束后:普攻恢复 ----
+  g.skillCd["w_whirl"] = 999;   // 直接 castActive 不走 castSkills,手动补 CD(真实流程 5s CD > 2s 引导,无连引导问题)
+  for (let t = 0; t < 2.0; t += 0.05) { g.time += 0.05; battleTick(g, 0.05); }
+  ok(g.events.some(e => e[0] === "anim" && e[1] === "hero_attack"), "引导结束后普攻恢复");
+
+  // ---- 目标中途死亡:引导不中断,剩余跳数转到新目标身上打完 ----
+  g.monster = mkMon();
+  (g.monster as Monster).hp = perHit * 0.5;   // 第一跳必死
+  castActive(g, whirl, g.monster!);
+  ok(g.burst !== null, "二次施放重新登记引导");
+  const kills0 = g.stats.kills;
+  let replaced = false;
+  for (let t = 0; t < 2.05 && g.burst; t += 0.05) {
+    g.time += 0.05; battleTick(g, 0.05);
+    if (!replaced && g.stats.kills > kills0) {
+      // 击杀结算完成(真怪已顶上):换回 0 防傀儡,隔离观察后续跳伤
+      g.monster = mkMon();
+      replaced = true;
+    }
+  }
+  eq(g.stats.kills, kills0 + 1, "引导跳伤击杀走正常结算");
+  ok(g.burst === null, "剩余 3 跳在新目标身上打满,引导才结束");
+  const mon3 = g.monster as Monster;
+  close(mon3.maxHp - mon3.hp, perHit * 3, "新目标恰好吃满剩余 3 跳", 1e-6);
+}
+
+// ================================================================ 24. 技能顺序施放(一拍只放一个,按装配顺序排队)
+function testSkillOrder(): void {
+  const g = newGame(2049);
+  g.chooseClass("warrior");
+  g.monster = new Monster("傀儡", ["  "], "green", 1e9, 0, 0, 9999, false, false, 1, null, "slime");
+  g.loadout.active = ["w_strike", "w_warcry"];   // 两个瞬发同时就绪
+  const casts = () => g.events
+    .filter(e => e[0] === "anim" && String(e[1]).startsWith("cast:"))
+    .map(e => String(e[1]));
+  g.events.length = 0;
+
+  g.time += 0.05; battleTick(g, 0.05);
+  eq(casts().length, 1, "一拍只放一个技能");
+  eq(casts()[0], "cast:w_strike", "同拍多个就绪:先放装配位靠前的");
+
+  g.time += 0.05; battleTick(g, 0.05);
+  eq(casts().length, 2, "下一拍补发第二个");
+  eq(casts()[1], "cast:w_warcry", "排队顺序 = 装配顺序");
+}
+
+// ================================================================ 25. 死亡窗口存档兜底(hp=0 无复活计时 → 补倒计时复活)
+function testDeathSaveRevive(): void {
+  const g = newGame(2050);
+  g.chooseClass("warrior");
+  const h = g.hero;
+  h.hp = 0;                 // 模拟死亡瞬间被自动存档、重载后的状态
+  g.respawnTimer = 0;       // 复活计时是瞬态,不入档
+  battleTick(g, 0.1);
+  ok(g.respawnTimer > 0, "hp=0 且无复活计时:自动补上复活倒计时(防永久卡死)");
+  for (let t = 0; t < BAL.respawn_sec; t += 0.1) { g.time += 0.1; battleTick(g, 0.1); }
+  eq(h.hp, h.max_hp, "倒计时走完满血复活");
+}
+
+// ================================================================ 26. 三职业引导技能(法/射吟唱登记与节拍)
+function testChannelSkills(): void {
+  const g = newGame(2051);
+  const mkMon = (): Monster =>
+    new Monster("傀儡", ["  "], "green", 1e9, 0, 0, 9999, false, false, 1, null, "slime");
+  const cases = [
+    ["mage", "m_fire", 3, 1.5],
+    ["mage", "m_meteor", 4, 2],
+    ["ranger", "r_rain", 5, 2.5],
+  ] as const;
+  for (const [cls, sid, hits, channel] of cases) {
+    g.classId = cls;   // 直接切职业字段:只验登记,不重置装配
+    g.monster = mkMon();
+    const def = ACTIVE_DEF[sid];
+    castActive(g, def, g.monster!);
+    ok(g.burst !== null, `${cls} ${sid} 登记引导(不立即结算)`);
+    const b = g.burst!;
+    eq(b.left, hits, `${sid} 待发 ${hits} 跳`);
+    eq(b.interval, channel / hits, `${sid} 每跳间隔 = 吟唱时长/跳数`);
+    g.burst = null;   // 清场验下一个
+  }
+  // 数值锚:吟唱总额含引导溢价(阻塞普攻的机会成本),略高于同级瞬发
+  eq(ACTIVE_DEF["m_fire"].base * 3, 330, "火球吟唱总额 330%(原瞬发 300%)");
+  eq(ACTIVE_DEF["m_meteor"].base * 4, 520, "陨石吟唱总额 520%(原瞬发 510%)");
+  eq(ACTIVE_DEF["r_rain"].base * 5, 550, "箭雨总额 550%(原 525%)");
+  for (const [, sid] of cases) {
+    const d = ACTIVE_DEF[sid];
+    ok((d.channel ?? 0) < d.cd, `${sid} 冷却(${d.cd}s)须长于吟唱(${d.channel}s),否则普攻永不恢复`);
+  }
+}
+
 // ================================================================ 16. 祭坛批量(×N 精确扣费 / MAX 至不足 / ×1 委托 / 预估 ±1)
 function testAltarBatch(): void {
   const g = newGame(426242);
@@ -1277,6 +1405,10 @@ const TESTS: [string, () => void][] = [
   ["20.强化继承/图鉴二期加成/成就新维度", testInheritCodex],
   ["21.方案B 转生深度加权(锚点/封顶/保底/等值迁移)", testRebirthDepth],
   ["22.持续伤害技能(燃烧跳伤/吸血/击杀/描述)", testDotSkills],
+  ["23.引导攻击(旋风斩多跳/停普攻/跨怪续转)", testBurstSkill],
+  ["24.技能顺序施放(一拍一个/装配顺序排队)", testSkillOrder],
+  ["25.死亡窗口存档兜底(hp0补复活倒计时)", testDeathSaveRevive],
+  ["26.三职业引导技能(法/射吟唱登记/节拍/数值锚)", testChannelSkills],
 ];
 
 let failed = 0;

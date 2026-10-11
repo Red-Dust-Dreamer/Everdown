@@ -127,13 +127,28 @@ export function battleTick(g: Game, dt: number): void {
     }
     return;
   }
-  if (h.hp <= 0) return;
+  if (h.hp <= 0) {
+    // 死亡窗口内自动存档的档:重载后 hp=0 且复活计时是瞬态不入档,补上倒计时防永久卡死
+    if (g.respawnTimer <= 0) g.respawnTimer = BAL.respawn_sec;
+    return;
+  }
   S.tickBuffs(g);
   if (!mon) return;
 
   castSkills(g, dt, mon);
 
-  if ((h.stun_until ?? 0) <= g.time) {
+  if (g.burst) {
+    // 引导攻击(旋风斩):独立节拍逐跳出手;期间不出手其他攻击(普攻也暂停)。
+    // 与 dot 同理不吃控制;目标倒下不打断引导——只有英雄死亡才断(见 onHeroDeath),
+    // 本拍让位给击杀结算,新怪顶上后剩余跳数继续
+    while (g.burst && g.burst.nextAt <= g.time) {
+      if (mon.hp <= 0) break;   // 目标已死:引导保留,待下方结算换目标后续跳
+      g.burst.nextAt += g.burst.interval;
+      S.skillHit(g, mon, ACTIVE_LOOKUP[g.burst.sid], g.burst.pct);
+      g.burst.left -= 1;
+      if (g.burst.left <= 0) g.burst = null;
+    }
+  } else if ((h.stun_until ?? 0) <= g.time) {
     h.atk_timer += dt;
     let interval = h.interval / (1 + (h.haste + S.buffPct(g, "haste")) / 100);
     if ((h.slow_until ?? 0) > g.time) {
@@ -296,9 +311,12 @@ function castSkills(g: Game, dt: number, mon: Monster): void {
       g.skillCd[sid] = cd - dt;
       if (g.skillCd[sid] > 0) continue;
     }
+    // 引导期间不施放任何技能(冷却照走,引导结束后到期的下一拍补上)
+    if (g.burst) continue;
     if (d.kind === "heal" && h.hp >= h.max_hp * 0.6) continue;
     S.castActive(g, d, mon);
     g.skillCd[sid] = d.cd * cdCut;
+    break;   // 技能不能同时放:一拍只出手一个,同拍多个就绪按装配顺序排队下一拍补发
   }
 }
 
@@ -415,6 +433,7 @@ function onMonsterKilled(g: Game, mon: Monster): void {
 function onHeroDeath(g: Game): void {
   g.hero.hp = 0;
   g.hero.shield = 0;
+  g.burst = null;   // 引导中断(旋风斩等)
   g.respawnTimer = BAL.respawn_sec;
   if (g.inTower) {
     g.towerExit(false);

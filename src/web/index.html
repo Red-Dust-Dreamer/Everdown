@@ -34,10 +34,7 @@
   <span class="res res-gold" id="res-gold"></span>
   <span class="res res-stone" id="res-stone"></span>
   <span class="res res-time" id="res-time"></span>
-  <button class="btn" data-local="save">存档</button>
-  <button class="btn" id="help-btn" title="帮助 / 机制说明">?</button>
   <button class="btn" id="gear-btn" data-tab="settings" title="设置(快捷键 6)">⚙</button>
-  <button class="btn warn" id="pause-btn" data-local="pause">暂停</button>
 </header>
 
 <div id="main">
@@ -107,9 +104,9 @@
         <div class="card grow" id="altar-list"></div>
       </div>
     </div>
+    <!-- 悬赏页 = 活动中心:各功能以按钮呈现,点开弹窗显示对应功能 -->
     <div class="page" id="page-quest">
-      <div class="card" id="quest-list"></div>
-      <div class="card grow" id="ach-list"></div>
+      <div class="card grow" id="quest-list"></div>
     </div>
     <div class="page" id="page-settings"><div class="card grow" id="settings-panel"></div></div>
   </div>
@@ -155,9 +152,10 @@
   </div>
 </div>
 
-<!-- 帮助 / 机制说明(顶栏 ? 打开;点遮罩关闭) -->
+<!-- 帮助 / 机制说明(设置页「帮助」行打开;点遮罩关闭) -->
 <div class="overlay" id="help-modal">
   <div class="modal wide">
+    <button class="modal-x" id="help-x" title="关闭">✕</button>
     <h2>❔ 机制速查</h2>
     <div class="help-body">
       <h4>核心循环</h4>
@@ -232,6 +230,35 @@
     <p class="dim" id="gear-sub"></p>
     <div id="gear-body"></div>
     <div class="swap-ops" id="gear-ops"></div>
+  </div>
+</div>
+
+<!-- 掉落自动出售品质选择(设置页点击 ▾ 弹出;点档位即生效,不再循环切换) -->
+<div class="overlay" id="autosell-modal">
+  <div class="modal">
+    <button class="modal-x" id="autosell-close" title="关闭">✕</button>
+    <h2>◈ 掉落自动出售</h2>
+    <p class="dim">低稀有度装备掉落即折现;选择保留线 —— 该品质及以下自动出售</p>
+    <div id="autosell-body"></div>
+  </div>
+</div>
+
+<!-- 称号与世系(角色页功能按钮点入):佩戴称号 + 历代转生记录 -->
+<div class="overlay" id="titles-modal">
+  <div class="modal wide">
+    <button class="modal-x" id="titles-close" title="关闭">✕</button>
+    <h2>👑 称号与世系</h2>
+    <p class="dim" id="titles-sub"></p>
+    <div id="titles-body"></div>
+  </div>
+</div>
+
+<!-- 悬赏活动中心弹窗(签到/周常/悬赏/成就/图鉴共用一个壳,按按钮切换内容) -->
+<div class="overlay" id="quest-modal">
+  <div class="modal wide">
+    <button class="modal-x" id="quest-close" title="关闭">✕</button>
+    <h2 id="quest-modal-title"></h2>
+    <div id="quest-modal-body"></div>
   </div>
 </div>
 

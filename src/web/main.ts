@@ -9,7 +9,7 @@ import { Game, installSaveHooks, migrateSave } from "../core/game.ts";
 import { applyOverrides, parseOverrideFile, resetOverrides } from "../core/overrides.ts";
 import * as D from "../core/data.ts";
 import * as systems from "../core/systems.ts";
-import { effLv, skillVal, buffPct, atkNow } from "../core/skills.ts";
+import { effLv, skillVal, buffPct, atkNow, dotVal } from "../core/skills.ts";
 import { heroPower, powerWithEquip, powerWithRelic } from "../core/power.ts";
 import type { PowerBreakdown } from "../core/power.ts";
 import { plusBonus, Item, PCT_MAINS } from "../core/items.ts";
@@ -252,7 +252,9 @@ function skillUI(g: Game, def: D.ActiveSkill | D.PassiveSkill): SkillUI {
     kind: active.kind ?? (def as D.PassiveSkill).kind ?? "",
     unlock: def.unlock, cd: active.cd ?? 0, color: active.color ?? "",
     lv, eff: el,
-    desc: def.desc.replace("{v}", fmtv(val)),
+    // {v}=当前档数值;{d}=dot 每跳%(与核心 skillDesc 同口径,web 侧此前漏了 {d})
+    desc: def.desc.replace("{v}", fmtv(val))
+      .replace("{d}", fmtv(dotVal(active, el))),
     cost: g.skillCost(def.id),
     equipped: g.loadout.active.includes(def.id) || g.loadout.passive.includes(def.id),
     unlocked: g.level >= def.unlock,
@@ -1289,13 +1291,15 @@ function updateBadges(st: State): void {
   setBadge('.subnav-item[data-sub="skill"]', skillReady);
   // 角色页:可转生且推进受阻(转生收益最大的时机);技能分栏有新装配机会时也亮,钉住入口
   setBadge('.nav-item[data-tab="hero"]', (st.can_rebirth && st.stuck) || skillReady);
-  // 悬赏页:会话内有成就升到新档;正看着悬赏页时刷新基线(红点即消)
-  let achNew = false;
-  for (const a of st.achievements) if (a.tiers > (achSeenTiers[a.id] ?? 0)) achNew = true;
-  if (curTab === "quest") {
+  // 悬赏页:会话内有成就升到新档,或签到可领/周常宝箱可领 → 导航红点;
+  // 正看着成就弹窗时刷新基线(红点即消)
+  if (curTab === "quest" && questModal === "ach") {
     achSeenTiers = Object.fromEntries(st.achievements.map(a => [a.id, a.tiers]));
   } else {
-    setBadge('.nav-item[data-tab="quest"]', achNew);
+    const chestReady = st.weekly.chests.some(c =>
+      !st.weekly.claimed.includes(c.id) && st.weekly.done >= c.need);
+    setBadge('.nav-item[data-tab="quest"]',
+      achBadgeOn(st) || st.signin.can || chestReady);
   }
   setBadge("#speed-btn", st.max_speed > st.speed);   // 更高档已解锁未启用
   setBadge("#gear-btn", cloudHintPending);           // 云档提醒待看
@@ -1329,10 +1333,13 @@ function renderNow(): void {
   renderBag(st);
   renderSkills(st);
   renderQuest(st);
+  renderQuestModal(st);
   renderTower(st);
   renderLeaderboard(st);
   renderAltar(st);
   renderSettings(st);
+  renderAutoSellModal(st);
+  renderTitlesModal(st);
   renderOverlays(st);
   renderGearModal(st);
   if (dmgOpen) $("dmg-body").innerHTML = dpsMeter.html();
@@ -1552,14 +1559,33 @@ function renderHeroPage(st: State): void {
       `战力构成:输出 ${fmt(pw.offense)} · 生存 ${fmt(pw.defense)} · 功能 ${fmt(pw.utility)}` +
       `(按第 ${Math.max(1, st.stats.max_zone)} 区假人折算,含生效增益)</div>` : "") +
     rebirthBlockHtml(st) +
-    lineageBlockHtml(st) +
+    titleEntryHtml(st) +
     `<h3 style="margin-top:16px"><span class="dot"></span>装备框 · 点击槽位查看属性与操作</h3>` +
     `<div class="gear-frame">${frame}</div>`;
 }
 
-/** 世系档案 + 称号:历代转生记录(最近 12 世)与可佩戴称号 */
-function lineageBlockHtml(st: State): string {
-  if (st.rebirths === 0 && st.lineage.length === 0) return "";
+/** 称号与世系入口(功能按钮):角色页只留一行摘要,点开弹窗才是称号系统 */
+function titleEntryHtml(st: State): string {
+  const worn = st.titles.find(t => t.id === st.title);
+  const owned = st.titles.filter(t => t.owned).length;
+  return `<div class="set-row" style="margin-top:12px"><div class="lbl">👑 称号与世系` +
+    `<div class="d">已获得 ${owned}/${st.titles.length} · 当前佩戴:${worn ? esc(worn.name) : "无"}</div></div>` +
+    `<button class="btn" data-local="titles">查看 ▾</button></div>`;
+}
+
+/** 称号弹窗:可佩戴称号(点选即换,弹窗不收) + 历代转生记录 */
+let titlesMenu = false;
+function renderTitlesModal(st: State): void {
+  const m = $("titles-modal");
+  if (!titlesMenu || !st.class_id) {
+    if (!st.class_id) titlesMenu = false;
+    m.classList.remove("show");
+    return;
+  }
+  m.classList.add("show");
+  const owned = st.titles.filter(t => t.owned).length;
+  $("titles-sub").textContent =
+    `已获得 ${owned}/${st.titles.length} 个称号;点击佩戴(可随时换),悬停看解锁条件`;
   const titleChips = st.titles.map(t =>
     `<button class="btn mini${st.title === t.id ? " sell-on" : ""}${t.owned ? "" : " dim"}"` +
       ` data-cmd="set_title" data-a="${t.id}" ${t.owned ? "" : "disabled"} title="${esc(t.cond)}">` +
@@ -1571,9 +1597,13 @@ function lineageBlockHtml(st: State): string {
     `<span class="cl">${clsIcon[e.cls] ?? "?"} ${e.cls === "warrior" ? "战士" : e.cls === "mage" ? "法师" : e.cls === "ranger" ? "射手" : e.cls}</span>` +
     `<span class="dt">Lv.${e.level} · ${e.zone}区 · ${fmt(e.kills)}杀 · ${fmtTime(e.dur)}</span></div>`
   ).join("");
-  return `<h3 style="margin-top:16px"><span class="dot"></span>👑 称号与世系</h3>` +
+  $("titles-body").innerHTML =
     `<div class="title-chips">${titleChips}</div>` +
-    (rows ? `<div class="lineage-list">${rows}</div>` : "");
+    (rows
+      ? `<h3 style="margin:14px 0 8px"><span class="dot"></span>📜 历代转生 · 最近 ${st.lineage.length} 世</h3>` +
+        `<div class="lineage-list">${rows}</div>`
+      : `<div style="color:var(--dim);font-size:12.5px;margin-top:10px">` +
+        `尚未转生:50 级后可转生,历代冒险记录会出现在这里</div>`);
 }
 
 /** 转生块:当前加成 + 门槛进度 + 入口按钮(确认与择业在弹窗)。
@@ -1711,76 +1741,139 @@ function renderSkills(st: State): void {
     `<div class="pool"><h4>◈ 被动技能池</h4>${pool(st.skills.passive, "passive")}</div></div>`;
 }
 
-function renderQuest(st: State): void {
-  if (!st.class_id) { $("quest-list").innerHTML = ""; $("ach-list").innerHTML = ""; return; }
-  // —— 每日签到(7 日循环,断签重置;领过的格子亮起,今天可领的格子呼吸)——
-  const si = st.signin;
-  const todayPos = si.can ? si.pos : -1;   // can=false:今天已领,无高亮格
-  const signinCard =
-    `<div class="signin-card"><div class="si-head"><span>📅 每日签到</span>` +
-    `<button class="btn mini${si.can ? " sell-on" : ""}" data-cmd="signin_claim" ${si.can ? "" : "disabled"}>` +
-    `${si.can ? "领取今日" : "今日已领"}</button></div>` +
-    `<div class="si-grid">` + si.rewards.map((r, i) => {
-      // 已领判定:格子序号 < 下次位置;pos 即循环进度
-      const done = i < si.pos;
-      const isToday = i === todayPos;
-      return `<div class="si-cell${done ? " done" : ""}${isToday ? " today" : ""}">` +
-        `<span class="d">第${i + 1}天</span><span class="ic">${r.icon}</span>` +
-        `<span class="lb">${esc(r.label)}</span></div>`;
-    }).join("") + `</div>` +
-    `<div class="si-hint">连续签到进度保留;隔天未领则 7 日进度重置</div></div>`;
-  // —— 周常(周一 0 点重置;3 项/6 项两档宝箱)——
-  const wk = st.weekly;
-  const weeklyCard =
-    `<div class="weekly-card"><div class="si-head"><span>🗓 本周目标 · 已完成 ${wk.done}/${wk.goals.length}</span></div>` +
-    `<div class="wk-grid">` + wk.goals.map(g => {
-      const p = Math.min(100, g.cur / g.target * 100);
-      const ok = g.cur >= g.target;
-      return `<div class="wk-row${ok ? " ok" : ""}"><span class="nm">${esc(g.name)}${ok ? " ✓" : ""}</span>` +
-        `<div class="bar q"><div class="fill" style="width:${p}%"></div>` +
-        `<div class="num" style="font-size:10px">${fmt(g.cur)} / ${fmt(g.target)}</div></div></div>`;
-    }).join("") + `</div>` +
-    `<div class="wk-chests">` + wk.chests.map(c => {
-      const claimed = wk.claimed.includes(c.id);
-      const can = !claimed && wk.done >= c.need;
-      return `<button class="btn mini${can ? " sell-on" : ""}" data-cmd="weekly_chest" data-a="${c.id}"` +
-        ` ${can ? "" : "disabled"}>${claimed ? "✔" : "🎁"} ${esc(c.label)} ✦${c.stones}</button>`;
-    }).join("") + `</div></div>`;
-  let qs = signinCard + weeklyCard;
-  for (const q of st.quests) {
-    const p = Math.min(100, q.progress / q.target * 100);
-    qs += `<div class="q-row"><div class="t"><span>${esc(q.desc)}</span>` +
-      `<span class="rew">◈${fmt(q.gold)}${q.stones ? ` <span class="st">✦${q.stones}</span>` : ""}</span></div>` +
-      `<div class="bar q"><div class="fill" style="width:${p}%"></div>` +
-      `<div class="num" style="font-size:10px">${q.progress} / ${q.target}</div></div></div>`;
-  }
-  const dailyCap2 = st.quest_daily_count >= st.quest_daily_limit;
-  $("quest-list").innerHTML =
-    `<h3><span class="dot"></span>悬赏任务(完成后自动刷新)· 今日 ${st.quest_daily_count}/${st.quest_daily_limit}` +
-      `<span class="rt">` +
-      (st.quest_reroll_cost !== null
-        ? `<button class="btn mini" data-cmd="quest_reroll" title="金币刷新全部悬赏">刷新 ◈${fmt(st.quest_reroll_cost)}(${st.quest_reroll_used}/${D.BAL.quest_reroll_max})</button>`
-        : `<span style="color:var(--dim);font-size:11px">今日刷新已满</span>`) +
-      `</span></h3>` +
-    (dailyCap2 ? `<div style="color:var(--dim);font-size:12px;margin:-4px 0 8px">今日悬赏已达上限(${st.quest_daily_limit}个):在途任务进度冻结,明日 0 点自动恢复</div>` : "") + qs;
+// ================================================================ 悬赏页(活动中心)+ 活动弹窗
+// 页面只放功能入口行(带状态摘要与红点),点开弹窗才是对应功能内容
+type QuestModalView = "quests" | "signin" | "weekly" | "ach" | "codex";
+let questModal: QuestModalView | null = null;
 
-  let ach = "";
-  for (const a of st.achievements) {
-    let pips = "";
-    for (let i = 0; i < a.total; i++) pips += `<i class="${i < a.tiers ? "on" : ""}"></i>`;
-    ach += `<div class="ach-row"><div class="ach-info"><div class="nm">${esc(a.name)}</div>` +
-      `<div class="pr">当前 ${fmt(a.val)}` +
-      (a.next !== null ? ` · 下一档 ${fmt(a.next)}` : " · 已满档") + `</div></div>` +
-      `<div class="ach-pips">${pips}</div>` +
-      `<div class="ach-bonus">${esc(a.stat)} +${a.stat.includes("点") ? a.bonus : pctTxt(a.bonus)}` +
-      (a.next !== null ? ` <span class="nx">(每档+${a.per})</span>` : "") + `</div></div>`;
-  }
-  // 深渊图鉴(一期:纯收集;未遭遇=剪影+???)——17 种怪,击杀点亮
+function renderQuest(st: State): void {
+  if (!st.class_id) { $("quest-list").innerHTML = ""; return; }
+  const si = st.signin;
+  const wk = st.weekly;
+  const chestReady = wk.chests.some(c => !wk.claimed.includes(c.id) && wk.done >= c.need);
+  const achTiers = st.achievements.reduce((s, a) => s + a.tiers, 0);
+  const achAll = st.achievements.reduce((s, a) => s + a.total, 0);
   const mons = Object.entries(D.MONSTERS);
   const found = mons.filter(([id]) => (st.mon_kills[id] ?? 0) > 0).length;
-  const codex = `<h3 style="margin-top:16px"><span class="dot"></span>深渊图鉴 · ${found}/${mons.length}` +
-    (found ? ` <span style="color:#6bff8f;font-size:12px">(攻/生命 +${(found * D.BAL.codex_per).toFixed(1)}%)</span>` : "") +
-    `</h3>` +
+
+  const row = (view: QuestModalView, ic: string, nm: string, status: string, dot = false) =>
+    `<div class="set-row qm-row" data-quest-modal="${view}" title="点击打开${nm}">` +
+    `<div class="lbl">${ic} ${nm}<div class="d">${status}</div></div>` +
+    (dot ? `<span class="qm-dot"></span>` : "") +
+    `<button class="btn">查看 ▾</button></div>`;
+
+  $("quest-list").innerHTML =
+    `<h3><span class="dot"></span>活动中心</h3>` +
+    row("signin", "📅", "每日签到",
+      si.can ? `今天可领:第 ${si.pos + 1} 天奖励` : `今日已领 · 循环进度 ${si.pos}/7 天`, si.can) +
+    row("weekly", "🗓", "本周目标",
+      `已完成 ${wk.done}/${wk.goals.length}` + (chestReady ? " · 有宝箱待领" : ""), chestReady) +
+    row("quests", "📜", "悬赏任务",
+      `今日 ${st.quest_daily_count}/${st.quest_daily_limit}` +
+      (st.quest_reroll_cost !== null
+        ? ` · 可刷新(${st.quest_reroll_used}/${D.BAL.quest_reroll_max})` : " · 今日刷新已满")) +
+    row("ach", "🏆", "成就", `永久加成 · 已获 ${achTiers}/${achAll} 档`, achBadgeOn(st)) +
+    row("codex", "👁", "深渊图鉴",
+      `已遭遇 ${found}/${mons.length}` +
+      (found ? ` · 攻/生命 +${(found * D.BAL.codex_per).toFixed(1)}%` : ""));
+}
+
+/** 本会话有成就升到新档(未看见)→ 入口红点;悬赏页导航红点同源 */
+function achBadgeOn(st: State): boolean {
+  const seen = achSeenTiers;   // 闭包内用局部量保住非空收窄
+  if (seen === null) return false;
+  return st.achievements.some(a => a.tiers > (seen[a.id] ?? 0));
+}
+
+/** 活动弹窗:五个功能共用一个壳,标题与内容随入口切换 */
+function renderQuestModal(st: State): void {
+  const m = $("quest-modal");
+  if (!questModal || !st.class_id) {
+    if (!st.class_id) questModal = null;
+    m.classList.remove("show");
+    return;
+  }
+  m.classList.add("show");
+  const titles: Record<QuestModalView, string> = {
+    signin: "📅 每日签到", weekly: "🗓 本周目标", quests: "📜 悬赏任务",
+    ach: "🏆 成就(永久加成)", codex: "👁 深渊图鉴",
+  };
+  $("quest-modal-title").textContent = titles[questModal];
+  $("quest-modal-body").innerHTML = questModalBody(st, questModal);
+}
+
+function questModalBody(st: State, view: QuestModalView): string {
+  // —— 每日签到(7 日循环,断签重置;领过的格子亮起,今天可领的格子呼吸)——
+  if (view === "signin") {
+    const si = st.signin;
+    const todayPos = si.can ? si.pos : -1;   // can=false:今天已领,无高亮格
+    return `<div class="signin-card"><div class="si-head"><span>7 日循环</span>` +
+      `<button class="btn mini${si.can ? " sell-on" : ""}" data-cmd="signin_claim" ${si.can ? "" : "disabled"}>` +
+      `${si.can ? "领取今日" : "今日已领"}</button></div>` +
+      `<div class="si-grid">` + si.rewards.map((r, i) => {
+        const done = i < si.pos;
+        const isToday = i === todayPos;
+        return `<div class="si-cell${done ? " done" : ""}${isToday ? " today" : ""}">` +
+          `<span class="d">第${i + 1}天</span><span class="ic">${r.icon}</span>` +
+          `<span class="lb">${esc(r.label)}</span></div>`;
+      }).join("") + `</div>` +
+      `<div class="si-hint">连续签到进度保留;隔天未领则 7 日进度重置</div></div>`;
+  }
+  // —— 周常(周一 0 点重置;3 项/6 项两档宝箱)——
+  if (view === "weekly") {
+    const wk = st.weekly;
+    return `<div class="weekly-card"><div class="si-head"><span>已完成 ${wk.done}/${wk.goals.length}</span></div>` +
+      `<div class="wk-grid">` + wk.goals.map(g => {
+        const p = Math.min(100, g.cur / g.target * 100);
+        const ok = g.cur >= g.target;
+        return `<div class="wk-row${ok ? " ok" : ""}"><span class="nm">${esc(g.name)}${ok ? " ✓" : ""}</span>` +
+          `<div class="bar q"><div class="fill" style="width:${p}%"></div>` +
+          `<div class="num" style="font-size:10px">${fmt(g.cur)} / ${fmt(g.target)}</div></div></div>`;
+      }).join("") + `</div>` +
+      `<div class="wk-chests">` + wk.chests.map(c => {
+        const claimed = wk.claimed.includes(c.id);
+        const can = !claimed && wk.done >= c.need;
+        return `<button class="btn mini${can ? " sell-on" : ""}" data-cmd="weekly_chest" data-a="${c.id}"` +
+          ` ${can ? "" : "disabled"}>${claimed ? "✔" : "🎁"} ${esc(c.label)} ✦${c.stones}</button>`;
+      }).join("") + `</div></div>`;
+  }
+  // —— 悬赏任务(完成后自动刷新)——
+  if (view === "quests") {
+    const capped = st.quest_daily_count >= st.quest_daily_limit;
+    let qs = "";
+    for (const q of st.quests) {
+      const p = Math.min(100, q.progress / q.target * 100);
+      qs += `<div class="q-row"><div class="t"><span>${esc(q.desc)}</span>` +
+        `<span class="rew">◈${fmt(q.gold)}${q.stones ? ` <span class="st">✦${q.stones}</span>` : ""}</span></div>` +
+        `<div class="bar q"><div class="fill" style="width:${p}%"></div>` +
+        `<div class="num" style="font-size:10px">${q.progress} / ${q.target}</div></div></div>`;
+    }
+    return `<div class="sell-bar"><span class="lbl">今日 ${st.quest_daily_count}/${st.quest_daily_limit}` +
+      (capped ? ` · 已达上限,在途进度冻结,明日 0 点恢复` : "") + `</span>` +
+      (st.quest_reroll_cost !== null
+        ? `<button class="btn mini" data-cmd="quest_reroll" title="金币刷新全部悬赏">刷新 ◈${fmt(st.quest_reroll_cost)}(${st.quest_reroll_used}/${D.BAL.quest_reroll_max})</button>`
+        : `<span class="hint">今日刷新已满</span>`) + `</div>` + qs;
+  }
+  // —— 成就(永久加成)——
+  if (view === "ach") {
+    let ach = "";
+    for (const a of st.achievements) {
+      let pips = "";
+      for (let i = 0; i < a.total; i++) pips += `<i class="${i < a.tiers ? "on" : ""}"></i>`;
+      ach += `<div class="ach-row"><div class="ach-info"><div class="nm">${esc(a.name)}</div>` +
+        `<div class="pr">当前 ${fmt(a.val)}` +
+        (a.next !== null ? ` · 下一档 ${fmt(a.next)}` : " · 已满档") + `</div></div>` +
+        `<div class="ach-pips">${pips}</div>` +
+        `<div class="ach-bonus">${esc(a.stat)} +${a.stat.includes("点") ? a.bonus : pctTxt(a.bonus)}` +
+        (a.next !== null ? ` <span class="nx">(每档+${a.per})</span>` : "") + `</div></div>`;
+    }
+    return ach;
+  }
+  // —— 深渊图鉴(纯收集;未遭遇=剪影+???)——
+  const mons = Object.entries(D.MONSTERS);
+  const found = mons.filter(([id]) => (st.mon_kills[id] ?? 0) > 0).length;
+  return `<div style="color:var(--dim);font-size:12.5px;margin-bottom:8px">已遭遇 ${found}/${mons.length}` +
+    (found ? ` · 攻/生命 +${(found * D.BAL.codex_per).toFixed(1)}%` : "") + `</div>` +
     `<div class="codex-grid">` + mons.map(([id, m]) => {
       const k = st.mon_kills[id] ?? 0;
       return `<div class="codex-cell${k ? "" : " unk"}"` +
@@ -1789,9 +1882,8 @@ function renderQuest(st: State): void {
         `<span class="nm">${k ? esc(m.name) : "???"}</span>` +
         `<span class="kc">${k ? fmt(k) : "—"}</span></div>`;
     }).join("") + `</div>`;
-
-  $("ach-list").innerHTML = `<h3><span class="dot"></span>成就(永久加成)</h3>` + ach + codex;
 }
+
 
 const AUTO_SELL_NAMES = ["关闭", "出售「普通」及以下", "出售「精良」及以下",
                          "出售「稀有」及以下", "出售「史诗」及以下", "出售「传说」及以下"];
@@ -1877,6 +1969,32 @@ function renderTower(st: State): void {
   panel.innerHTML = html;
 }
 
+// 掉落自动出售品质弹窗:点选档位即生效(替代旧的点击循环切换;J 键循环保留)
+let autoSellMenu = false;
+function renderAutoSellModal(st: State): void {
+  const m = $("autosell-modal");
+  if (!autoSellMenu || !st.class_id) {
+    if (!st.class_id) autoSellMenu = false;
+    m.classList.remove("show");
+    return;
+  }
+  m.classList.add("show");
+  const cur = Number(st.settings.auto_sell_idx ?? -1);
+  const names = D.RARITIES.map(r => r.name);
+  const qname = (i: number) => `<span class="c-${D.RARITIES[i].color}">${names[i]}</span>`;
+  const opt = (i: number, tt: string, ds: string) =>
+    `<button class="as-opt${i === cur ? " on" : ""}" data-cmd="auto_sell" data-a="${i}">` +
+    `<span class="as-tt">${tt}</span><span class="as-ds">${ds}</span>` +
+    (i === cur ? `<b class="as-cur">✓ 当前</b>` : "") + `</button>`;
+  let rows = opt(-1, "关 · 全部保留", "掉落全部进背包,不出售");
+  for (let i = 0; i < AUTO_SELL_TIERS.length; i++) {
+    const sold = names.slice(0, i + 1).join("/");
+    const kept = names.slice(i + 1).join("/");
+    rows += opt(i, `出售 ≤ ${qname(i)}`, `折现:${sold}` + (kept ? ` · 保留:${kept}` : ""));
+  }
+  $("autosell-body").innerHTML = rows;
+}
+
 function renderSettings(st: State): void {
   if (!st.class_id) { $("settings-panel").innerHTML = ""; return; }
   const autoSellIdx = Number(st.settings.auto_sell_idx ?? -1);
@@ -1898,10 +2016,10 @@ function renderSettings(st: State): void {
       D.BAL.auto_skill_lv) +
     autoRow("auto_altar", "自动献祭", "金币 > 4×费用时买最便宜的祭坛线,六线均衡(Lv40 解锁)",
       D.BAL.auto_altar_lv) +
-    `<div class="set-row"><div class="lbl">掉落自动出售<div class="d">低稀有度装备掉落即折现;点击循环切换档位</div></div>` +
+    `<div class="set-row"><div class="lbl">掉落自动出售<div class="d">低稀有度装备掉落即折现;点击选择品质档</div></div>` +
       (autoSellIdx < 0
-        ? `<button class="btn sell-off" data-cmd="cycle_sell" style="min-width:130px;text-align:center">已关闭</button>`
-        : `<button class="btn sell-on" data-cmd="cycle_sell" style="min-width:130px;text-align:center">开 · 出售 ≤${AUTO_SELL_TIERS[autoSellIdx]}</button>`) + `</div>` +
+        ? `<button class="btn sell-off" data-local="autosell" style="min-width:130px;text-align:center">已关闭 ▾</button>`
+        : `<button class="btn sell-on" data-local="autosell" style="min-width:130px;text-align:center">开 · 出售 ≤${AUTO_SELL_TIERS[autoSellIdx]} ▾</button>`) + `</div>` +
     `<div class="set-row"><div class="lbl">战斗模式<div class="d">推进:击败敌人深入;挂机:停留指定层。受阻自动转挂机,装备跟上自动回推(手动挂机不切)</div></div>` +
       `<button class="btn" data-cmd="mode">${st.mode === "push" ? "切换为挂机" : "切换为推进"}</button></div>` +
     (st.mode === "farm"
@@ -1932,9 +2050,8 @@ function renderSettings(st: State): void {
           : `<button class="btn" data-cmd="cloud_login">登录 / 注册</button>`) +
         `</div></div>`
       : "") +
-    `<div class="set-row"><div class="lbl">存档<div class="d">自动存档于浏览器(localStorage),离线收益自动结算</div></div>` +
+    `<div class="set-row"><div class="lbl">存档<div class="d">自动存档于浏览器(localStorage),每 10 秒一次,离线收益自动结算</div></div>` +
       `<div style="display:flex;gap:6px;flex-wrap:wrap">` +
-      `<button class="btn" data-local="save">手动存档</button>` +
       `<button class="btn" data-local="export">导出</button>` +
       `<button class="btn" data-local="import">导入</button>` +
       `<button class="btn danger" data-local="reset">重置</button></div></div>` +
@@ -1943,6 +2060,8 @@ function renderSettings(st: State): void {
       `<input id="redeem-input" placeholder="输入兑换码" maxlength="16" spellcheck="false"` +
         ` style="background:#151522;border:1px solid var(--line2);border-radius:6px;color:#cfe0ff;padding:6px 10px;font-family:inherit;font-size:13px;width:150px">` +
       `<button class="btn" data-cmd="redeem">🎁 兑换</button></div></div>` +
+    `<div class="set-row"><div class="lbl">帮助 / 机制说明<div class="d">各系统玩法与机制说明(原顶栏 ?)</div></div>` +
+      `<button class="btn" data-local="help">📖 打开帮助</button></div>` +
     `<h3 style="margin-top:16px"><span class="dot"></span>统计</h3>` +
     `<div class="stats-grid">` +
       kv("总击杀", fmt(s.kills)) + kv("头目击杀", fmt(s.boss_kills)) +
@@ -1952,7 +2071,7 @@ function renderSettings(st: State): void {
       kv("暴击次数", fmt(s.crit_hits ?? 0)) + kv("游玩时长", fmtTime(st.playtime)) +
     `</div>` +
     `<p class="set-hint" style="color:var(--dim);font-size:12px;margin-top:14px">` +
-      `<span class="kbd-hint">快捷键:1-5 切页 · 6 设置 · F 推进/挂机 · P 暂停 · S 存档 · M 音效 · </span>v${pkg.version}</p>`;
+      `<span class="kbd-hint">快捷键:1-5 切页 · 6 设置 · F 推进/挂机 · M 音效 · </span>v${pkg.version}</p>`;
 }
 
 function renderOverlays(st: State): void {
@@ -2262,8 +2381,6 @@ function renderGearModal(st: State): void {
 }
 
 // ---------------------------------------------------------------- 交互
-let paused = false;
-
 /** 塔排行祭坛三个动态 tab:设置已移至顶栏齿轮,注入锚点改为链式(悬赏→塔→排行→祭坛)。 */
 function ensureTowerDom(): void {
   if (document.querySelector('.nav-item[data-tab="tower"]')) return;
@@ -2306,9 +2423,6 @@ function switchHeroSub(sub: string): void {
 document.addEventListener("click", (e: MouseEvent) => {
   const target = e.target as HTMLElement;
   if (target.id === "gear-btn") { switchTab("settings"); return; }
-  if (target.id === "help-btn") {
-    $("help-modal").classList.add("show"); return;
-  }
   const nav = target.closest(".nav-item");
   if (nav) {
     switchTab((nav as HTMLElement).dataset.tab ?? curTab);
@@ -2316,6 +2430,8 @@ document.addEventListener("click", (e: MouseEvent) => {
   }
   const sub = target.closest<HTMLElement>(".subnav-item");
   if (sub) { switchTab("hero"); switchHeroSub(sub.dataset.sub!); return; }
+  const qmEl = target.closest<HTMLElement>("[data-quest-modal]");
+  if (qmEl) { questModal = qmEl.dataset.questModal as QuestModalView; renderNow(); return; }
   const gearEl = target.closest<HTMLElement>("[data-gear]");
   if (gearEl) {
     const [kind, val] = (gearEl.dataset.gear ?? "").split(":");
@@ -2324,15 +2440,17 @@ document.addEventListener("click", (e: MouseEvent) => {
     return;
   }
   const el = target.closest<HTMLElement>("[data-cmd]");
-  if (el) { doCmd(el.dataset.cmd!, el.dataset.a ?? null, el.dataset.b ?? null); renderNow(); return; }
+  if (el) {
+    doCmd(el.dataset.cmd!, el.dataset.a ?? null, el.dataset.b ?? null);
+    if (el.dataset.cmd === "auto_sell") autoSellMenu = false;   // 品质弹窗内选完即收
+    renderNow(); return;
+  }
   const loc = target.closest<HTMLElement>("[data-local]");
   if (loc) localCmd(loc.dataset.local!);
 });
 
 function localCmd(name: string): void {
-  if (name === "save") { g.save(); toast("已存档到浏览器"); cloudPushDebounced(); }
-  else if (name === "pause") togglePause();
-  else if (name === "export") {
+  if (name === "export") {
     const blob = new Blob([JSON.stringify(g.toDict())], { type: "application/json" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
@@ -2341,6 +2459,9 @@ function localCmd(name: string): void {
     URL.revokeObjectURL(a.href);
     toast("存档已导出");
   } else if (name === "import") ($("file-input") as HTMLInputElement).click();
+  else if (name === "autosell") { autoSellMenu = true; renderNow(); }
+  else if (name === "titles") { titlesMenu = true; renderNow(); }
+  else if (name === "help") $("help-modal").classList.add("show");
   else if (name === "sfx") toggleSfx();
   else if (name === "bgm") toggleBgm();
   else if (name === "reset") {
@@ -2368,12 +2489,6 @@ $("file-input").addEventListener("change", (e: Event) => {
   input.value = "";
 });
 
-function togglePause(): void {
-  paused = !paused;
-  document.body.classList.toggle("paused", paused);
-  $("pause-btn").textContent = paused ? "继续" : "暂停";
-  toast(paused ? "已暂停(游戏时钟冻结)" : "继续");
-}
 document.addEventListener("keydown", (e: KeyboardEvent) => {
   const t = e.target as HTMLElement;
   if (t.tagName === "SELECT" || t.tagName === "INPUT") return;
@@ -2393,6 +2508,9 @@ document.addEventListener("keydown", (e: KeyboardEvent) => {
     if (document.querySelector("#gear-modal")?.classList.contains("show")) {
       gearView = null; renderNow(); return;
     }
+    if (autoSellMenu) { autoSellMenu = false; renderNow(); return; }
+    if (titlesMenu) { titlesMenu = false; renderNow(); return; }
+    if (questModal) { questModal = null; renderNow(); return; }
     if (dmgOpen) { setDmgPanel(false); return; }
   }
   const tabs = ["battle", "hero", "quest", "tower", "leaderboard", "settings"];
@@ -2404,8 +2522,6 @@ document.addEventListener("keydown", (e: KeyboardEvent) => {
   } else if (e.key === "f" || e.key === "F") { doCmd("mode"); renderNow(); }
   else if (e.key === "b" || e.key === "B") { doCmd("speed"); renderNow(); }
   else if (e.key === "j" || e.key === "J") { doCmd("cycle_sell"); renderNow(); }
-  else if (e.key === "p" || e.key === "P") togglePause();
-  else if (e.key === "s" || e.key === "S") localCmd("save");
   else if (e.key === "m" || e.key === "M") { toggleSfx(); renderNow(); }
 });
 
@@ -2887,8 +3003,17 @@ function boot(): void {
       console.warn("[overrides] 覆盖加载失败,按默认数值运行:", err);
     }
   }
+  // 自己标签的写要过滤:IAB 等 webview 会把同标签 localStorage 写入也派发 storage 事件
+  // (标准浏览器只在跨标签时派发),否则 10s 自动存档会被热通道误当面板写,周期性整档重载。
+  // 事件还可能被 IAB 延迟投递,时间窗挡不住,故再比对内容:与本地最后写入逐字节相同=回声
+  let lastOwnSaveAt = 0;
+  let lastOwnSaveRaw: string | null = null;
   installSaveHooks({
-    write: (game) => localStorage.setItem(SAVE_KEY, JSON.stringify(game.toDict())),
+    write: (game) => {
+      lastOwnSaveAt = Date.now();
+      lastOwnSaveRaw = JSON.stringify(game.toDict());
+      localStorage.setItem(SAVE_KEY, lastOwnSaveRaw);
+    },
     readRaw: () => localStorage.getItem(SAVE_KEY),
   });
   g = Game.load();   // 读档(含离线结算)或开新档
@@ -2920,6 +3045,8 @@ function boot(): void {
         return;
       }
       if (ev.key === SAVE_KEY && !hotReloading) {
+        if (Date.now() - lastOwnSaveAt < 2000) return;   // 本标签自动存档的回声,跳过
+        if (ev.newValue && ev.newValue === lastOwnSaveRaw) return;   // 迟到投递的同内容回声,跳过
         hotReloading = true;
         setTimeout(() => {
           hotReloading = false;
@@ -2949,8 +3076,9 @@ function boot(): void {
   setupLoginModal();
   // 换装对比弹窗逃生通道:✕ 与点遮罩 = 稍后处理(物品留在背包),不再整屏锁死
   $("swap-close").addEventListener("click", () => { g.resolveSwap(false); renderNow(); });
-  // 帮助弹窗:按钮与点遮罩都能关
+  // 帮助弹窗:✕ 与点遮罩都能关
   $("help-close").addEventListener("click", () => $("help-modal").classList.remove("show"));
+  $("help-x").addEventListener("click", () => $("help-modal").classList.remove("show"));
   $("help-modal").addEventListener("click", (e: Event) => {
     if (e.target === e.currentTarget) $("help-modal").classList.remove("show");
   });
@@ -2960,6 +3088,21 @@ function boot(): void {
   $("gear-modal").addEventListener("click", (e: Event) => {
     const t = e.target as HTMLElement;
     if (t.id === "gear-close" || t.id === "gear-modal") { gearView = null; renderNow(); }
+  });
+  // 掉落自动出售品质弹窗:✕ 与点遮罩都能关
+  $("autosell-close").addEventListener("click", () => { autoSellMenu = false; renderNow(); });
+  $("autosell-modal").addEventListener("click", (e: Event) => {
+    if (e.target === e.currentTarget) { autoSellMenu = false; renderNow(); }
+  });
+  // 称号与世系弹窗:✕ 与点遮罩都能关(佩戴称号在弹窗内直接点,不关弹窗)
+  $("titles-close").addEventListener("click", () => { titlesMenu = false; renderNow(); });
+  $("titles-modal").addEventListener("click", (e: Event) => {
+    if (e.target === e.currentTarget) { titlesMenu = false; renderNow(); }
+  });
+  // 活动中心弹窗:✕ 与点遮罩都能关(签到/宝箱/刷新在弹窗内直接点,不关弹窗)
+  $("quest-close").addEventListener("click", () => { questModal = null; renderNow(); });
+  $("quest-modal").addEventListener("click", (e: Event) => {
+    if (e.target === e.currentTarget) { questModal = null; renderNow(); }
   });
   // 伤害统计面板:📊 唤出/收起(抽屉不锁页面,战斗照常);重置只清统计不影响战斗
   $("dmg-btn").addEventListener("click", () => setDmgPanel(!dmgOpen));
@@ -2978,7 +3121,7 @@ function boot(): void {
   let last = performance.now();
   let hiddenAt = 0;
   setInterval(() => {
-    if (paused || document.hidden) { last = performance.now(); return; }
+    if (document.hidden) { last = performance.now(); return; }
     const now = performance.now();
     let acc = (now - last) / 1000;
     last = now;
