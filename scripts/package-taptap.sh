@@ -7,12 +7,16 @@ cd "$(dirname "$0")/.."
 
 VERSION=$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")
 OUT="abyss-idle-taptap-${VERSION}.zip"
+# 排行榜/云档端点:TapTap 托管页是 https,端点必须 https——ECS 裸 IP 的 IP 证书
+# TLS 前置(nginx 8788 → 本机 8787,与网站版同一个 SQLite 库;见 docs/ecs-https-lb.md)。
+# 覆盖方式: LB_API=https://xxx bash scripts/package-taptap.sh
+LB_API="${LB_API:-https://47.99.151.214:8788}"
 
-echo "== 构建(base=./,输出 dist-taptap/)"
+echo "== 构建(base=./,LB_API=$LB_API,输出 dist-taptap/)"
 rm -rf dist-taptap src/web/dist-taptap "$OUT"
 # MSYS_NO_PATHCONV: 防 Git Bash 把 VITE_BASE 的路径参数转成本地盘符
 # outDir 相对 vite root(src/web)解析,写成 ../../dist-taptap 落到项目根
-MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*" VITE_BASE=./ npx vite build --mode taptap --outDir ../../dist-taptap
+MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*" VITE_BASE=./ VITE_LB_API="$LB_API" npx vite build --mode taptap --outDir ../../dist-taptap
 rm -rf dist-taptap/admin   # 管理面板仅本地,不进 TapTap 包(锚点:构建之后、grep 校验之前)
 rm -f dist-taptap/assets/admin-*.js   # admin 入口的 JS chunk 一并剔除(只删目录会漏进包)
 rm -rf dist-taptap/vendor             # admin 控制台依赖(xterm 终端库),游戏本体不引用
@@ -23,6 +27,11 @@ if grep -qE '(href|src)="/' dist-taptap/index.html; then
 fi
 if grep -rqE 'url\("/' dist-taptap/assets/*.css; then
   echo "!! CSS 有绝对路径引用:" && grep -rnE 'url\("/' dist-taptap/assets/*.css && exit 1
+fi
+
+echo "== 校验:排行榜端点已注入产物(防 import.meta.env 替换失效静默回落 Workers)"
+if ! grep -rqF -- "$LB_API" dist-taptap/assets/*.js; then
+  echo "!! 构建产物 JS 里找不到端点 $LB_API(VITE_LB_API 注入失效,会回落 workers.dev)" && exit 1
 fi
 
 echo "== 组包:第一级唯一文件夹 abyssidle/(纯字母命名,稳妥过审)"

@@ -74,7 +74,7 @@
 
 | 物料 | 路径 | 说明 |
 |---|---|---|
-| H5 包体 | `abyss-idle-taptap-2.0.0.zip`(项目根) | 0.57MB,已按规范组包:第一级唯一文件夹 `abyssidle/`,入口 `index.html`,全相对路径(2026-10-03 含矮横屏适配修复) |
+| H5 包体(现行) | `abyss-idle-taptap-2.3.1.zip`(项目根) | 1.19MB,72 文件;**已烘焙排行榜端点 `https://47.99.151.214:8788`**(IP 证书,见 `docs/ecs-https-lb.md`)。旧 2.0.0 包无端点,大陆玩家榜单静默降级,勿再使用 |
 | 图标(旧) | `store-assets/icon-512.png` | 剑形图标,已被 icon-512-new 替代 |
 | 截图×5(旧) | `store-assets/shot-1~5-*.png` | 896×414,已被 hd-shot 系列替代 |
 
@@ -111,9 +111,14 @@
 
 ## 技术备注(开发者向)
 
-- 打包脚本 `scripts/package-taptap.sh`:`VITE_BASE=./` 相对路径构建 →
-  校验无根绝对路径 → python zipfile 组包(zip 内统一正斜杠)。
+- 打包脚本 `scripts/package-taptap.sh`:`VITE_BASE=./` 相对路径构建 +
+  `VITE_LB_API`(默认 `https://47.99.151.214:8788`,`LB_API=` 可覆盖)注入排行榜/云档端点 →
+  校验无根绝对路径 + **端点已注入产物**(防 import.meta.env 替换失效静默回落 Workers)→
+  python zipfile 组包(zip 内统一正斜杠)。
+- 端点为什么是 https IP:8788:TapTap 托管页为 HTTPS,http 接口被混合内容拦截;
+  ECS 用 Let's Encrypt IP 证书做了 TLS 前置(nginx 8788 → 8787),网站版与 TapTap 版
+  同一个 SQLite 库。运维/续期/换 IP 见 `docs/ecs-https-lb.md`。
 - `store-assets/demo-save.json` 由 `scripts/mk_demo_save.ts` 核心快进 3h 生成(Lv.46),
   供重截商店图用。注意:注入存档要在**同源静态页**(如 manifest.webmanifest)写
   localStorage 再导航进游戏——游戏 `pagehide` 会把旧档写回,直接在游戏页注入会被覆盖。
-- 大陆玩家访问 Supabase(排行榜/云存档)可能不稳,游戏本体托管在 TapTap CDN 不受影响。
+- 大陆玩家访问 Supabase(**登录云档**专用;排行榜/云档快照不走它)可能不稳,游戏本体托管在 TapTap CDN 不受影响。
