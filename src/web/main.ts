@@ -3048,8 +3048,8 @@ function renderLeaderboard(st: State): void {
     rows = `<div style="color:var(--dim);padding:26px;text-align:center">加载中…</div>`;
   }
   list.innerHTML =
-    `<h3><span class="dot"></span>${LB_BOARD_NAMES[lbBoard]}${lbPeriod === "week" ? "(本周)" : ""}
-      <span class="rt">${segs}${periodSegs}</span></h3>${rows}
+    `<h3><span class="dot"></span>${LB_BOARD_NAMES[lbBoard]}${lbPeriod === "week" ? "(本周)" : ""}</h3>
+    <div class="lb-segbar">${segs}<span class="lb-seg-split"></span>${periodSegs}</div>${rows}
     <p style="color:var(--dim);font-size:11.5px;margin-top:10px">
       匿名提交(设备标识,无需登录);仅保留每榜前 50 名,落榜数据不保留;周榜每周一 0 点重置。</p>`;
 }

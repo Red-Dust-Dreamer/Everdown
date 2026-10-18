@@ -814,6 +814,12 @@ select.sel{background:#1b1b2a;color:var(--txt);border:1px solid var(--line2);
 /* ---------------- 排行榜页 ---------------- */
 .lb-me-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;
   background:#15152299;border:1px solid #20202f;border-radius:8px;padding:10px 12px}
+/* 切榜分段条:单行不换行,横向可滑动(手机端按钮放不下整行,后面的榜靠滑动触达) */
+.lb-segbar{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;overflow-x:auto;
+  -webkit-overflow-scrolling:touch;scrollbar-width:none;margin:-4px 0 10px;padding-bottom:2px}
+.lb-segbar::-webkit-scrollbar{display:none}
+.lb-segbar .btn{flex:none}
+.lb-seg-split{width:1px;height:18px;flex:none;background:var(--line2);margin:0 2px}
 .lb-me-row .k{color:var(--dim);margin-right:4px}
 .lb-me-row b{color:#fff;font-variant-numeric:tabular-nums;margin-right:8px}
 .lb-rank-badge{margin-left:auto;font-size:12.5px;font-weight:700;color:var(--dim);
