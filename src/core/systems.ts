@@ -11,7 +11,10 @@ export interface Quest { type: string; target: number; progress: number; gold: n
 
 export function rollQuest(zone: number, rng: PyRandom): Quest {
   const qt = rng.choice(QUEST_TYPES);
-  const target = Math.max(1, pyRound(qt.base * Math.pow(qt.growth, Math.max(0, zone - 1))));
+  // 目标指数在 30 区封顶:深区(150+ 区原公式目标会到 10 位以上)悬赏必须保持可完成,
+  // 否则整条悬赏收入线在深层断裂;奖励侧仍是次线性缓涨,无需封顶
+  const target = Math.max(1, pyRound(qt.base *
+    Math.pow(qt.growth, Math.min(30, Math.max(0, zone - 1)))));
   const t = (zone - 1) * 10;
   const goldBase = BAL.gold0 + BAL.gold_k * Math.pow(t, BAL.gold_p);
   const gold = Math.trunc(goldBase * qt.goldK * (1 + rng.uniform(0, 0.3)));

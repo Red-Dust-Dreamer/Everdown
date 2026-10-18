@@ -27,7 +27,7 @@ import { fmt, dwidth } from "../core/ansi.ts";
 import { buffPct, atkNow, skillVal } from "../core/skills.ts";
 import { heroPower, powerWithEquip, powerWithRelic } from "../core/power.ts";
 import type { ResolveReport } from "../core/systems.ts";
-import { resolveOffline } from "../core/systems.ts";
+import { resolveOffline, rollQuest } from "../core/systems.ts";
 
 // ================================================================ 断言工具
 function ok(cond: boolean, msg: string): void {
@@ -1046,6 +1046,22 @@ function testPreClassFrozen(): void {
   ok(g.playtime > 0, "选完职业时钟走动");
 }
 
+// ================================================================ 32. 悬赏目标封顶(深区不爆指数)
+function testQuestTargetCap(): void {
+  // 同种子下 rng 消费序列一致,各区能 roll 到的目标集合只差指数项,可确定性比较
+  const rollMax = (zone: number, seed = 42): number => {
+    const r = new PyRandom(seed);
+    let mx = 0;
+    for (let i = 0; i < 60; i++) mx = Math.max(mx, rollQuest(zone, r).target);
+    return mx;
+  };
+  const m31 = rollMax(31);
+  eq(rollMax(150), m31, "150 区目标 = 31 区目标(指数已封顶)");
+  eq(rollMax(999), m31, "999 区目标同样封顶");
+  ok(rollMax(20) < m31, "20 区目标低于封顶值(30 区前原曲线保留)");
+  ok(m31 <= 1400, "封顶量级合理(击杀类 20×1.15^30 ≈ 1324)");
+}
+
 // ================================================================ 16. 祭坛批量(×N 精确扣费 / MAX 至不足 / ×1 委托 / 预估 ±1)
 function testAltarBatch(): void {
   const g = newGame(426242);
@@ -1623,6 +1639,7 @@ const TESTS: [string, () => void][] = [
   ["29.定向锻造(解锁/费用/必带词缀/自动出售豁免)", testForge],
   ["30.塔怪技能(每层变数)", testTowerSkills],
   ["31.成就第三梯队(经济打点/新维度跨档)", testAchThirdWave],
+  ["32.悬赏目标封顶(深区不爆指数)", testQuestTargetCap],
 ];
 
 let failed = 0;
