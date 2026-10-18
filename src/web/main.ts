@@ -130,6 +130,9 @@ interface State {
   rebirths: number; can_rebirth: boolean; rebirth_min_level: number;
   /** 本世最远区域(方案B 转生深度权重预览) */
   run_max_zone: number;
+  /** 魂晶(转生货币)+ 终身获得 + 天赋总级数 + 定向锻造解锁态 */
+  essence: number; lifetime_essence: number; talent_total: number;
+  forge_unlocked: boolean;
   /** 推进受阻(自动转挂机中)= 游戏自身的"卡墙"信号;转生推荐的时机 */
   stuck: boolean;
   gold: number; stones: number; playtime: number; time: number;
@@ -387,6 +390,9 @@ function buildState(g: Game): State {
     rebirths: g.rebirths, can_rebirth: g.canRebirth(),
     rebirth_min_level: D.BAL.rebirth_min_level,
     run_max_zone: g.runMaxZone,
+    essence: g.essence, lifetime_essence: g.lifetimeEssence,
+    talent_total: Object.values(g.talents).reduce((s, v) => s + v, 0),
+    forge_unlocked: g.canForge(),
     stuck: g.mode === "farm" && g.autoFarm,
     gold: g.gold, stones: g.stones, playtime: g.playtime, time: g.time,
     zone: g.zone, stage: g.stage, stage_kills: g.stageKills,
@@ -582,6 +588,10 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
     case "signin_claim": g.claimSignin(); break;
     case "weekly_chest": if (a) g.claimWeeklyChest(a); break;
     case "set_title": g.setTitle(a ?? ""); break;
+    case "talent_up": if (a) g.talentUp(a); break;
+    case "forge_slot": if (a) forgeSlot = a; break;
+    case "forge_affix": if (a) forgeAffix = a; break;
+    case "forge_go": g.craft(forgeSlot, forgeAffix); break;
     case "redeem": {
       const input = document.querySelector("#redeem-input") as HTMLInputElement | null;
       const code = (a ?? input?.value ?? "").trim();
@@ -1340,6 +1350,8 @@ function renderNow(): void {
   renderSettings(st);
   renderAutoSellModal(st);
   renderTitlesModal(st);
+  renderTalentModal(st);
+  renderForgeModal(st);
   renderOverlays(st);
   renderGearModal(st);
   if (dmgOpen) $("dmg-body").innerHTML = dpsMeter.html();
@@ -1364,6 +1376,16 @@ function renderTop(st: State): void {
   $("res-lv").innerHTML = `Lv.<span class="v">${st.level}</span>`;
   $("res-gold").innerHTML = `◈ <span class="v">${fmt(st.gold)}</span>`;
   $("res-stone").innerHTML = `✦ <span class="v">${fmt(st.stones)}</span>`;
+  // 魂晶:首次转生后才上顶栏(前 50 级不占位)
+  const re = $("res-essence");
+  if (st.essence > 0 || st.rebirths >= 1) {
+    re.style.display = "";
+    re.innerHTML = `✧ <span class="v">${fmt(st.essence)}</span>`;
+    re.title = `魂晶 ✧${fmt(st.essence)}(终身获得 ${fmt(st.lifetime_essence)})` +
+      ` —— 转生收获的永久货币,角色页「深渊天赋」消费`;
+  } else {
+    re.style.display = "none";
+  }
   $("res-time").textContent = "⏱ " + fmtTime(st.playtime);
   const xpPct = Math.min(100, st.xp / st.xp_req * 100);
   $("res-lv").title = `经验 ${fmt(st.xp)} / ${fmt(st.xp_req)} (${xpPct.toFixed(1)}%)`;
@@ -1385,7 +1407,13 @@ function itemAffixLine(it: ItemUI): string {
 }
 
 function renderBattle(st: State): void {
-  if (!st.class_id) return;
+  // 无职业(重置后回到选择屏):清空战场,别残留上一局的怪名/技能栏
+  if (!st.class_id) {
+    $("stage-inner").innerHTML = "";
+    $("stage-track").innerHTML = "";
+    $("skillbar-card").innerHTML = "";
+    return;
+  }
   heroModelSync(st);
   const h = st.hero;
   const hpPct = Math.max(0, Math.min(100, h.hp / h.max_hp * 100));
@@ -1559,6 +1587,7 @@ function renderHeroPage(st: State): void {
       `战力构成:输出 ${fmt(pw.offense)} · 生存 ${fmt(pw.defense)} · 功能 ${fmt(pw.utility)}` +
       `(按第 ${Math.max(1, st.stats.max_zone)} 区假人折算,含生效增益)</div>` : "") +
     rebirthBlockHtml(st) +
+    talentEntryHtml(st) +
     titleEntryHtml(st) +
     `<h3 style="margin-top:16px"><span class="dot"></span>装备框 · 点击槽位查看属性与操作</h3>` +
     `<div class="gear-frame">${frame}</div>`;
@@ -1618,6 +1647,7 @@ function rebirthBlockHtml(st: State): string {
     Math.max(D.BAL.rebirth_k_min, st.run_max_zone / D.BAL.rebirth_depth_ref));
   const kStat = Math.round(D.BAL.rebirth_stat_pct * k * 10) / 10;
   const kGain = Math.round(D.BAL.rebirth_gain_pct * k * 10) / 10;
+  const kEss = Math.max(1, Math.round(k * D.BAL.rebirth_essence_base));
   const r1 = (v: number): string => v === Math.trunc(v) ? String(v) : v.toFixed(1);
   const action = st.can_rebirth && st.stuck
     ? `<button class="btn big sell-on" data-cmd="rebirth">♻ 转生(推荐,×${k.toFixed(2)} 档)</button>`
@@ -1636,12 +1666,68 @@ function rebirthBlockHtml(st: State): string {
         `<span>攻击/生命/防御 <b>+${r1(Math.round(statPct * 10) / 10)}%</b></span>` +
         `<span>金币/经验 <b>+${r1(Math.round(gainPct * 10) / 10)}%</b></span>` +
       `</div>` +
-      `<div class="rb-desc">重置本局成长(等级/装备/金币/技能等级),保留成就·祭坛·遗物·塔记录·背包容量${st.rebirths === 0 ? ";转生可换职业" : ""}。<br>` +
+      `<div class="rb-desc">重置本局成长(等级/装备/金币/技能等级),保留成就·祭坛·遗物·塔记录·背包容量·<b>魂晶与天赋</b>${st.rebirths === 0 ? ";转生可换职业" : ""}。<br>` +
       `<b>收获随本世深度:</b>本世最远 ${st.run_max_zone} 区 → 本次 ` +
-      `<b style="color:var(--gold)">×${k.toFixed(2)} 档(三围 +${kStat}% · 金币经验 +${kGain}%)</b>` +
+      `<b style="color:var(--gold)">×${k.toFixed(2)} 档(三围 +${kStat}% · 金币经验 +${kGain}% · 魂晶 ✧${kEss})</b>` +
       `;${D.BAL.rebirth_depth_ref} 区=基准 ×1 档,封顶 ×${D.BAL.rebirth_k_max} 档。</div>` +
       timing + action +
     `</div>`;
+}
+
+/** 深渊天赋入口(功能按钮):角色页一行摘要,点开弹窗才是天赋树 */
+function talentEntryHtml(st: State): string {
+  const locked = st.rebirths < 1;
+  const desc = locked
+    ? "转生后解锁:魂晶 ✧ 是转生收获的永久货币,在此消费"
+    : `总等级 ${st.talent_total} · 持有魂晶 ✧${fmt(st.essence)}` +
+      (st.essence > 0 ? " · 有可分配" : "");
+  return `<div class="set-row" style="margin-top:12px"><div class="lbl">✧ 深渊天赋` +
+    `<div class="d">${desc}</div></div>` +
+    (locked
+      ? `<button class="btn" disabled title="首次转生后解锁">🔒 转生解锁</button>`
+      : `<button class="btn" data-local="talents">加点 ▾</button>` +
+        (st.essence > 0 ? `<span class="qm-dot"></span>` : "")) +
+    `</div>`;
+}
+
+/** 深渊天赋弹窗:三支系 × 各节点(升级/门槛/满级);点「+1」即买,弹窗保持打开 */
+let talentMenu = false;
+function renderTalentModal(st: State): void {
+  const m = $("talent-modal");
+  if (!talentMenu || !st.class_id) {
+    if (!st.class_id) talentMenu = false;
+    m.classList.remove("show");
+    return;
+  }
+  m.classList.add("show");
+  $("talent-sub").textContent =
+    `持有魂晶 ✧${fmt(g.essence)} · 终身获得 ${fmt(g.lifetimeEssence)} · 总等级 ${st.talent_total}` +
+    `;天赋永久生效,转生不重置;节点按转生世数逐步解锁`;
+  const branchHtml = D.TALENT_BRANCHES.map(br => {
+    const nodes = D.TALENTS.filter(t => t.branch === br.id).map(t => {
+      const lv = g.talentLevel(t.id);
+      const maxed = lv >= t.maxLv;
+      const gated = g.talentGated(t.id);
+      const cost = g.talentCost(t.id);
+      // 当前合计效果:stat 节点按 per×lv;特殊节点给条数式说明
+      const cur = t.kind === "stat" && lv > 0
+        ? `(当前 +${numTxt((t.per ?? 0) * lv)}${t.op === "add" ? " 点" : "%"})` : "";
+      const btn = gated
+        ? `<button class="btn mini" disabled title="转生世数不足">🔒 转生 ${t.reqRebirth} 世</button>`
+        : maxed
+          ? `<span class="tal-maxed">已满级</span>`
+          : `<button class="btn mini${g.essence >= (cost ?? 0) ? " sell-on" : ""}"` +
+            ` data-cmd="talent_up" data-a="${t.id}">+1 ✧${cost}</button>`;
+      return `<div class="tal-node${maxed ? " maxed" : ""}">` +
+        `<div class="tn-head"><span class="ic">${t.icon}</span>` +
+        `<span class="nm">${esc(t.name)}</span><span class="lv">${lv}/${t.maxLv}</span></div>` +
+        `<div class="tn-desc">${esc(t.desc)}${cur ? ` <b>${cur}</b>` : ""}</div>` +
+        `<div class="tn-op">${btn}</div></div>`;
+    }).join("");
+    return `<div class="tal-branch"><h4>${br.icon} ${br.name}` +
+      `<span class="tal-blurb">${br.blurb}</span></h4>${nodes}</div>`;
+  }).join("");
+  $("talent-body").innerHTML = `<div class="tal-branches">${branchHtml}</div>`;
 }
 
 /** 一键出售的品质档(≤ 该档全卖);UI 会话级状态,默认精良(原「普通/精良」行为) */
@@ -1671,6 +1757,9 @@ function renderBag(st: State): void {
   $("bag-list").innerHTML =
     `<h3><span class="dot"></span>背包 · ${st.bag.length} / ${st.bag_cap}` +
     `<span class="rt">` +
+      (st.forge_unlocked
+        ? `<button class="btn mini" data-local="forge" title="指定部位与一条必带词缀,稀有度保底稀有+">⚒ 定向锻造▾</button>`
+        : "") +
       (st.bag_expand_cost !== null
         ? `<button class="btn mini" data-cmd="bag_expand" title="金币扩容 +10 格">扩容 ◈${fmt(st.bag_expand_cost)}</button>`
         : `<span style="color:var(--dim);font-size:11px">背包已满级</span>`) +
@@ -1680,6 +1769,46 @@ function renderBag(st: State): void {
       `<span class="hint">(出售/分解 ≤ 该品质;🔒 锁定件两侧都跳过)</span></div>` +
     (cards ? `<div class="bag-grid">${cards}</div>`
            : `<div style="color:var(--dim);padding:30px;text-align:center">背包空空如也</div>`);
+}
+
+// ---------------------------------------------------------------- 定向锻造(天赋「深渊锻造台」解锁)
+let forgeMenu = false;
+let forgeSlot = "weapon";
+let forgeAffix = "crit";
+function renderForgeModal(st: State): void {
+  const m = $("forge-modal");
+  if (!forgeMenu || !st.class_id || !st.forge_unlocked) {
+    if (!st.class_id || !st.forge_unlocked) forgeMenu = false;
+    m.classList.remove("show");
+    return;
+  }
+  m.classList.add("show");
+  const cost = g.forgeCost();
+  $("forge-sub").textContent =
+    `按当前区域档 T${cost.tier} 计价;稀有度保底稀有+,必带所选词缀,其余同自然掉落`;
+  const slotChips = D.SLOTS.map(s =>
+    `<button class="btn mini${s.id === forgeSlot ? " on sell-on" : ""}"` +
+    ` data-cmd="forge_slot" data-a="${s.id}">${s.name}</button>`).join("");
+  const affixChips = D.AFFIXES.map(a =>
+    `<button class="btn mini${a.id === forgeAffix ? " on sell-on" : ""}"` +
+    ` data-cmd="forge_affix" data-a="${a.id}"` +
+    ` title="${a.id === "skill_lv" ? "绑定当前职业一个随机技能" : ""}">` +
+    `${esc(a.name)}${a.id === "skill_lv" ? "★" : ""}</button>`).join("");
+  const ok = g.gold >= cost.gold && g.stones >= cost.stones;
+  $("forge-body").innerHTML =
+    `<div class="forge-lbl">部位(必选其一)</div>` +
+    `<div class="title-chips">${slotChips}</div>` +
+    `<div class="forge-lbl">必带词缀(★=绑定随机技能)</div>` +
+    `<div class="title-chips">${affixChips}</div>` +
+    `<div class="forge-cost">T${cost.tier} 档 · 费用 ` +
+      `<span style="color:var(--gold)">◈${fmt(cost.gold)}</span> + ` +
+      `<span style="color:#c9a86f">✦${cost.stones}</span>` +
+      (ok ? "" : ` <span style="color:#ff8a8a">(资源不足)</span>`) + `</div>` +
+    `<div class="swap-ops">` +
+      `<button class="btn big${ok ? " sell-on" : ""}" data-cmd="forge_go">⚒ 开始锻造</button>` +
+    `</div>` +
+    `<p style="color:var(--dim);font-size:11.5px;margin-top:6px">` +
+      `锻造件不受「掉落自动出售」影响;更强时照常弹对比/自动换装。费用随当前区域档上涨——想省就回浅区锻。</p>`;
 }
 
 
@@ -2461,6 +2590,8 @@ function localCmd(name: string): void {
   } else if (name === "import") ($("file-input") as HTMLInputElement).click();
   else if (name === "autosell") { autoSellMenu = true; renderNow(); }
   else if (name === "titles") { titlesMenu = true; renderNow(); }
+  else if (name === "talents") { talentMenu = true; renderNow(); }
+  else if (name === "forge") { forgeMenu = true; renderNow(); }
   else if (name === "help") $("help-modal").classList.add("show");
   else if (name === "sfx") toggleSfx();
   else if (name === "bgm") toggleBgm();
@@ -2510,6 +2641,8 @@ document.addEventListener("keydown", (e: KeyboardEvent) => {
     }
     if (autoSellMenu) { autoSellMenu = false; renderNow(); return; }
     if (titlesMenu) { titlesMenu = false; renderNow(); return; }
+    if (talentMenu) { talentMenu = false; renderNow(); return; }
+    if (forgeMenu) { forgeMenu = false; renderNow(); return; }
     if (questModal) { questModal = null; renderNow(); return; }
     if (dmgOpen) { setDmgPanel(false); return; }
   }
@@ -3099,6 +3232,16 @@ function boot(): void {
   $("titles-modal").addEventListener("click", (e: Event) => {
     if (e.target === e.currentTarget) { titlesMenu = false; renderNow(); }
   });
+  // 深渊天赋弹窗:✕ 与点遮罩都能关(升级在弹窗内直接点,不关弹窗)
+  $("talent-close").addEventListener("click", () => { talentMenu = false; renderNow(); });
+  $("talent-modal").addEventListener("click", (e: Event) => {
+    if (e.target === e.currentTarget) { talentMenu = false; renderNow(); }
+  });
+  // 定向锻造弹窗:✕ 与点遮罩都能关(选部位/词缀/锻造在弹窗内直接点,不关弹窗)
+  $("forge-close").addEventListener("click", () => { forgeMenu = false; renderNow(); });
+  $("forge-modal").addEventListener("click", (e: Event) => {
+    if (e.target === e.currentTarget) { forgeMenu = false; renderNow(); }
+  });
   // 活动中心弹窗:✕ 与点遮罩都能关(签到/宝箱/刷新在弹窗内直接点,不关弹窗)
   $("quest-close").addEventListener("click", () => { questModal = null; renderNow(); });
   $("quest-modal").addEventListener("click", (e: Event) => {
@@ -3147,7 +3290,7 @@ function boot(): void {
       const away = (Date.now() - hiddenAt) / 1000;
       hiddenAt = 0;
       last = performance.now();
-      if (away >= RESOLVE_MIN_SEC) {
+      if (away >= RESOLVE_MIN_SEC && g.classId !== null) {
         const rep = systems.resolve(g, away);
         g.toast(`页面离开 ${Math.trunc(away / 60)} 分:补算 ${rep.kills} 击杀 +${rep.gold} 金币`);
       }

@@ -957,3 +957,25 @@ select.sel{background:#1b1b2a;color:var(--txt);border:1px solid var(--line2);
 .rb-timing{font-size:12px;line-height:1.6;color:var(--dim);margin-top:2px}
 .rb-timing.stuck{color:#ffd94a;font-weight:700}
 .rebirth-card.stuck{border-color:#6bff8f;box-shadow:0 0 0 1px #6bff8f2e}
+
+/* ---- 深渊天赋(2.4):三支系节点树弹窗 + 顶栏魂晶 ---- */
+.res-essence{color:#8fd8ff}
+.tal-branches{display:grid;grid-template-columns:repeat(auto-fit,minmax(196px,1fr));gap:12px;margin-top:10px}
+.tal-branch h4{font-size:13.5px;color:#fff;border-bottom:1px solid var(--line2);
+  padding-bottom:6px;margin-bottom:2px}
+.tal-blurb{color:var(--dim);font-size:11px;margin-left:6px;font-weight:400}
+.tal-node{border:1px solid var(--line2);border-radius:8px;padding:8px 10px;margin-top:8px;
+  background:#12121d;display:flex;flex-direction:column}
+.tal-node .tn-head{display:flex;align-items:center;gap:6px;font-size:13px;color:#fff}
+.tal-node .tn-head .ic{font-size:15px}
+.tal-node .lv{margin-left:auto;color:var(--dim);font-size:11.5px}
+.tal-node .tn-desc{font-size:11.8px;color:var(--dim);margin:4px 0 6px;line-height:1.5}
+.tal-node .tn-desc b{color:#bfe9ff;font-weight:600}
+.tal-node .tn-op{display:flex;justify-content:flex-end;margin-top:auto}
+.tal-node.maxed{border-color:#2a4a35}
+.tal-maxed{color:#9adfba;font-size:12px}
+@media (max-width:768px){.tal-branches{grid-template-columns:1fr}}
+
+/* ---- 定向锻造(2.4) ---- */
+.forge-lbl{font-size:12px;color:var(--dim);margin:8px 0 2px}
+.forge-cost{font-size:13px;text-align:center;margin:10px 0 2px;color:var(--txt)}

@@ -20,13 +20,15 @@ export const RARITY_PREFIX = ["破旧的", "精制的", "秘银", "龙裔", "星
 // ---------------------------------------------------------------- 属性键
 export type StatKey = "atk" | "def" | "hp" | "haste" | "crit" | "crit_dmg"
   | "lifesteal" | "goldfind" | "skill_lv" | "skill_dmg" | "cd_reduce"
-  | "dodge" | "armor_pierce" | "xp_pct" | "dmg_pct" | "luck" | "all";
+  | "dodge" | "armor_pierce" | "xp_pct" | "dmg_pct" | "luck" | "all"
+  | "boss_dmg_r" | "kill_heal" | "deathward";
 export const STAT_NAMES: Record<string, string> = {
   atk: "攻击", def: "防御", hp: "生命", haste: "攻速",
   crit: "暴击率", crit_dmg: "暴击伤害", lifesteal: "吸血",
   goldfind: "金币加成", dmg_pct: "伤害加成",
   skill_lv: "全技能等级", skill_dmg: "技能伤害", cd_reduce: "冷却缩减",
   dodge: "闪避", armor_pierce: "无视防御", xp_pct: "经验加成", luck: "幸运",
+  boss_dmg_r: "猎首", kill_heal: "击杀回血", deathward: "不死",
   // buff 键补充(buff 条/药剂显示用)
   gold: "金币", xp: "经验", all: "全属性",
 };
@@ -306,19 +308,26 @@ export interface AchievementDef {
   stat: string; per: number;
 }
 export const ACHIEVEMENTS: AchievementDef[] = [
-  { id: "slayer", name: "深渊猎手", metric: "kills", thresholds: [100, 1000, 10000, 50000, 150000, 500000], stat: "atk", per: 4 },
-  { id: "zonewalk", name: "开疆拓土", metric: "max_zone", thresholds: [3, 6, 10, 15, 25, 40, 60, 100], stat: "hp", per: 6 },
-  { id: "smith", name: "锻造宗师", metric: "enhance_total", thresholds: [10, 50, 200, 600, 2000], stat: "def", per: 5 },
-  { id: "boss", name: "弑主者", metric: "boss_kills", thresholds: [10, 50, 200, 800, 2400, 8000], stat: "crit", per: 2 },
-  { id: "tycoon", name: "深渊富豪", metric: "gold_earned", thresholds: [1e4, 1e5, 1e6, 1e8, 1e10], stat: "goldfind", per: 5 },
+  { id: "slayer", name: "深渊猎手", metric: "kills", thresholds: [100, 1000, 10000, 50000, 150000, 500000, 2000000], stat: "atk", per: 4 },
+  { id: "zonewalk", name: "开疆拓土", metric: "max_zone", thresholds: [3, 6, 10, 15, 25, 40, 60, 100, 150, 250], stat: "hp", per: 6 },
+  { id: "smith", name: "锻造宗师", metric: "enhance_total", thresholds: [10, 50, 200, 600, 2000, 8000], stat: "def", per: 5 },
+  { id: "boss", name: "弑主者", metric: "boss_kills", thresholds: [10, 50, 200, 800, 2400, 8000, 24000], stat: "crit", per: 2 },
+  { id: "tycoon", name: "深渊富豪", metric: "gold_earned", thresholds: [1e4, 1e5, 1e6, 1e8, 1e10, 1e12], stat: "goldfind", per: 5 },
   { id: "death", name: "不死鸟", metric: "deaths", thresholds: [1, 10, 50, 200, 800], stat: "hp", per: 3 },
   // ---- 2.3 第二梯队:终身统计已有数据、此前无人消费的六个新维度 ----
-  { id: "rebirther", name: "轮回大师", metric: "rebirths", thresholds: [1, 5, 15, 40], stat: "atk", per: 4 },
-  { id: "climber", name: "登塔者", metric: "max_floor", thresholds: [5, 15, 30, 50], stat: "def", per: 5 },
-  { id: "bounty", name: "赏金猎人", metric: "quest_done", thresholds: [10, 50, 150, 400], stat: "goldfind", per: 5 },
-  { id: "alchemist", name: "炼金术士", metric: "reforge_total", thresholds: [5, 25, 100, 300], stat: "hp", per: 3 },
-  { id: "fatality", name: "致命一击", metric: "crit_hits", thresholds: [1000, 10000, 100000], stat: "crit", per: 2 },
-  { id: "dweller", name: "深渊住民", metric: "playtime", thresholds: [3600, 21600, 86400, 432000], stat: "xp_pct", per: 2 },
+  { id: "rebirther", name: "轮回大师", metric: "rebirths", thresholds: [1, 5, 15, 40, 100, 200], stat: "atk", per: 4 },
+  { id: "climber", name: "登塔者", metric: "max_floor", thresholds: [5, 15, 30, 50, 80, 120], stat: "def", per: 5 },
+  { id: "bounty", name: "赏金猎人", metric: "quest_done", thresholds: [10, 50, 150, 400, 1200], stat: "goldfind", per: 5 },
+  { id: "alchemist", name: "炼金术士", metric: "reforge_total", thresholds: [5, 25, 100, 300, 1000], stat: "hp", per: 3 },
+  { id: "fatality", name: "致命一击", metric: "crit_hits", thresholds: [1000, 10000, 100000, 500000], stat: "crit", per: 2 },
+  { id: "dweller", name: "深渊住民", metric: "playtime", thresholds: [3600, 21600, 86400, 432000, 1296000], stat: "xp_pct", per: 2 },
+  // ---- 2.4 第三梯队:经济循环与转生深度(新统计口径,见 game.ts 打点) ----
+  { id: "scavenger", name: "拾荒者", metric: "sold_total", thresholds: [100, 1000, 10000, 50000], stat: "goldfind", per: 3 },
+  { id: "crusher", name: "粉碎机", metric: "dismantled", thresholds: [25, 200, 1200, 5000], stat: "hp", per: 3 },
+  { id: "chronicler", name: "编年史家", metric: "signin_total", thresholds: [7, 30, 100, 365], stat: "xp_pct", per: 2 },
+  { id: "forger", name: "深渊锻造师", metric: "crafted", thresholds: [5, 30, 120, 500], stat: "atk", per: 3 },
+  { id: "awakened", name: "天赋觉醒", metric: "talent_total", thresholds: [5, 20, 50, 100], stat: "def", per: 3 },
+  { id: "soulkeeper", name: "魂晶收藏家", metric: "essence_total", thresholds: [25, 100, 400, 1500], stat: "atk", per: 2 },
 ];
 
 // ---------------------------------------------------------------- 每日签到(2.3):7 日循环,断签重置
@@ -366,6 +375,73 @@ export const TITLES: TitleDef[] = [
   { id: "t_reb40", name: "万劫归一", cond: "转生 40 次" },
   { id: "t_week", name: "周征服者", cond: "周常全部完成" },
 ];
+
+// ---------------------------------------------------------------- 深渊天赋(2.4):转生货币「魂晶」的消费端
+// 魂晶 = 转生时按收获档位 k 发放(round(k × rebirth_essence_base),至少 1);
+// 天赋永久生效、转生不重置;节点按转生世数(floor(rebirths))分档解锁 ——
+// 转得越多,树越深,给每一世新的可规划目标(转生消费端)。
+export interface TalentDef {
+  id: string;
+  branch: "war" | "guard" | "abyss";   // 征伐 / 坚忍 / 深渊
+  name: string; icon: string;
+  maxLv: number;
+  cost0: number; costStep: number;     // 升下一级费用 = cost0 + costStep × 当前级
+  reqRebirth: number;                  // 解锁门槛:转生世数(floor(rebirths))
+  kind: "stat" | "special";
+  stat?: StatKey; op?: "add" | "pct"; per?: number;   // stat:走统一修饰管道
+  special?: "start_zone" | "offline_cap" | "forge";   // 特殊节点,消费点见 game.ts
+  /** 每级效果描述(数值已内联;当前合计由 UI 按 per×lv 现算) */
+  desc: string;
+  /** 特殊节点的每级数值(start_zone:+2 起始区/级;offline_cap:+1h/级) */
+  perSpecial?: number;
+}
+export const TALENT_BRANCHES: { id: TalentDef["branch"]; name: string; icon: string; blurb: string }[] = [
+  { id: "war", name: "征伐", icon: "⚔", blurb: "输出与猎杀" },
+  { id: "guard", name: "坚忍", icon: "🛡", blurb: "生存与续航" },
+  { id: "abyss", name: "深渊", icon: "✧", blurb: "资源与轮回" },
+];
+export const TALENTS: TalentDef[] = [
+  // ---- 征伐 ----
+  { id: "t_atk", branch: "war", name: "利刃精粹", icon: "⚔", maxLv: 10, cost0: 2, costStep: 2,
+    reqRebirth: 1, kind: "stat", stat: "atk", op: "pct", per: 2.5, desc: "每级攻击 +2.5%" },
+  { id: "t_crit", branch: "war", name: "猎杀直觉", icon: "🎯", maxLv: 5, cost0: 4, costStep: 3,
+    reqRebirth: 2, kind: "stat", stat: "crit", op: "add", per: 0.8, desc: "每级暴击率 +0.8 点" },
+  { id: "t_critdmg", branch: "war", name: "灭杀狂怒", icon: "💥", maxLv: 5, cost0: 8, costStep: 4,
+    reqRebirth: 5, kind: "stat", stat: "crit_dmg", op: "add", per: 6, desc: "每级暴击伤害 +6%" },
+  { id: "t_skill", branch: "war", name: "奥术共鸣", icon: "✦", maxLv: 10, cost0: 6, costStep: 3,
+    reqRebirth: 8, kind: "stat", stat: "skill_dmg", op: "add", per: 5, desc: "每级技能伤害 +5%" },
+  { id: "t_hunt", branch: "war", name: "深渊猎杀", icon: "☠", maxLv: 5, cost0: 10, costStep: 5,
+    reqRebirth: 12, kind: "stat", stat: "boss_dmg_r", op: "add", per: 4, desc: "每级对精英与头目伤害 +4%" },
+  // ---- 坚忍 ----
+  { id: "t_hp", branch: "guard", name: "生命精粹", icon: "❤", maxLv: 10, cost0: 2, costStep: 2,
+    reqRebirth: 1, kind: "stat", stat: "hp", op: "pct", per: 3, desc: "每级生命 +3%" },
+  { id: "t_def", branch: "guard", name: "铁壁精粹", icon: "🛡", maxLv: 10, cost0: 2, costStep: 2,
+    reqRebirth: 1, kind: "stat", stat: "def", op: "pct", per: 3, desc: "每级防御 +3%" },
+  { id: "t_dodge", branch: "guard", name: "影步", icon: "💨", maxLv: 5, cost0: 4, costStep: 3,
+    reqRebirth: 3, kind: "stat", stat: "dodge", op: "add", per: 1, desc: "每级闪避 +1 点" },
+  { id: "t_ward", branch: "guard", name: "不死意志", icon: "🔮", maxLv: 5, cost0: 6, costStep: 3,
+    reqRebirth: 6, kind: "stat", stat: "deathward", op: "add", per: 3, desc: "每级不死 +3%(致命伤概率保留 1 血,60s 冷却)" },
+  { id: "t_regen", branch: "guard", name: "收割回响", icon: "🩸", maxLv: 5, cost0: 8, costStep: 4,
+    reqRebirth: 10, kind: "stat", stat: "kill_heal", op: "add", per: 1, desc: "每级击杀回血 +1%(按最大生命)" },
+  // ---- 深渊 ----
+  { id: "t_gold", branch: "abyss", name: "深渊财脉", icon: "◈", maxLv: 10, cost0: 3, costStep: 2,
+    reqRebirth: 1, kind: "stat", stat: "goldfind", op: "add", per: 2, desc: "每级金币加成 +2 点" },
+  { id: "t_xp", branch: "abyss", name: "智慧沉淀", icon: "📖", maxLv: 10, cost0: 3, costStep: 2,
+    reqRebirth: 1, kind: "stat", stat: "xp_pct", op: "add", per: 2, desc: "每级经验加成 +2%" },
+  { id: "t_luck", branch: "abyss", name: "天命眷顾", icon: "🍀", maxLv: 5, cost0: 5, costStep: 3,
+    reqRebirth: 3, kind: "stat", stat: "luck", op: "add", per: 1, desc: "每级幸运 +1 点(高稀有度掉落)" },
+  { id: "t_forge", branch: "abyss", name: "深渊锻造台", icon: "⚒", maxLv: 1, cost0: 12, costStep: 0,
+    reqRebirth: 3, kind: "special", special: "forge",
+    desc: "解锁定向锻造:花费金币+重铸石,指定部位与一条必带词缀,稀有度保底稀有+" },
+  { id: "t_start", branch: "abyss", name: "轮回足迹", icon: "👣", maxLv: 5, cost0: 8, costStep: 6,
+    reqRebirth: 5, kind: "special", special: "start_zone", perSpecial: 2,
+    desc: "每级转生起始区 +2(跳过已碾过的浅层)" },
+  { id: "t_offline", branch: "abyss", name: "时之沙", icon: "⏳", maxLv: 5, cost0: 10, costStep: 5,
+    reqRebirth: 8, kind: "special", special: "offline_cap", perSpecial: 3600,
+    desc: "每级离线收益上限 +1 小时" },
+];
+export const TALENT_DEF: Record<string, TalentDef> =
+  Object.fromEntries(TALENTS.map(t => [t.id, t]));
 
 // ---------------------------------------------------------------- 兑换码(2.3):本地哈希校验,零后端
 /** 单机游戏,防君子不防小人;码表哈希内嵌,声称记录进存档防重复 */
@@ -501,6 +577,15 @@ export const BAL = {
   rebirth_stat_pct: 25,    // 每基准世:攻击/生命/防御 +25%(× k)
   rebirth_gain_pct: 10,    // 每基准世:金币加成/经验加成 +10%(× k;与 stat 同 k)
 
+  // ---- 深渊天赋(2.4):魂晶经济与定向锻造 ----
+  rebirth_essence_base: 5,   // 转生魂晶 = round(k × base),至少 1;锚点1档=5,封顶4档=20
+  forge_gold_k: 200,         // 定向锻造金币费 = 击杀金(当前区域档) × k
+  forge_stones0: 4,          // 重铸石基础费
+  forge_stones_t: 80,        // 每满 tier/80 加 1 颗
+  forge_stones_cap: 25,      // 重铸石费封顶(深层不再失控)
+  forge_min_rid: 2,          // 锻造稀有度保底:稀有+
+  forge_rarity_boost: 0.5,   // 高稀有度权重增益(介于精英 0.25 与头目 0.6 之间)
+
   // ---- 玩家自动化三开关(2.2.2):逐步放手,先强化→技能→祭坛 ----
   auto_enhance_lv: 20,     // 自动强化解锁等级
   auto_skill_lv: 30,       // 自动升技能解锁等级
@@ -510,7 +595,8 @@ export const BAL = {
   codex_per: 0.3,          // 每种 +0.3%;全 17 种 = 各 +5.1%(轻量,不扰动主线曲线)
 } as const;
 
-export const VIRTUAL_STATS = ["skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct"] as const;
+export const VIRTUAL_STATS = ["skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct",
+  "crit_extra", "kill_heal", "deathward", "boss_dmg_r", "kill_haste"] as const;
 
 // ---------------------------------------------------------------- 遗物系统(爬塔副本)
 export interface TowerDef {

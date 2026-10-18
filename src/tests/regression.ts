@@ -17,8 +17,9 @@ import type { SaveHooks } from "../core/game.ts";
 import { View } from "../core/view.ts";
 import { handleKey } from "../core/host.ts";
 import { renderFrame } from "../core/render.ts";
-import { BAL, CLASSES, ACHIEVEMENTS, MONSTERS, ACTIVE_DEF } from "../core/data.ts";
-import { Monster, battleTick } from "../core/combat.ts";
+import { BAL, CLASSES, ACHIEVEMENTS, MONSTERS, ACTIVE_DEF, RARITY_IDX } from "../core/data.ts";
+import { Monster, battleTick, tierOf } from "../core/combat.ts";
+import { towerMonster } from "../core/tower.ts";
 import { castActive, skillDesc, dotVal } from "../core/skills.ts";
 import { pyRound, Item } from "../core/items.ts";
 import { Relic, rollRelic } from "../core/relics.ts";
@@ -26,6 +27,7 @@ import { fmt, dwidth } from "../core/ansi.ts";
 import { buffPct, atkNow, skillVal } from "../core/skills.ts";
 import { heroPower, powerWithEquip, powerWithRelic } from "../core/power.ts";
 import type { ResolveReport } from "../core/systems.ts";
+import { resolveOffline } from "../core/systems.ts";
 
 // ================================================================ 断言工具
 function ok(cond: boolean, msg: string): void {
@@ -881,14 +883,19 @@ function testRebirth(): void {
   const gReload = Game.fromDict(dClean);
   eq(gReload.rebirths, 1, "往返后 rebirths");
   close(gReload.hero.atk, gClean.hero.atk, "往返后转生倍率仍生效");
-  eq(dClean.version, SAVE_VERSION, "存档版本应为最新(v8)");
+  eq(dClean.version, SAVE_VERSION, "存档版本应为最新(v9)");
 
-  // v7 → v8 迁移:无 rebirths 字段的旧档默认 0
+  // v7 → 最新迁移:无 rebirths 字段的旧档默认 0(v8 层),无魂晶/天赋字段默认 0(v9 层)
   const v7 = { ...dClean, version: 7 } as Record<string, unknown>;
   delete v7.rebirths;
+  delete v7.essence;
+  delete v7.talents;
   const m = migrateSave(v7);
-  eq(m.version, 8, "v7 迁移应到 v8");
+  eq(m.version, SAVE_VERSION, "v7 迁移应一路迁到最新");
   eq(m.rebirths, 0, "v7 旧档 rebirths 默认 0");
+  eq(m.essence, 0, "v8 旧档 essence 默认 0");
+  ok(typeof m.talents === "object" && Object.keys(m.talents).length === 0,
+    "v8 旧档 talents 默认空表");
 }
 
 // ================================================================ 23. 引导攻击(旋风斩:多跳/期间停其他攻击/断引)
@@ -1017,6 +1024,26 @@ function testChannelSkills(): void {
     const d = ACTIVE_DEF[sid];
     ok((d.channel ?? 0) < d.cd, `${sid} 冷却(${d.cd}s)须长于吟唱(${d.channel}s),否则普攻永不恢复`);
   }
+}
+
+// ================================================================ 27. 未选职业世界冻结(幽灵战士不打工)
+function testPreClassFrozen(): void {
+  const g = newGame(2052);   // 不 chooseClass
+  for (let t = 0; t < 20; t += 0.1) g.tick(0.1);
+  eq(g.playtime, 0, "未选职业 playtime 不累计");
+  eq(g.monster, null, "未选职业不刷怪");
+  eq(g.stats.kills, 0, "未选职业无击杀");
+  eq(g.level, 1, "未选职业不升级");
+  eq(g.gold, 0, "未选职业无金币");
+  eq(g.bag.length, 0, "未选职业无掉落");
+  eq(g.time, 0, "未选职业游戏时钟冻结");
+  const rep = resolveOffline(g, 7200);
+  eq(rep, null, "未选职业离线补算不结算(resolve 零报告被吞)");
+  // 选完职业立刻恢复运转
+  g.chooseClass("warrior");
+  for (let t = 0; t < 3; t += 0.1) g.tick(0.1);
+  ok(g.monster !== null, "选完职业正常刷怪");
+  ok(g.playtime > 0, "选完职业时钟走动");
 }
 
 // ================================================================ 16. 祭坛批量(×N 精确扣费 / MAX 至不足 / ×1 委托 / 预估 ±1)
@@ -1381,6 +1408,188 @@ function testRebirthDepth(): void {
   }
 }
 
+// ================================================================ 28. 深渊天赋(魂晶/消费/门槛/特殊节点/存档 v9)
+function testTalents(): void {
+  const mem = memHooks();
+  const g = newGame(426260);
+  g.chooseClass("warrior");
+
+  // —— 转生发放魂晶:锚点 k=1 → round(1×5)=5;极浅保底 1 ——
+  g.level = BAL.rebirth_min_level;
+  g.zone = BAL.rebirth_depth_ref;
+  g.runMaxZone = BAL.rebirth_depth_ref;
+  g.rebirth();
+  eq(g.rebirths, 1, "锚点转生 k=1");
+  eq(g.essence, 5, "锚点转生发放 5 魂晶");
+  eq(g.lifetimeEssence, 5, "终身获得累计");
+  eq(g.stats.essence_total, 5, "stats.essence_total 口径同步(recalcHero)");
+  ok(toastTexts(g).some(t => t.includes("魂晶")), "转生 toast 提及魂晶");
+  const gs = newGame(426259);
+  gs.chooseClass("mage");
+  gs.level = BAL.rebirth_min_level;
+  gs.zone = 10;
+  gs.runMaxZone = 10;
+  gs.rebirth();
+  eq(gs.essence, 1, "极浅转生(k=0.25)保底 1 魂晶");
+
+  // —— 消费:门槛拦截 / 魂晶不足拦截 / 精确扣费 / 修饰器生效 ——
+  ok(g.talentGated("t_critdmg"), "t_critdmg 需 5 世,当前 1 世被门槛拦住");
+  ok(!g.talentGated("t_atk"), "t_atk 1 世即可购买");
+  const atk0 = g.hero.atk;
+  g.talentUp("t_atk");
+  eq(g.talentLevel("t_atk"), 1, "购买后 Lv1");
+  eq(g.essence, 3, "扣费 2(费用 = cost0 + step×0)");
+  close(g.hero.atk, atk0 * 1.025, "t_atk Lv1:攻击 +2.5% 进修饰管道");
+  g.talentUp("t_atk");                 // 第二级费用 4 > 3:拒绝
+  eq(g.talentLevel("t_atk"), 1, "魂晶不足不升级");
+  eq(g.essence, 3, "拒绝购买不扣费");
+  g.essence = 100;
+  g.talentUp("t_atk");
+  eq(g.essence, 96, "第二级费用 4");
+  g.essence = 10000;
+  g.rebirths = 200;                    // 越过全部门槛
+  for (let i = 0; i < 20; i++) g.talentUp("t_atk");
+  eq(g.talentLevel("t_atk"), 10, "可升至满级 10");
+  eq(g.talentCost("t_atk"), null, "满级后费用 null");
+  g.recalcHero();
+  eq(g.stats.talent_total, 10, "stats.talent_total 同步");
+
+  // —— 特殊节点:离线上限(时之沙)与转生起始区(轮回足迹)——
+  g.talents.t_offline = 0;
+  eq(g.offlineCapSec(), BAL.offline_cap_sec, "无天赋时离线上限 = 基础 12h");
+  g.talents.t_offline = 3;
+  eq(g.offlineCapSec(), BAL.offline_cap_sec + 3 * 3600, "时之沙 Lv3:+3h");
+  g.talents.t_start = 2;
+  g.level = BAL.rebirth_min_level;
+  g.zone = BAL.rebirth_depth_ref;
+  g.runMaxZone = BAL.rebirth_depth_ref;
+  g.rebirth();
+  eq(g.zone, 5, "轮回足迹 Lv2:第 5 区起步");
+  eq(g.runMaxZone, 5, "本世最远随起步区初始化");
+
+  // —— 存档往返 + v8→v9 迁移 + 未知节点防御 ——
+  g.essence = 7;
+  g.lifetimeEssence = 12;
+  g.talents = { t_atk: 3, t_forge: 1, bad_node: 9 };
+  g.save();
+  const d = JSON.parse(mem.raw);
+  eq(d.essence, 7, "essence 进存档");
+  eq(d.talents.t_atk, 3, "talents 进存档");
+  eq(d.talents.bad_node, 9, "未知节点原样在档(载入时剔除)");
+  const g2 = Game.fromDict(d);
+  eq(g2.essence, 7, "往返 essence");
+  eq(g2.lifetimeEssence, 12, "往返 lifetime_essence");
+  eq(g2.talentLevel("t_atk"), 3, "往返天赋等级");
+  eq(g2.talentLevel("bad_node"), 0, "未知节点载入时剔除");
+  eq(g2.talentLevel("t_forge"), 1, "锻造解锁节点往返保真");
+  const v8 = { ...d, version: 8 } as Record<string, unknown>;
+  delete v8.essence;
+  delete v8.talents;
+  delete v8.lifetime_essence;
+  const m9 = migrateSave(v8);
+  eq(m9.version, 9, "v8 → v9");
+  eq(m9.essence, 0, "v8 旧档魂晶默认 0");
+  ok(typeof m9.talents === "object" && Object.keys(m9.talents).length === 0,
+    "v8 旧档天赋默认空表");
+}
+
+// ================================================================ 29. 定向锻造(解锁门槛/费用/必带词缀/自动出售豁免)
+function testForge(): void {
+  const g = newGame(426262);
+  g.chooseClass("warrior");
+  g.gold = 1e12;
+  g.stones = 1000;
+  ok(!g.canForge(), "未购「深渊锻造台」:不可锻造");
+  g.craft("weapon", "crit");
+  eq(g.stats.crafted ?? 0, 0, "未解锁时 craft 无效果");
+  eq(g.bag.length + Object.keys(g.equip).length, 0, "未解锁不出装备");
+
+  g.talents.t_forge = 1;
+  ok(g.canForge(), "购入天赋节点后可锻造");
+  g.zone = 30;
+  g.stage = 5;
+  const cost = g.forgeCost();
+  eq(cost.tier, tierOf(30, 5), "tier 与当前区域档同源");
+  ok(cost.gold > 0, "金币费为正");
+  ok(cost.stones >= BAL.forge_stones0, "重铸石费含基础费");
+  g.settings.auto_sell_idx = 4;        // 自动出售 ≤传说:锻造件必须豁免
+  const gold0 = g.gold, st0 = g.stones;
+  g.craft("ring", "crit");
+  eq(g.stats.crafted, 1, "锻造计数 +1");
+  eq(g.gold, gold0 - cost.gold, "金币精确扣费");
+  eq(g.stones, st0 - cost.stones, "重铸石精确扣费");
+  eq(g.stats.sold_total ?? 0, 0, "锻造件不被自动出售折现");
+  const it = g.equip.ring ?? g.bag.find(i => i.slot === "ring");
+  ok(it !== undefined, "锻造产出进游戏(自动换装或入背包)");
+  ok(it.affixes.some(a => a.id === "crit"), "必带所选词缀(暴击率)");
+  ok(RARITY_IDX[it.rarity] >= BAL.forge_min_rid, "稀有度保底稀有+");
+  eq(it.tier, cost.tier, "产物 tier = 当前区域档");
+
+  // —— 拒绝路径:背包满 / 石头不足 ——
+  g.equip = {};
+  g.bag = [];
+  for (let i = 0; i < g.bagCap(); i++) g.bag.push(new Item("weapon", "common", 5, 5, [{ id: "atk", val: 1 }]));
+  const cGold = g.gold, cStones = g.stones;
+  g.craft("ring", "crit");
+  eq(g.stats.crafted, 1, "背包满拒绝锻造");
+  eq(g.gold, cGold, "拒绝时不扣金币");
+  g.bag = [];
+  g.stones = cost.stones - 1;
+  g.craft("ring", "crit");
+  eq(g.stats.crafted, 1, "重铸石不足拒绝锻造");
+  g.stones = 1000;
+  g.craft("ring", "no_such_affix");
+  eq(g.stats.crafted, 1, "非法词缀 id 拒绝");
+}
+
+// ================================================================ 30. 塔怪技能(2.4:爬塔不再是纯普攻对拼)
+function testTowerSkills(): void {
+  const rng = new PyRandom(426263);
+  let seen = new Set<string>();
+  for (const floor of [1, 2, 3, 5, 10, 23, 25]) {
+    const mon = towerMonster(floor, rng);
+    ok(mon.skill !== null, `塔第${floor}层怪带技能(${mon.skill?.name})`);
+    if (mon.skill) seen.add(mon.skill.name);
+    eq(mon.boss, floor % 5 === 0, `第${floor}层头目判定不变`);
+  }
+  ok(seen.size >= 2, `多楼层技能有变化(实际 ${seen.size} 种)`);
+}
+
+// ================================================================ 31. 成就第三梯队(经济打点/新维度跨档)
+function testAchThirdWave(): void {
+  const g = newGame(426264);
+  g.chooseClass("warrior");
+  // —— 经济打点:出售 / 分解 / 签到 ——
+  for (const r of ["common", "fine"]) g.bag.push(new Item("weapon", r, 5, 10, [{ id: "atk", val: 1 }]));
+  g.sellJunk(1);
+  eq(g.stats.sold_total, 2, "一键出售 2 件计入 sold_total");
+  g.bag.push(new Item("weapon", "epic", 5, 10, [{ id: "atk", val: 1 }]));
+  g.dismantleJunk(5);
+  eq(g.stats.dismantled, 1, "批量分解计入 dismantled");
+  eq(g.stones >= 1, true, "史诗分解出重铸石(老口径不变)");
+  g.claimSignin();
+  eq(g.stats.signin_total, 1, "签到计入 signin_total");
+  // —— 派生口径:talent_total / essence_total 由 recalcHero 同步 ——
+  g.talents.t_atk = 5;
+  g.lifetimeEssence = 100;
+  g.recalcHero();
+  eq(g.stats.talent_total, 5, "talent_total 同步");
+  eq(g.stats.essence_total, 100, "essence_total 同步");
+  // —— 新维度跨档提示(成就管道;先回零建基线,再单调上涨)——
+  g.lifetimeEssence = 0;
+  g.recalcHero();
+  g.checkAchTiers();                   // 建基线(talent_total=5 → 第 1 档)
+  g.talents.t_hp = 15;                 // talent_total 20 → 第 2 档
+  g.recalcHero();
+  g.checkAchTiers();
+  ok(toastTexts(g).some(t => t.includes("天赋觉醒") && t.includes("第 2 档")),
+    "天赋觉醒跨档发提示");
+  g.lifetimeEssence = 25;              // 魂晶收藏家第 1 档
+  g.recalcHero();
+  g.checkAchTiers();
+  ok(toastTexts(g).some(t => t.includes("魂晶收藏家")), "魂晶收藏家跨档发提示");
+}
+
 // ================================================================ runner
 const TESTS: [string, () => void][] = [
   ["1.RNG(MT19937 与 CPython 对拍)", testRng],
@@ -1409,6 +1618,11 @@ const TESTS: [string, () => void][] = [
   ["24.技能顺序施放(一拍一个/装配顺序排队)", testSkillOrder],
   ["25.死亡窗口存档兜底(hp0补复活倒计时)", testDeathSaveRevive],
   ["26.三职业引导技能(法/射吟唱登记/节拍/数值锚)", testChannelSkills],
+  ["27.未选职业世界冻结(幽灵战士不打工)", testPreClassFrozen],
+  ["28.深渊天赋(魂晶/消费/门槛/特殊节点/存档v9)", testTalents],
+  ["29.定向锻造(解锁/费用/必带词缀/自动出售豁免)", testForge],
+  ["30.塔怪技能(每层变数)", testTowerSkills],
+  ["31.成就第三梯队(经济打点/新维度跨档)", testAchThirdWave],
 ];
 
 let failed = 0;

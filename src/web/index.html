@@ -33,6 +33,7 @@
   <span class="res res-lv" id="res-lv"></span>
   <span class="res res-gold" id="res-gold"></span>
   <span class="res res-stone" id="res-stone"></span>
+  <span class="res res-essence" id="res-essence" style="display:none"></span>
   <span class="res res-time" id="res-time"></span>
   <button class="btn" id="gear-btn" data-tab="settings" title="设置(快捷键 6)">⚙</button>
 </header>
@@ -131,9 +132,9 @@
     <p class="dim">重置本局成长,换取永久倍率。<b>收获随本世深度加权</b>:130 区为基准档
     (+25% 三围/+10% 金币经验),越深越多,最高 ×4 档;推进受阻时转生收益最大</p>
     <div id="rebirth-body">
-      <div class="rb-keep"><b>保留:</b>成就与加成 · 祭坛等级 · 遗物与背包 · 深渊塔最高层 · 重铸石 · 背包容量 · 排行榜记录</div>
+      <div class="rb-keep"><b>保留:</b>成就与加成 · 祭坛等级 · 遗物与背包 · 深渊塔最高层 · 重铸石 · 背包容量 · <b>魂晶与天赋</b> · 排行榜记录</div>
       <div class="rb-reset"><b>重置:</b>等级 · 装备与背包物品 · 金币 · 技能等级 · 当前区域(从第 1 区重来)</div>
-      <div class="rb-note">转生时可更换职业(也可保持)——这是全游戏唯一的换职业机会。</div>
+      <div class="rb-note">转生时可更换职业(也可保持)——这是全游戏唯一的换职业机会;转生还按收获档位发放<b>魂晶 ✧</b>(角色页·深渊天赋消费)。</div>
       <div class="rb-timing" id="rebirth-timing"></div>
     </div>
     <div class="swap-ops">
@@ -167,6 +168,10 @@
       <h4>卡墙了怎么办</h4>
       <p>连续战败会自动转挂机(这是保护,不是惩罚)。强化/技能/祭坛跟上后会自动恢复推进;
       若等级到 50 且长期受阻,考虑转生(角色页)——带着永久加成重爬更快,还能换职业。</p>
+      <h4>魂晶与深渊天赋</h4>
+      <p>转生除永久倍率外还按收获档位发放<b>魂晶 ✧</b>(顶栏可见),在角色页「深渊天赋」消费:
+      征伐/坚忍/深渊三系共 16 个节点,永久生效、转生不重置,并按转生世数逐步解锁更深的节点;
+      深渊系可解锁<b>定向锻造</b>(背包页:指定部位+必带词缀)、转生起始区提前、离线上限延长。</p>
       <h4>等级压制</h4>
       <p>怪物强度随区域与层级上涨,属性跟不上时伤害会越来越刮痧——这就是该回头强化/转生的信号,
       不是 bug。</p>
@@ -250,6 +255,26 @@
     <h2>👑 称号与世系</h2>
     <p class="dim" id="titles-sub"></p>
     <div id="titles-body"></div>
+  </div>
+</div>
+
+<!-- 深渊天赋(角色页功能按钮点入):魂晶消费端,三支系节点树 -->
+<div class="overlay" id="talent-modal">
+  <div class="modal wide">
+    <button class="modal-x" id="talent-close" title="关闭">✕</button>
+    <h2>✧ 深渊天赋</h2>
+    <p class="dim" id="talent-sub"></p>
+    <div id="talent-body"></div>
+  </div>
+</div>
+
+<!-- 定向锻造(背包页入口;天赋「深渊锻造台」解锁):指定部位+必带词缀 -->
+<div class="overlay" id="forge-modal">
+  <div class="modal wide">
+    <button class="modal-x" id="forge-close" title="关闭">✕</button>
+    <h2>⚒ 定向锻造</h2>
+    <p class="dim" id="forge-sub"></p>
+    <div id="forge-body"></div>
   </div>
 </div>
 

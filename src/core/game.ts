@@ -7,11 +7,11 @@ import { c, fmt } from "./ansi.ts";
 import { battleTick, spawnMonster, tierOf, mobGold } from "./combat.ts";
 import type { Monster } from "./combat.ts";
 import {
-  ACTIVE_DEF, ACTIVE_SKILLS, ACHIEVEMENTS, BAL, CAPS, CLASSES, PASSIVE_DEF, PASSIVE_SKILLS,
-  RARITIES, RARITY_IDX, REDEEM_CODES, SIGNIN_REWARDS, STAT_NAMES, TITLES,
+  ACTIVE_DEF, ACTIVE_SKILLS, ACHIEVEMENTS, AFFIX_DEF, BAL, CAPS, CLASSES, PASSIVE_DEF, PASSIVE_SKILLS,
+  RARITIES, RARITY_IDX, REDEEM_CODES, SIGNIN_REWARDS, SLOTS, STAT_NAMES, TALENT_DEF, TITLES,
   WEEKLY_CHEST, WEEKLY_GOALS, TOWER, ALTAR_LINES, POTIONS,
 } from "./data.ts";
-import { Item, rollItem } from "./items.ts";
+import { Item, rollItem, rollItemForged } from "./items.ts";
 import * as RL from "./relics.ts";
 import { Relic } from "./relics.ts";
 import * as TW from "./tower.ts";
@@ -20,7 +20,7 @@ import { PyRandom } from "./rng.ts";
 import * as systems from "./systems.ts";
 import * as S from "./skills.ts";
 
-export const SAVE_VERSION = 8;
+export const SAVE_VERSION = 9;
 
 /** 本地日期键 YYYY-MM-DD(签到口径,按玩家本地时区) */
 function todayKey(): string {
@@ -98,6 +98,9 @@ export class Game {
   classId: string | null = null;
   rebirths = 0;                 // 转生次数(终身累计;倍率在 recalcHero 生效)
   rebirthHinted = false;        // 本世是否已提示过转生解锁(瞬态,不序列化;转生时重置)
+  essence = 0;                  // 魂晶(转生货币,深渊天赋消费;永久,转生不重置)
+  lifetimeEssence = 0;          // 终身累计获得魂晶(成就口径,不含已花费)
+  talents: Record<string, number> = {};   // 深渊天赋等级表(节点 id → 级;永久)
   loadout: Loadout = { active: [], passive: [] };
   skillLv: Record<string, number> = {};
   skillCd: Record<string, number> = {};
@@ -242,6 +245,10 @@ export class Game {
     const k = Math.min(BAL.rebirth_k_max,
       Math.max(BAL.rebirth_k_min, depth / BAL.rebirth_depth_ref));
     const n = this.rebirths + k;
+    // 魂晶(转生货币):与收获档位同源;至少 1 颗,转得浅也有一点进账
+    const ess = Math.max(1, Math.round(k * BAL.rebirth_essence_base));
+    // 天赋「轮回足迹」:转生直接从更深的位置起步(跳过已碾过的浅层)
+    const startZone = 1 + this.talentLevel("t_start") * 2;
     // —— 世系档案:记下这一世(最近在前,封顶 50 条)+ 周常/称号 ——
     this.lineage.unshift({ cls: this.classId ?? "?", level: this.level,
       zone: this.runMaxZone, kills: this.stats.kills,
@@ -259,7 +266,7 @@ export class Game {
     // —— 重置(本局成长)——
     this.level = 1;
     this.xp = 0;
-    this.zone = 1;
+    this.zone = startZone;
     this.stage = 1;
     this.stageKills = 0;
     this.deathsRow = 0;
@@ -277,9 +284,12 @@ export class Game {
     this.respawnTimer = 0;
     this.settings.speed = 1;
     // —— 保留(永久元进度):stones/altarLv/relics/relicBag/tower/bagExpLv/
-    //    potionBought/stats(终身)/daily 计数;playtime 不重置(离线与包络都按终身时长计)
+    //    potionBought/stats(终身)/daily 计数;playtime 不重置(离线与包络都按终身时长计);
+    //    essence/lifetimeEssence/talents(魂晶与天赋)同属永久元进度,只增不减
     this.rebirths = n;
-    this.runMaxZone = 1;
+    this.essence += ess;
+    this.lifetimeEssence += ess;
+    this.runMaxZone = startZone;
     this.rebirthHinted = false;
     this.classId = cid;
     this.skillCd = {};
@@ -292,16 +302,103 @@ export class Game {
       if (s.cls === cid && s.unlock <= 1) { this.loadout.passive.push(s.id); break; }
     }
     // 悬赏按新局重掷(目标随区域缩放,旧深区目标在新局无从完成)
-    this.quests = [systems.rollQuest(1, this.rng), systems.rollQuest(1, this.rng),
-      systems.rollQuest(1, this.rng)];
+    this.quests = [systems.rollQuest(startZone, this.rng), systems.rollQuest(startZone, this.rng),
+      systems.rollQuest(startZone, this.rng)];
     this.recalcHero();
     this.hero.hp = this.hero.max_hp;
     const cls = CLASSES[cid];
     this.log(`♻ 转生!本世最远 ${depth} 区 → 收获 ×${k.toFixed(2)} 档;以 ${cls.name} 之名重生:` +
-      `攻击/生命/防御 +${(BAL.rebirth_stat_pct * n).toFixed(1)}% · 金币/经验 +${(BAL.rebirth_gain_pct * n).toFixed(1)}%`,
+      `攻击/生命/防御 +${(BAL.rebirth_stat_pct * n).toFixed(1)}% · 金币/经验 +${(BAL.rebirth_gain_pct * n).toFixed(1)}%` +
+      `${startZone > 1 ? ` · 自第 ${startZone} 区起步` : ""}`,
       "bright_magenta");
-    this.toast(`转生成功 · 收获 ×${k.toFixed(2)} 档`);
+    this.log(`✧ 获得魂晶 ${ess} 颗(现有 ${this.essence})——角色页 · 深渊天赋可消费`, "bright_cyan");
+    this.toast(`转生成功 · ×${k.toFixed(2)} 档 + 魂晶 ✧${ess}`);
     this.spawn();
+  }
+
+  // ================================================================ 深渊天赋(魂晶消费端)
+  talentLevel(id: string): number {
+    return this.talents[id] ?? 0;
+  }
+
+  /** 升下一级费用;已满级返回 null */
+  talentCost(id: string): number | null {
+    const d = TALENT_DEF[id];
+    if (!d) return null;
+    const lv = this.talentLevel(id);
+    if (lv >= d.maxLv) return null;
+    return d.cost0 + d.costStep * lv;
+  }
+
+  /** 天赋解锁门槛:转生世数(按 floor,浅转生的零头不作数) */
+  talentGated(id: string): boolean {
+    const d = TALENT_DEF[id];
+    return !d || Math.floor(this.rebirths) < d.reqRebirth;
+  }
+
+  talentUp(id: string): void {
+    const d = TALENT_DEF[id];
+    if (!d) return;
+    if (this.talentGated(id)) {
+      this.toast(`「${d.name}」转生 ${d.reqRebirth} 世解锁`);
+      return;
+    }
+    const cost = this.talentCost(id);
+    if (cost === null) { this.toast(`「${d.name}」已满级`); return; }
+    if (this.essence < cost) {
+      this.toast(`魂晶不足(需要 ✧${cost},持有 ✧${this.essence})`);
+      return;
+    }
+    this.essence -= cost;
+    this.talents[id] = this.talentLevel(id) + 1;
+    this.recalcHero();
+    const lv = this.talents[id]!;
+    this.log(`✧ 天赋「${d.name}」升至 Lv.${lv}/${d.maxLv}(✧${cost})`, "bright_cyan");
+    this.toast(`${d.name} Lv.${lv}`);
+  }
+
+  /** 离线收益上限:基础 12h + 天赋「时之沙」每级 +1h */
+  offlineCapSec(): number {
+    return BAL.offline_cap_sec + this.talentLevel("t_offline") * 3600;
+  }
+
+  // ================================================================ 定向锻造(天赋解锁)
+  canForge(): boolean {
+    return this.talentLevel("t_forge") > 0;
+  }
+
+  /** 锻造费用:按当前区域档计价(鼓励推深;tier 与自然掉落同源) */
+  forgeCost(): { tier: number; gold: number; stones: number } {
+    const t = tierOf(this.zone, this.stage);
+    return {
+      tier: t,
+      gold: Math.round(mobGold(t) * BAL.forge_gold_k),
+      stones: Math.min(BAL.forge_stones_cap,
+        BAL.forge_stones0 + Math.floor(t / BAL.forge_stones_t)),
+    };
+  }
+
+  /** 定向锻造:指定部位 + 必带一条所选词缀;稀有度保底稀有+,其余同自然掉落分布 */
+  craft(slotId: string, affixId: string): void {
+    if (!this.canForge()) { this.toast("需先在深渊天赋解锁「深渊锻造台」"); return; }
+    if (!this.classId) { this.toast("先选择职业"); return; }
+    if (!SLOTS.some(s => s.id === slotId) || !AFFIX_DEF[affixId]) {
+      this.toast("无效的锻造目标");
+      return;
+    }
+    if (this.bag.length >= this.bagCap()) { this.toast("背包已满,先清理再锻造"); return; }
+    const cost = this.forgeCost();
+    if (this.gold < cost.gold) { this.toast(`金币不足(需要 ${fmt(cost.gold)})`); return; }
+    if (this.stones < cost.stones) { this.toast(`重铸石不足(需要 ✦${cost.stones})`); return; }
+    this.gold -= cost.gold;
+    this.stones -= cost.stones;
+    const item = rollItemForged(cost.tier, this.rng, this.hero.luck ?? 0, slotId, affixId, this.classId);
+    this.stats.crafted = (this.stats.crafted ?? 0) + 1;
+    this.log(`⚒ 定向锻造:${item.display()}(必带「${AFFIX_DEF[affixId]!.name}」,T${cost.tier} 档)`,
+      item.rarityColor());
+    // 自己花钱锻的件不走自动折现(noAutoSell);换装对比照常
+    this.addItem(item, true);
+    this.toast(`锻造完成:${AFFIX_DEF[affixId]!.name} · ${item.name}`);
   }
 
   loadoutSlots(): number {
@@ -357,15 +454,20 @@ export class Game {
         agg[k] = (agg[k] ?? 0) + v;
       }
     }
-    // 统一修饰管道:成就 + 图鉴 + 祭坛 + 被动技能 + 遗物 + 外部挂口;先加后乘,再截断
-    // 成就新维度的三个口径同步(终身统计已有数据,只是此前不进 stats 快照)
+    // 统一修饰管道:成就 + 图鉴 + 祭坛 + 天赋 + 被动技能 + 遗物 + 外部挂口;先加后乘,再截断
+    // 成就/天赋维度的口径同步(终身统计已有数据,只是此前不进 stats 快照)
     this.stats.rebirths = this.rebirths;
     this.stats.max_floor = this.tower.max_floor;
     this.stats.playtime = Math.trunc(this.playtime);
+    this.stats.essence_total = this.lifetimeEssence;
+    let talentTotal = 0;
+    for (const lv of Object.values(this.talents)) talentTotal += lv;
+    this.stats.talent_total = talentTotal;
     const mods = [
       ...systems.achievementMods(this.stats),
       ...systems.codexMods(this.monKills),
       ...systems.altarMods(this.altarLv),
+      ...systems.talentMods(this.talents),
       ...(this.classId ? S.passiveMods(this) : []),
       ...RL.relicMods(this.relics),
       ...this.statMods,
@@ -442,13 +544,14 @@ export class Game {
   }
 
   // ================================================================ 背包
-  addItem(item: Item): void {
+  addItem(item: Item, noAutoSell = false): void {
     const rid = RARITY_IDX[item.rarity];
     const autoSell = this.settings.auto_sell_idx ?? -1;
-    if (autoSell >= 0 && rid <= autoSell) {
+    if (!noAutoSell && autoSell >= 0 && rid <= autoSell) {
       const price = item.sellPrice();
       this.gold += price;
       this.stats.gold_earned += price;
+      this.stats.sold_total = (this.stats.sold_total ?? 0) + 1;
       this.log(`自动出售 ${item.display()} (+${fmt(price)} 金币)`, "bright_black");
       return;
     }
@@ -458,6 +561,7 @@ export class Game {
       const price = item.sellPrice();
       this.gold += price;
       this.stats.gold_earned += price;
+      this.stats.sold_total = (this.stats.sold_total ?? 0) + 1;
       this.log(`背包已满,${item.display()} 自动出售 (+${fmt(price)})`, "bright_black");
       return;
     }
@@ -487,6 +591,7 @@ export class Game {
         const price = old.sellPrice();
         this.gold += price;
         this.stats.gold_earned += price;
+        this.stats.sold_total = (this.stats.sold_total ?? 0) + 1;
         this.log(`背包已满,${old.display()} 自动出售`, "bright_black");
       } else {
         this.bag.unshift(old);
@@ -517,6 +622,7 @@ export class Game {
       const price = it.sellPrice();
       this.gold += price;
       this.stats.gold_earned += price;
+      this.stats.sold_total = (this.stats.sold_total ?? 0) + 1;
       this.log(`出售 ${it.display()} (+${fmt(price)} 金币)`, "bright_black");
       this.toast(`+${fmt(price)} 金币`);
     }
@@ -534,6 +640,7 @@ export class Game {
       this.bag = keep;
       this.gold += gold;
       this.stats.gold_earned += gold;
+      this.stats.sold_total = (this.stats.sold_total ?? 0) + n;
       this.log(`一键出售 ${n} 件 ≤${RARITIES[maxRid].name} (+${fmt(gold)} 金币)`, "bright_black");
       this.toast(`出售 ${n} 件 +${fmt(gold)}`);
     } else {
@@ -564,6 +671,7 @@ export class Game {
       this.gold += gold;
       this.stones += stones;
       this.stats.gold_earned += gold;
+      this.stats.dismantled = (this.stats.dismantled ?? 0) + n;
       this.log(`一键分解 ${n} 件 ≤${RARITIES[maxRid].name} (+${fmt(gold)} 金币` +
         `${stones ? `, +${stones} 重铸石` : ""})`, "bright_magenta");
       this.toast(`分解 ${n} 件 +${fmt(gold)}金${stones ? `/${stones}石` : ""}`);
@@ -581,6 +689,7 @@ export class Game {
       this.gold += gold;
       this.stones += stones;
       this.stats.gold_earned += gold;
+      this.stats.dismantled = (this.stats.dismantled ?? 0) + 1;
       this.log(`分解 ${it.display()} (+${fmt(gold)} 金币${stones ? `, +${stones} 重铸石` : ""})`,
         "bright_magenta");
       this.toast(`分解获得 ${fmt(gold)}金币${stones ? `/${stones}石` : ""}`);
@@ -1326,6 +1435,7 @@ export class Game {
       if (def) S.addBuff(this, def.buff, def.pct, def.dur);
     }
     this.signinLast = todayKey();
+    this.stats.signin_total = (this.stats.signin_total ?? 0) + 1;
     const dayNo = this.signinPos + 1;
     this.signinPos = (this.signinPos + 1) % SIGNIN_REWARDS.length;
     this.recalcHero();
@@ -1434,6 +1544,9 @@ export class Game {
   }
 
   tick(dt: number): void {
+    // 未选职业世界冻结:recalcHero 会按战士兜底出"幽灵战士"满属性,不冻结的话
+    // 选择屏背后就会刷怪/赚进度/弹升级与成就 toast,离线补算还会替它打工
+    if (this.classId === null) return;
     this.rollDaily();   // 跨日即时解冻悬赏(无 RNG 消耗,不影响对拍)
     this.checkAchTiers();   // 成就跨档即时反馈(6×阈值比较,开销可忽略)
     this.autoTick();        // 玩家自动化三开关(内部 1 秒一拍)
@@ -1466,6 +1579,9 @@ export class Game {
       mode: this.mode, farm_stage: this.farmStage,
       class_id: this.classId,
       rebirths: this.rebirths,
+      essence: this.essence,
+      lifetime_essence: this.lifetimeEssence,
+      talents: this.talents,
       loadout: this.loadout,
       skill_lv: this.skillLv,
       equip: Object.fromEntries(Object.entries(this.equip).map(([k, v]) => [k, v.toDict()])),
@@ -1536,6 +1652,18 @@ export class Game {
     g.bag = (d.bag ?? []).map((i: any) => Item.fromDict(i));
     g.classId = d.class_id ?? null;
     g.rebirths = d.rebirths ?? 0;
+    g.essence = d.essence ?? 0;
+    g.lifetimeEssence = d.lifetime_essence ?? 0;
+    // 防御:坏 talents 条目跳过(只认 TALENT_DEF 里声明的节点,值域 0..maxLv)
+    g.talents = {};
+    if (d.talents && typeof d.talents === "object" && !Array.isArray(d.talents)) {
+      for (const [id, lv] of Object.entries(d.talents as Record<string, unknown>)) {
+        const def = TALENT_DEF[id];
+        if (def && typeof lv === "number" && Number.isFinite(lv) && lv > 0) {
+          g.talents[id] = Math.min(def.maxLv, Math.trunc(lv));
+        }
+      }
+    }
     g.loadout = d.loadout ?? { active: [], passive: [] };
     g.skillLv = d.skill_lv ?? {};
     g.skillCd = {};
@@ -1659,6 +1787,13 @@ export function migrateSave(d: Record<string, any>): Record<string, any> {
     // v7 → v8:转生系统(rebirths 终身计数,旧档默认 0,无破坏性变更)
     d.rebirths = d.rebirths ?? 0;
     d.version = 8;
+  }
+  if (v < 9) {
+    // v8 → v9:深渊天赋(魂晶经济;旧档默认 0 魂晶 0 天赋,无破坏性变更)
+    d.essence = d.essence ?? 0;
+    d.lifetime_essence = d.lifetime_essence ?? 0;
+    d.talents = d.talents ?? {};
+    d.version = 9;
   }
   // 装备规则 2.1(主属性候选表+词条数缩减):按标志位一次性清除旧装备,不保留。
   // 不用版本号判断——HMR 热更的旧页面会以新版本号续存旧装备,标志位幂等兜底。

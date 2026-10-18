@@ -1,5 +1,5 @@
 /** 外围系统:悬赏 / 成就 / resolve 懒结算(与 abyss/systems.py 一致) */
-import { BAL, QUEST_TYPES, RARITY_IDX, ACHIEVEMENTS, ACTIVE_DEF, ALTAR_LINES } from "./data.ts";
+import { BAL, QUEST_TYPES, RARITY_IDX, ACHIEVEMENTS, ACTIVE_DEF, ALTAR_LINES, TALENTS } from "./data.ts";
 import { pyRound, rollItem } from "./items.ts";
 import { mobGold, mobXp, spawnMonster, tierOf } from "./combat.ts";
 import type { Game } from "./game.ts";
@@ -31,6 +31,19 @@ export function altarMods(altarLv: Record<string, number>): StatMod[] {
     const lv = altarLv[line.id] ?? 0;
     if (lv <= 0) continue;
     mods.push({ stat: line.stat as never, op: line.op, v: line.per * lv });
+  }
+  return mods;
+}
+
+/** 深渊天赋等级 → 统一修饰器(魂晶消费端;特殊节点 start_zone/offline_cap/forge
+ *  不产修饰,由 game.ts 在各自消费点读取) */
+export function talentMods(talents: Record<string, number>): StatMod[] {
+  const mods: StatMod[] = [];
+  for (const t of TALENTS) {
+    if (t.kind !== "stat" || !t.stat || !t.op) continue;
+    const lv = talents[t.id] ?? 0;
+    if (lv <= 0) continue;
+    mods.push({ stat: t.stat, op: t.op, v: (t.per ?? 0) * lv });
   }
   return mods;
 }
@@ -165,11 +178,14 @@ export interface ResolveReport {
 }
 
 export function resolve(g: Game, elapsed: number): ResolveReport {
-  elapsed = Math.min(Math.max(0, elapsed), BAL.offline_cap_sec);
+  // 上限吃天赋「时之沙」加成(12h 起,每级 +1h)
+  elapsed = Math.min(Math.max(0, elapsed), g.offlineCapSec());
   let remaining = elapsed;
   const rep: ResolveReport = {
     sec: elapsed, kills: 0, deaths: 0, gold: 0, xp: 0, items: [], levels: 0, zones: 0,
   };
+  // 未选职业不结算(与 tick 冻结同口径):别让"幽灵战士"离线打工
+  if (g.classId === null) return rep;
   const lv0 = g.level, zone0 = g.zone;
   const gold0 = g.gold;
   let xpTotal = 0;

@@ -291,5 +291,41 @@ export function rollItem(tier: number, rng: PyRandom, luck = 0, minIdx = 0, boos
   return new Item(slotDef.id, rar.key, tier, mainVal, affixes, 0, null, rng, pick.stat, skillSid);
 }
 
+/** 定向锻造(2.4):指定部位 + 一条必带词缀,稀有度保底稀有+;其余词缀与主属性
+ *  和自然掉落同分布。与 rollItem 互不共享 RNG 消耗顺序(独立入口,不掉落不调用)。 */
+export function rollItemForged(tier: number, rng: PyRandom, luck: number,
+                               slotId: string, affixId: string,
+                               cls: string | null): Item {
+  const slotDef = SLOTS.find(s => s.id === slotId)!;
+  const rid = rollRarity(rng, luck, BAL.forge_min_rid, BAL.forge_rarity_boost);
+  const rar = RARITIES[rid];
+  const rolls = MAIN_ROLLS[slotDef.id];
+  const pick = rolls[rng.randrange(rolls.length)];
+  let mainVal: number;
+  if (PCT_MAINS.includes(pick.stat)) {
+    mainVal = pick.base * rng.uniform(0.9, 1.1);
+  } else {
+    mainVal = pick.base + pick.k * Math.pow(tier, BAL.item_main_p) * rng.uniform(0.85, 1.15);
+  }
+  // 词缀:必带一条所选,其余从未选池随机补齐(值分布与 rollItem 同口径)
+  const others = AFFIXES.filter(a => a.id !== affixId);
+  rng.shuffle(others);
+  const defs = [AFFIX_DEF[affixId], ...others.slice(0, rar.affixes - 1)];
+  rng.shuffle(defs);
+  const affixes: AffixRoll[] = defs.map(a => ({
+    id: a.id,
+    val: a.pct
+      ? rid * (a.step ?? 5) + rng.uniform(0, a.step ?? 5)
+      : rng.uniform(a.lo, a.hi) + a.k * tier,
+  }));
+  let skillSid: string | null = null;
+  if (defs.some(a => a.id === "skill_lv")) {
+    const sidPool = [...ACTIVE_SKILLS, ...PASSIVE_SKILLS]
+      .filter(s => s.cls === cls).map(s => s.id);
+    skillSid = sidPool.length ? rng.choice(sidPool) : null;
+  }
+  return new Item(slotDef.id, rar.key, tier, mainVal, affixes, 0, null, rng, pick.stat, skillSid);
+}
+
 /** 词缀斜率修正的展示信息(与 CAPS 无关,评分权重在 AFFIXES 中) */
 export const _unusedCaps = CAPS;

@@ -36,7 +36,9 @@ export function towerMonster(floor: number, rng: PyRandom): Monster {
     color = "bright_yellow";
     name = `塔·${name}`;
   }
-  return new Monster(name, ART[key], color, hp, atk, dfn, interval, boss, false, floor, null, key);
+  // 2.4:塔怪带上各自的招牌技能(与主线同池)——爬塔不再是纯战力查表,
+  // 每层遇到什么技能组合本身就是变数;数值曲线不变
+  return new Monster(name, ART[key], color, hp, atk, dfn, interval, boss, false, floor, mob.skill, key);
 }
 
 /** 1-10关 → tier 10, 11-20关 → tier 20 ... */
