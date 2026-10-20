@@ -711,6 +711,15 @@ function testMobSkillDebuff(): void {
   const heroHits = (sec: number): number =>
     g.events.filter(e => e[0] === "anim" && e[1] === "hero_attack").length;
 
+  // ---- 首放时机:普通/精英怪最多 2 秒(速刷也可见),boss 保持半 CD ----
+  const anySkill = { name: "x", icon: "x", cd: 10, mult: 1, hits: 1 } as any;
+  eq(new Monster("普", [" "], "green", 1, 1, 0, 1, false, false, 1, anySkill, "slime").skillTimer,
+    2, "普通怪技能首放 min(半CD,2s)=2s(cd10)");
+  eq(new Monster("首", [" "], "green", 1, 1, 0, 1, true, false, 1, anySkill, "slime").skillTimer,
+    5, "boss 技能首放保持半 CD=5s(cd10)");
+  eq(new Monster("精", [" "], "green", 1, 1, 0, 1, false, true, 1, anySkill, "slime").skillTimer,
+    2, "精英怪同普通怪 2s 首放");
+
   // ---- 施放即上 debuff:slow → slow_pct/slow_until;stun → stun_until ----
   g.monster = mkMon({ name: "酸液", icon: "x", cd: 10, mult: 1, hits: 1, slow: [0.35, 4] });
   (g.monster as Monster).skillTimer = 10;
@@ -1606,6 +1615,30 @@ function testAchThirdWave(): void {
   ok(toastTexts(g).some(t => t.includes("魂晶收藏家")), "魂晶收藏家跨档发提示");
 }
 
+// ================================================================ 33. 怪物技能特效事件(mskill:<名字>)
+function testMobSkillFxEvent(): void {
+  const g = newGame(426265);
+  g.chooseClass("warrior");
+  // 直喂一只史莱姆(酸液喷吐):血防极端化,一拍内互不击杀,只验证事件链
+  const sk = MONSTERS.slime.skill;
+  const mon = new Monster("史莱姆", ["  "], "green", 1e9, 1, 0, 1, false, false, 1, sk, "slime");
+  g.monster = mon;
+  mon.skillTimer = sk.cd;             // 到点,本拍必放
+  battleTick(g, 0.05);
+  ok(g.events.some(e => e[0] === "anim" && e[1] === "mskill:" + sk.name),
+    `怪技施放发 mskill 事件(${sk.name})`);
+  eq(g.events.filter(e => e[0] === "anim" && e[1].startsWith("mskill:")).length, 1,
+    "单次施放仅一条 mskill 事件");
+  // 塔怪同路径:技能名原样透传(towerMonster 携带 mob.skill)
+  const tmon = towerMonster(6, new PyRandom(7));
+  g.monster = tmon;
+  g.events.length = 0;
+  tmon.skillTimer = tmon.skill!.cd;
+  battleTick(g, 0.05);
+  ok(g.events.some(e => e[0] === "anim" && e[1] === "mskill:" + tmon.skill!.name),
+    `塔怪走同一路径(${tmon.skill!.name})`);
+}
+
 // ================================================================ runner
 const TESTS: [string, () => void][] = [
   ["1.RNG(MT19937 与 CPython 对拍)", testRng],
@@ -1640,6 +1673,7 @@ const TESTS: [string, () => void][] = [
   ["30.塔怪技能(每层变数)", testTowerSkills],
   ["31.成就第三梯队(经济打点/新维度跨档)", testAchThirdWave],
   ["32.悬赏目标封顶(深区不爆指数)", testQuestTargetCap],
+  ["33.怪物技能特效事件(mskill:<名字>)", testMobSkillFxEvent],
 ];
 
 let failed = 0;

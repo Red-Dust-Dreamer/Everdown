@@ -47,7 +47,8 @@ export class Monster implements S.MonLike {
     this.atk = atk; this.def_ = def_; this.interval = interval;
     this.boss = boss; this.elite = elite; this.tier = tier;
     this.skill = skill;
-    this.skillTimer = skill ? skill.cd * 0.5 : 0;  // 半 CD 后首放
+    // 首放:普通/精英怪 2 秒(速刷时也能见到技能);boss 保持半 CD(战斗长必可见,提前徒增难度)
+    this.skillTimer = skill ? (boss ? skill.cd * 0.5 : Math.min(skill.cd * 0.5, 2)) : 0;
     this.id = id;
   }
   hpPct(): number { return this.maxHp ? this.hp / this.maxHp : 0; }
@@ -199,6 +200,8 @@ export function battleTick(g: Game, dt: number): void {
 function castMonsterSkill(g: Game, mon: Monster): void {
   const h = g.hero;
   const sk = mon.skill!;
+  // Web 宿主按技能名播专属特效(mskill:<名字>);CLI 忽略 anim 事件,不参与计算
+  g.emit("anim", "mskill:" + sk.name);
   let total = 0;
   let defv = h.def;
   if ((h.defdown_until ?? 0) > g.time) defv *= 1 - (h.defdown_pct ?? 0) / 100;

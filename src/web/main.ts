@@ -167,6 +167,8 @@ interface State {
   tower_key_cost: number | null; tower_keys_bought: number;
   quest_reroll_cost: number | null; quest_reroll_used: number;
   skill_cd: Record<string, number>;
+  /** 引导中的技能(技能栏显示吟唱状态;×3 速度下引导被压缩,纯靠飘字看不出在引导) */
+  burst: { sid: string; left: number; hits: number } | null;
   tower: { keys: number; max_floor: number };
   in_tower: boolean;
   tower_floor_sel: number;
@@ -415,6 +417,8 @@ function buildState(g: Game): State {
     speed: g.settings.speed ?? 1, max_speed: g.maxSpeed(),
     speed_unlock: D.BAL.speed_unlock,
     skills, skill_cd: g.skillCd,
+    burst: g.burst ? { sid: g.burst.sid, left: g.burst.left,
+      hits: D.ACTIVE_DEF[g.burst.sid]?.hits ?? g.burst.left } : null,
     tower: { keys: g.tower.keys, max_floor: g.tower.max_floor },
     altar: D.ALTAR_LINES.map(l => {
       const lv = g.altarLv[l.id] ?? 0;
@@ -891,6 +895,10 @@ function drainEvents(): void {
         }
       } else if (text.startsWith("loot:")) {
         playLootBeam(text.slice(5));
+      } else if (text.startsWith("mskill:")) {
+        // 怪物技能:受击泛红统一走 heroHurt,特效按技能名差异化(未知名回落通用斩击)
+        heroHurt();
+        playMobSkillFx(text.slice(6));
       } else if (text.startsWith("dot:")) {
         // 挂上持续伤害的一瞬:怪物位置一小撮同色粒子上浮(状态徽章/泛光由渲染层常驻)
         const def = SKILL_DEF.get(text.slice(4));
@@ -976,6 +984,12 @@ function heroLunge(kind: "lunge" | "crit" | "skill", color?: string): void {
 }
 /** 受击:后撤 + 泛红闪 */
 function heroHurt(): void {
+  // 受击泛红(舞台内缘红晕):英雄立绘关闭期的全局受击反馈,怪物普攻/技能命中都走这
+  const stage = $("stage");
+  stage.classList.remove("hurt");
+  void stage.offsetWidth;
+  stage.classList.add("hurt");
+  setTimeout(() => stage.classList.remove("hurt"), 280);
   if (!HERO_MODEL) return;
   const el = $("hero-art");
   if (!el) return;
@@ -1161,9 +1175,189 @@ function stageOrigin(): { x: number; y: number } {
   return { x: 0.5, y: 0.42 };
 }
 
+// ---------------------------------------------------------------- 英雄技能专属特效(DOM 层)
+// 在 confetti 点缀层之上,按技能名合成的具象特效:投射物/冲击环/穹顶/电弧/陨石/
+// 箭雨等形态与技能语义一一对应(样式见 style.css 尾部,全程序绘制零外部素材)。
+// 震屏与结霜统一由 confetti 层的 big/frost 标记负责,这里不重复触发。
+/** 闪电链:按起终点现场生成锯齿 clip-path 电弧 */
+function spawnChain(x0: number, y0: number, x1: number, y1: number): void {
+  const w = Math.max(60, x1 - x0), h = 46;
+  const segs = Math.max(4, Math.round(w / 34));
+  const mid: [number, number][] = [];
+  for (let i = 0; i <= segs; i++) {
+    mid.push([(i / segs) * 100, 50 + (i === 0 || i === segs ? 0 : mobRnd(-36, 36))]);
+  }
+  const top = mid.map(([px, py]) => `${px.toFixed(1)}% ${(py - 6).toFixed(1)}%`);
+  const bot = mid.slice().reverse().map(([px, py]) => `${px.toFixed(1)}% ${(py + 6).toFixed(1)}%`);
+  const el = fxSpawn("fx-chain", x0, y0 - h / 2);
+  el.style.width = w + "px";
+  el.style.height = h + "px";
+  el.style.clipPath = `polygon(${[...top, ...bot].join(",")})`;
+}
+
+/** 英雄技能 DOM 特效层:30 技能逐一合成 */
+function heroSkillDom(sid: string): void {
+  const stage = $("stage");
+  const sw = stage.clientWidth, sh = stage.clientHeight;
+  const hx = heroMuzzleX(), hy = sh * 0.48;              // 英雄侧锚点
+  const mp = monCenterPx();                              // 怪物中心(像素)
+  const mx = mp?.x ?? sw * 0.5, my = mp?.y ?? sh * 0.42;
+  const dx = mx - hx;                                    // 英雄→怪水平行程
+  const later = (ms: number, fn: () => void) => setTimeout(fn, ms);
+  const proj = (cls: string, dy: number) =>
+    fxSpawn(cls, hx, my + dy, { "--x": `${dx}px` });    // 投射物通用:--x 位移
+
+  switch (sid) {
+    // —— 战士 ——
+    case "w_strike":   // 重击:金色巨斩 + 轻震
+      fxSpawn("fx-slash", mx, my,
+        { "--r": `${mobRnd(-60, -25)}deg`, "--c1": "#fff3c4", "--c2": "#ffb347", "--s": "1.5" });
+      stageShake(200);
+      break;
+    case "w_whirl":    // 旋风斩:英雄位置旋转刀刃环(引导期视觉锚)
+      fxSpawn("fx-vortex", hx, hy);
+      break;
+    case "w_warcry":   // 战吼:以英雄为心的三重冲击环
+      [0, 1, 2].forEach(i => later(i * 95, () =>
+        fxSpawn("fx-ring", hx, hy, { "--c": "#ff9c54" })));
+      break;
+    case "w_taunt":    // 嘲讽打击:怪头顶💢标记 + 小斩
+      fxSpawn("fx-glyph", mx, my - 34, { "--c": "#ffd94a" }).textContent = "💢";
+      fxSpawn("fx-slash", mx, my,
+        { "--r": "-45deg", "--c1": "#ffe3bc", "--c2": "#ff9c54", "--s": "0.9" });
+      break;
+    case "w_exec":     // 处决:交叉双巨斩(深红;震屏在粒子层)
+      fxSpawn("fx-slash", mx, my,
+        { "--r": "-38deg", "--c1": "#ffffff", "--c2": "#d42020", "--s": "2.2" });
+      later(120, () => fxSpawn("fx-slash", mx, my,
+        { "--r": "26deg", "--c1": "#ffb0b0", "--c2": "#d42020", "--s": "1.6" }));
+      break;
+    case "w_blood":    // 嗜血打击:撕裂斩 + 血液回流英雄(吸血叙事)
+      fxSpawn("fx-slash", mx, my,
+        { "--r": "-50deg", "--c1": "#ffb0b0", "--c2": "#e05a5a", "--s": "1.2" });
+      [0, 1, 2].forEach(i => later(160 + i * 100, () =>
+        fxSpawn("fx-tick", hx + mobRnd(-10, 10), hy + mobRnd(-14, 14), { "--fx-c": "#ff6b6b" })));
+      break;
+    case "w_wall":     // 护盾壁垒:英雄侧青色穹顶
+      fxSpawn("fx-dome", hx, hy, { "--c": "#7ff0ff" });
+      break;
+    case "w_fury":     // 狂暴:红色双环 + 速度线
+      [0, 1].forEach(i => later(i * 110, () =>
+        fxSpawn("fx-ring", hx, hy, { "--c": "#ff6b6b" })));
+      fxSpawn("fx-lines", hx - 40, hy - 20, { "--c": "#ff9c54" });
+      break;
+    case "w_fatal":    // 致命一击:金色交叉巨斩 + 爆闪(震屏在粒子层)
+      fxSpawn("fx-slash", mx, my,
+        { "--r": "-35deg", "--c1": "#fff6cf", "--c2": "#ffb347", "--s": "2" });
+      later(110, () => fxSpawn("fx-slash", mx, my,
+        { "--r": "30deg", "--c1": "#fff6cf", "--c2": "#ffd94a", "--s": "1.5" }));
+      later(150, () => fxSpawn("fx-hit", mx, my, { "--fx-c": "#ffd94a" }));
+      break;
+    case "w_roar":     // 毁灭怒吼:四重冲击环(震屏在粒子层)
+      [0, 1, 2, 3].forEach(i => later(i * 90, () =>
+        fxSpawn("fx-ring", hx, hy, { "--c": "#ff6b6b" })));
+      break;
+    // —— 法师 ——
+    case "m_missile":  // 奥术飞弹:三发能量珠连射
+      [0, 1, 2].forEach(i => later(i * 95, () => proj("fx-bolt", mobRnd(-14, 14))));
+      break;
+    case "m_fire":     // 火球术:三枚火球连发,逐枚爆闪(吟唱期节拍)
+      [0, 1, 2].forEach(i => later(i * 260, () => {
+        proj("fx-mproj", mobRnd(-10, 10));
+        later(240, () => fxSpawn("fx-burst", mx, my + mobRnd(-10, 10)));
+      }));
+      break;
+    case "m_ice":      // 寒冰箭:冰箭 + 落点冰闪(结霜在粒子层)
+      proj("fx-arrow", mobRnd(-8, 8));
+      later(120, () => fxSpawn("fx-hit", mx, my, { "--fx-c": "#7ff0ff" }));
+      break;
+    case "m_surge":    // 奥术涌动:英雄侧✦脉冲
+      fxSpawn("fx-glyph", hx + 6, hy, { "--c": "#5adfff" }).textContent = "✦";
+      break;
+    case "m_chain":    // 闪电链:锯齿电弧 + 落点爆闪 + 轻震
+      spawnChain(hx, hy, mx, my);
+      later(130, () => fxSpawn("fx-hit", mx, my, { "--fx-c": "#ffe98a" }));
+      stageShake(180);
+      break;
+    case "m_storm":    // 烈焰风暴:怪物位置火焰环(余烬落雨在粒子层)
+      fxSpawn("fx-ring", mx, my, { "--c": "#ff9c54" });
+      break;
+    case "m_nova":     // 冰霜新星:大范围冰环(结霜在粒子层)
+      fxSpawn("fx-nova", mx, my);
+      break;
+    case "m_shield":   // 法力护盾:蓝色穹顶
+      fxSpawn("fx-dome", hx, hy, { "--c": "#5adfff" });
+      break;
+    case "m_meteor":   // 陨石术:四段陨石连坠(震屏在粒子层)
+      [0, 1, 2, 3].forEach(i => later(i * 300, () => {
+        fxSpawn("fx-meteor", mx + mobRnd(-26, 26), my + mobRnd(-10, 10));
+        later(330, () => fxSpawn("fx-burst", mx + mobRnd(-20, 20), my + mobRnd(-8, 8)));
+      }));
+      break;
+    case "m_cata":     // 元素灾变:电弧+冰环+火环三连(震屏在粒子层)
+      spawnChain(hx, hy, mx, my);
+      later(110, () => fxSpawn("fx-nova", mx, my));
+      later(230, () => fxSpawn("fx-ring", mx, my, { "--c": "#ff9c54" }));
+      break;
+    // —— 射手 ——
+    case "r_volley":   // 疾风连射:三连箭
+      [0, 1, 2].forEach(i => later(i * 85, () => proj("fx-arrow", mobRnd(-12, 12))));
+      break;
+    case "r_pierce":   // 穿透箭:贯穿光束 + 落点闪
+      {
+        const el = fxSpawn("fx-pierce", hx, my, { "--c": "#6bff8f" });
+        el.style.width = (sw - hx - 6) + "px";
+      }
+      later(120, () => fxSpawn("fx-hit", mx, my, { "--fx-c": "#6bff8f" }));
+      break;
+    case "r_mark":     // 猎杀印记:怪物身上◎烙印 + 印记环
+      fxSpawn("fx-glyph", mx, my, { "--c": "#ffd94a" }).textContent = "◎";
+      later(120, () => fxSpawn("fx-ring", mx, my, { "--c": "#ffd94a" }));
+      break;
+    case "r_back":     // 后跳射击:射箭 + 英雄侧后撤速度线
+      proj("fx-arrow", mobRnd(-8, 8));
+      fxSpawn("fx-lines", hx - 46, hy - 20, { "--c": "#7ff0ff" });
+      break;
+    case "r_rain":     // 箭雨:五箭从天而降,逐箭落点闪
+      [0, 1, 2, 3, 4].forEach(i => later(i * 210, () => {
+        const x = mx + mobRnd(-46, 46);
+        fxSpawn("fx-rainarrow", x, my + mobRnd(-8, 8)).textContent = "➤";
+        later(360, () => fxSpawn("fx-tick", x, my + 4, { "--fx-c": "#6bff8f" }));
+      }));
+      break;
+    case "r_hawk":     // 鹰眼:英雄侧金色👁
+      fxSpawn("fx-glyph", hx + 6, hy - 8, { "--c": "#ffd94a" }).textContent = "👁";
+      break;
+    case "r_dash":     // 疾行:英雄侧速度线 + 💨
+      fxSpawn("fx-lines", hx - 36, hy - 22, { "--c": "#7ff0ff" });
+      fxSpawn("fx-glyph", hx, hy - 20, { "--c": "#7ff0ff" }).textContent = "💨";
+      break;
+    case "r_deadly":   // 致命连射:三连金箭 + 三爆闪(震屏在粒子层)
+      [0, 1, 2].forEach(i => later(i * 90, () => {
+        proj("fx-arrow", mobRnd(-10, 10));
+        later(110, () => fxSpawn("fx-hit", mx, my, { "--fx-c": "#ffd94a" }));
+      }));
+      break;
+    case "r_sky":      // 穿云箭:整屏贯穿金色粗光束(震屏在粒子层)
+      {
+        const el = fxSpawn("fx-pierce", hx, my, { "--c": "#ffd94a" });
+        el.style.width = (sw - hx - 4) + "px";
+        el.style.height = "9px";
+      }
+      later(140, () => fxSpawn("fx-hit", mx, my, { "--fx-c": "#ffd94a" }));
+      break;
+    case "r_god":      // 猎神之怒:英雄侧🌟 + 金色三重环(震屏在粒子层)
+      fxSpawn("fx-glyph", hx + 8, hy, { "--c": "#ffd94a" }).textContent = "🌟";
+      [0, 1, 2].forEach(i => later(80 + i * 95, () =>
+        fxSpawn("fx-ring", hx, hy, { "--c": "#ffd94a" })));
+      break;
+  }
+}
+
 function playSkillFx(sid: string): void {
   const def = SKILL_DEF.get(sid);
   if (!def) return;
+  heroSkillDom(sid);   // 具象特效层:投射物/环/穹顶/电弧/陨石/箭雨(与技能名一一对应)
   const fx = SKILL_FX[sid] ?? { mode: "burst" as FxMode };
   const colors = FX_COLORS[def.color] ?? FX_COLORS.white;
   const shapes = iconShapes(def.icon);
@@ -1223,17 +1417,23 @@ function playSkillFx(sid: string): void {
       }
       break;
   }
+  if (fx.big) stageShake();
+  if (fx.frost) stageFrost();
+}
+
+/** 震屏(大拍技能/怪物重击):remove→reflow→add 重触发动画 */
+function stageShake(ms = 350): void {
   const st = $("stage");
-  if (fx.big) {
-    st.classList.remove("shake");
-    void st.offsetWidth;   // 重新触发动画
-    st.classList.add("shake");
-    setTimeout(() => st.classList.remove("shake"), 350);
-  }
-  if (fx.frost) {
-    st.classList.add("frost");
-    setTimeout(() => st.classList.remove("frost"), 1250);
-  }
+  st.classList.remove("shake");
+  void st.offsetWidth;   // 重新触发动画
+  st.classList.add("shake");
+  setTimeout(() => st.classList.remove("shake"), ms);
+}
+/** 全屏结霜覆盖(冰系技能) */
+function stageFrost(ms = 1250): void {
+  const st = $("stage");
+  st.classList.add("frost");
+  setTimeout(() => st.classList.remove("frost"), ms);
 }
 
 // ---------------------------------------------------------------- 掉落特效
@@ -1260,6 +1460,154 @@ function playLootBeam(rarity: string): void {
     fxSpawn("fx-drop", p.x, p.y, {
       "--bx": hex, "--dx": Math.round(dx) + "px", "--dy": Math.round(dy) + "px",
     }).style.animationDelay = i * 45 + "ms";
+  }
+}
+
+// ---------------------------------------------------------------- 怪物技能特效
+// 核心侧 castMonsterSkill 发 "mskill:<技能名>",此处按名字逐一配置:引擎里
+// (canvas-confetti 粒子 + fxSpawn DOM 动画)有贴合形态就复用,没有的就自搓
+// CSS 类(飞刀/毒渍/骨刺/尘环/蛛网/大图标脉冲等,见 style.css 尾部)。
+// 方向统一 怪→英雄(舞台左侧受击锚点);未知名回落「红色斩击+粒子」,新怪不裸奔。
+
+/** 英雄受击锚点(舞台归一化):怪物技能往这打 */
+function heroSideNorm(): { x: number; y: number } { return { x: 0.15, y: 0.5 }; }
+/** 英雄受击锚点(舞台内像素) */
+function heroSidePx(): { x: number; y: number } {
+  const s = $("stage");
+  return { x: s.clientWidth * 0.15, y: s.clientHeight * 0.5 };
+}
+/** 怪物中心 → 英雄锚点的像素差(fx-mproj/fx-knife 的 --x/--y) */
+function deltaToHero(): { x: number; y: number } {
+  const m = monCenterPx();
+  const h = heroSidePx();
+  return m ? { x: h.x - m.x, y: h.y - m.y } : { x: -160, y: 0 };
+}
+const mobRnd = (a: number, b: number) => a + Math.random() * (b - a);
+
+function playMobSkillFx(name: string): void {
+  const mon = stageOrigin();
+  const hero = heroSideNorm();
+  const hp = heroSidePx();
+  const mp = monCenterPx();
+  const d = deltaToHero();
+  const burst = (o: { x: number; y: number }, colors: string[],
+    shapes: confetti.Shape[] | undefined, angle: number, spread: number,
+    v: number, n: number, extra: Partial<confetti.Options> = {}) =>
+    fxBoom({ colors, ...(shapes ? { shapes } : {}), scalar: 1.15,
+      particleCount: n, origin: o, angle, spread, startVelocity: v, ...extra });
+
+  switch (name) {
+    case "酸液喷吐":  // 史莱姆:毒液抛物线泼向英雄,落点绿渍 ×3
+      burst(mon, FX_COLORS.green, iconShapes("☣"), 200, 30, 55, 20, { gravity: 1.2, ticks: 420 });
+      [0, 1, 2].forEach(i => setTimeout(() =>
+        fxSpawn("fx-splat", hp.x + mobRnd(-26, 26), hp.y + mobRnd(-16, 16), { "--c": "#6bff8f" }),
+        150 + i * 90));
+      break;
+    case "狂暴撕咬":  // 恐狼:三连撕咬斩痕
+      [0, 1, 2].forEach(i => setTimeout(() =>
+        fxSpawn("fx-slash", hp.x, hp.y + mobRnd(-20, 20),
+          { "--r": `${mobRnd(-70, -20)}deg`, "--c1": "#ffb0b0", "--c2": "#ff5a5a", "--s": "0.9" }),
+        i * 130));
+      burst(mon, FX_COLORS.red, iconShapes("🐍"), 120, 70, 26, 8);
+      break;
+    case "卑鄙飞刀":  // 哥布林:一把翻滚飞刀 + 命中散芒
+      if (mp) fxSpawn("fx-knife", mp.x, mp.y + mobRnd(-10, 10),
+        { "--x": `${d.x}px`, "--y": `${mobRnd(-14, 14)}px` }).textContent = "🔪";
+      setTimeout(() => burst(hero, FX_COLORS.bright_black, iconShapes("🔪"), 90, 80, 38, 12), 240);
+      break;
+    case "血之盛宴":  // 吸血蝠:英雄侧血爆 + 怪物侧回血微粒(吸血叙事)
+      burst(hero, FX_COLORS.bright_red, iconShapes("🩸"), 90, 110, 50, 24);
+      [0, 1, 2].forEach(i => setTimeout(() => {
+        if (!mp) return;
+        fxSpawn("fx-tick", mp.x + mobRnd(-14, 14), mp.y + mobRnd(-14, 14), { "--fx-c": "#e06bff" });
+      }, 160 + i * 110));
+      break;
+    case "白骨之刺":  // 骷髅兵:英雄脚下升起三根骨刺 + 骨屑上扬
+      [-30, 0, 30].forEach((dx, i) => setTimeout(() =>
+        fxSpawn("fx-spike", hp.x + dx, hp.y), i * 90));
+      burst(hero, FX_COLORS.white, iconShapes("🦴"), 90, 70, 34, 14, { gravity: 1 });
+      break;
+    case "大地震颤":  // 石魔像:震屏 + 地面尘环 ×2 + 尘土
+      stageShake(460);
+      [0, 1].forEach(i => setTimeout(() => fxSpawn("fx-quake", hp.x, hp.y + 34), i * 130));
+      burst(hero, ["#c9a86f", "#9a9ab2", "#d8d8e8"], iconShapes("💢"), 90, 80, 28, 14, { gravity: 0.9 });
+      break;
+    case "火焰投掷":  // 小恶魔:火球飞向英雄,落地爆燃
+      if (mp) fxSpawn("fx-mproj", mp.x, mp.y + mobRnd(-8, 8),
+        { "--x": `${d.x}px`, "--y": `${mobRnd(-10, 10)}px`, "--c": "#ff9c54" });
+      setTimeout(() => {
+        burst(hero, FX_COLORS.bright_red, iconShapes("🔥"), 90, 100, 52, 24);
+        stageShake(240);
+      }, 220);
+      break;
+    case "三头撕咬":  // 地狱犬:上中下三个高度各来一咬(三头)
+      [-26, 0, 26].forEach((dy, i) => setTimeout(() =>
+        fxSpawn("fx-slash", hp.x, hp.y + dy,
+          { "--r": `${mobRnd(-80, -30)}deg`, "--c1": "#ffe3bc", "--c2": "#ff5a3c", "--s": "1" }),
+        i * 110));
+      burst(mon, FX_COLORS.yellow, iconShapes("🐺"), 120, 70, 26, 10);
+      break;
+    case "元素风暴":  // 元素灵:高压电流直贯英雄 + 落点爆闪
+      burst(mon, ["#5adfff", "#ffd94a", "#dbeeff"], iconShapes("⚡"), 168, 12, 105, 18, { ticks: 260 });
+      setTimeout(() => burst(hero, ["#5adfff", "#ffd94a"], iconShapes("⚡"), 90, 70, 45, 20), 140);
+      stageShake(280);
+      break;
+    case "孢子毒云":  // 毒蘑菇:英雄侧滞留毒云(慢速四散,长命粒子)
+      burst(hero, FX_COLORS.green, iconShapes("☣"), 90, 360, 7, 30, { drift: 2.2, ticks: 950, scalar: 0.9 });
+      fxSpawn("fx-splat", hp.x, hp.y, { "--c": "#55d97e" });
+      break;
+    case "缠丝连蛰":  // 红背毒蛛:蛛网罩住英雄 + 三下连蛰
+      fxSpawn("fx-web", hp.x, hp.y);
+      [0, 1, 2].forEach(i => setTimeout(() =>
+        fxSpawn("fx-tick", hp.x + mobRnd(-18, 18), hp.y + mobRnd(-18, 18), { "--fx-c": "#e06bff" }),
+        200 + i * 130));
+      burst(mon, FX_COLORS.bright_black, iconShapes("🕸"), 120, 60, 22, 8);
+      break;
+    case "毒牙速咬":  // 黑曼巴蛇:三下急速绿闪
+      [0, 1, 2].forEach(i => setTimeout(() =>
+        fxSpawn("fx-hit", hp.x + mobRnd(-14, 14), hp.y + mobRnd(-14, 14), { "--fx-c": "#6bff8f" }),
+        i * 100));
+      burst(mon, FX_COLORS.green, iconShapes("🦷"), 120, 60, 24, 10);
+      break;
+    case "尸毒喷发":  // 肿胀腐尸:腐毒雾扑面,英雄侧两摊毒渍
+      burst(mon, [...FX_COLORS.magenta, "#6bff8f"], iconShapes("☠"), 200, 45, 42, 18, { gravity: 0.8, ticks: 500 });
+      [0, 1].forEach(i => setTimeout(() =>
+        fxSpawn("fx-splat", hp.x + mobRnd(-22, 22), hp.y + mobRnd(-14, 14), { "--c": "#c050e0" }),
+        180 + i * 120));
+      break;
+    case "幽冥斩":  // 白骨武士:一道幽蓝巨斩
+      fxSpawn("fx-slash", hp.x, hp.y,
+        { "--r": "-40deg", "--c1": "#dff6ff", "--c2": "#7fd8ff", "--s": "1.9" });
+      stageShake(300);
+      burst(hero, FX_COLORS.bright_cyan, iconShapes("⚔"), 90, 70, 36, 10);
+      break;
+    case "甲群啃噬":  // 噬骨甲虫:虫群贴地涌向英雄 + 四下啃噬闪
+      burst(mon, FX_COLORS.yellow, iconShapes("🐜"), 188, 16, 26, 26, { gravity: 0.6, ticks: 700, scalar: 0.85 });
+      [0, 1, 2, 3].forEach(i => setTimeout(() =>
+        fxSpawn("fx-tick", hp.x + mobRnd(-16, 16), hp.y + mobRnd(-16, 16), { "--fx-c": "#ffd94a" }),
+        240 + i * 150));
+      break;
+    case "寒霜吐息":  // 霜翼幼龙:锥形冰息喷向英雄 + 全屏结霜
+      burst(mon, FX_COLORS.bright_cyan, iconShapes("❄"), 195, 26, 55, 26, { ticks: 500 });
+      stageFrost();
+      break;
+    case "疯狂凝视":  // 辉光邪眼:怪侧巨眼脉冲 + 品红细束直射英雄
+      if (mp) fxSpawn("fx-glyph", mp.x, mp.y, { "--c": "#e06bff" }).textContent = "👁";
+      burst(mon, FX_COLORS.bright_magenta, undefined, 170, 8, 95, 12, { scalar: 0.7, ticks: 260 });
+      break;
+    case "灭世之击":  // 头目大招:三波陨石砸顶 + 落点红爆 + 长震屏
+      stageShake(500);
+      [0, 1, 2].forEach(i => setTimeout(() =>
+        fxBoom({ colors: FX_COLORS.bright_red, shapes: iconShapes("☄"), scalar: 1.5,
+          particleCount: 14, origin: { x: hero.x, y: 0.05 },
+          angle: 270, spread: 30, startVelocity: 15, gravity: 1.6 }), i * 130));
+      // 终爆用默认粒子吃满红色(emoji 粒子自带颜色,红字辈的爆炸要靠色块撑)
+      setTimeout(() => burst(hero, FX_COLORS.bright_red, undefined, 90, 110, 58, 44, { scalar: 1.5 }), 420);
+      break;
+    default:  // 未配置的新技能名:通用红色斩击 + 粒子,不裸奔
+      fxSpawn("fx-slash", hp.x, hp.y,
+        { "--r": "-50deg", "--c1": "#ffb0b0", "--c2": "#e05a5a", "--s": "1.1" });
+      burst(hero, FX_COLORS.red, undefined, 90, 100, 40, 16);
   }
 }
 
@@ -1427,7 +1775,7 @@ function renderBattle(st: State): void {
   const dpsUp = atkUp || hasteUp || has("dmg_pct");
   $("hero-card").innerHTML =
     `<h3><span class="dot"></span>英雄 · ${esc(st.cls.name)}</h3>` +
-    `<div class="bar hero-hp lg"><div class="fill" style="width:${hpPct}%"></div>` +
+    `<div class="bar hero-hp lg${shield > 0 ? " shielded" : ""}"><div class="fill" style="width:${hpPct}%"></div>` +
     (shield > 0 ? `<i class="shield-mark" style="left:${hpPct}%;width:${Math.min(100 - hpPct, shield / h.max_hp * 100)}%"></i>` : "") +
     `<div class="num">${fmt(h.hp)} / ${fmt(h.max_hp)}` +
       (shield > 0 ? ` (🛡${fmt(shield)})` : "") + `</div></div>` +
@@ -1525,9 +1873,12 @@ function renderBattle(st: State): void {
     if (!def) continue;
     const cd = st.skill_cd[sid] ?? 0;
     const cdPct = cd > 0 ? Math.min(100, cd / def.cd * 100) : 0;
-    sk += `<div class="skill ${cd > 0 ? "" : "ready"}" title="${esc(def.desc)}｜冷却 ${def.cd}s">` +
+    const ch = st.burst && st.burst.sid === sid ? st.burst : null;
+    sk += `<div class="skill ${ch ? "channeling" : cd > 0 ? "" : "ready"}" title="${esc(def.desc)}｜冷却 ${def.cd}s">` +
       `<span class="ic">${def.icon}</span><span class="nm">${esc(def.name)}</span>` +
-      (cd > 0 ? `<div class="cdfill" style="height:${cdPct}%"></div>` +
+      (ch ? `<div class="chfill" style="height:${Math.round((ch.hits - ch.left) / ch.hits * 100)}%"></div>` +
+        `<div class="cdov ch">◈${ch.left}</div>`
+       : cd > 0 ? `<div class="cdfill" style="height:${cdPct}%"></div>` +
         `<div class="cdov">${Math.ceil(cd)}</div>` : "") + `</div>`;
   }
   $("skillbar-card").innerHTML =
@@ -1586,8 +1937,7 @@ function renderHeroPage(st: State): void {
     (pw ? `<div style="color:var(--dim);font-size:11.5px;margin:0 0 12px">` +
       `战力构成:输出 ${fmt(pw.offense)} · 生存 ${fmt(pw.defense)} · 功能 ${fmt(pw.utility)}` +
       `(按第 ${Math.max(1, st.stats.max_zone)} 区假人折算,含生效增益)</div>` : "") +
-    rebirthBlockHtml(st) +
-    talentEntryHtml(st) +
+    rebirthEntryHtml(st) +
     titleEntryHtml(st) +
     `<h3 style="margin-top:16px"><span class="dot"></span>装备框 · 点击槽位查看属性与操作</h3>` +
     `<div class="gear-frame">${frame}</div>`;
@@ -1635,7 +1985,21 @@ function renderTitlesModal(st: State): void {
         `尚未转生:50 级后可转生,历代冒险记录会出现在这里</div>`);
 }
 
-/** 转生块:当前加成 + 门槛进度 + 入口按钮(确认与择业在弹窗)。
+/** 转生中心入口(功能按钮):角色页只留一行摘要,点开弹窗才是 转生+深渊天赋 */
+function rebirthEntryHtml(st: State): string {
+  const statPct = Math.round(D.BAL.rebirth_stat_pct * st.rebirths * 10) / 10;
+  const gainPct = Math.round(D.BAL.rebirth_gain_pct * st.rebirths * 10) / 10;
+  const r1 = (v: number): string => v === Math.trunc(v) ? String(v) : v.toFixed(1);
+  const dot = (st.can_rebirth && st.stuck) || st.essence > 0;
+  const desc = `转生 ${r1(st.rebirths)} 世 · 三围 +${r1(statPct)}% · 金币经验 +${r1(gainPct)}% · 魂晶 ✧${fmt(st.essence)}` +
+    (st.can_rebirth && st.stuck ? " · ⛔ 受阻,推荐转生" : "");
+  return `<div class="set-row" style="margin-top:12px"><div class="lbl">♻ 转生 · 深渊天赋` +
+    `<div class="d">${desc}</div></div>` +
+    `<button class="btn" data-local="rebirth_menu">查看 ▾</button>` +
+    (dot ? `<span class="qm-dot"></span>` : "") + `</div>`;
+}
+
+/** 转生块(弹窗内身):当前加成 + 门槛进度 + 入口按钮(确认与择业在弹窗)。
  *  三态(2026-10 数值结论:无墙曲线下"到点即转"是负收益,文案引导卡墙再转):
  *  未达标=锁定;达标未卡墙=普通按钮+时机提示;卡墙(自动转挂机中)=高亮推荐。 */
 function rebirthBlockHtml(st: State): string {
@@ -1659,8 +2023,7 @@ function rebirthBlockHtml(st: State): string {
         ? `<div class="rb-timing stuck">⛔ 推进受阻中 —— 现在是转生的好时机:带着永久加成与祭坛/遗物重爬,能推得更远。</div>`
         : `<div class="rb-timing">⏳ 当前推进未受阻:继续推深能提高本次收获档位;仅想换职业则随时可转。</div>`)
     : "";
-  return `<h3 style="margin-top:16px"><span class="dot"></span>♻ 转生 · 涅槃重生</h3>` +
-    `<div class="rebirth-card${st.can_rebirth ? (st.stuck ? " ready stuck" : " ready") : ""}">` +
+  return `<div class="rebirth-card${st.can_rebirth ? (st.stuck ? " ready stuck" : " ready") : ""}">` +
       `<div class="rb-info">` +
         `<span>转生 <b>${r1(st.rebirths)}</b> 世</span>` +
         `<span>攻击/生命/防御 <b>+${r1(Math.round(statPct * 10) / 10)}%</b></span>` +
@@ -1674,24 +2037,9 @@ function rebirthBlockHtml(st: State): string {
     `</div>`;
 }
 
-/** 深渊天赋入口(功能按钮):角色页一行摘要,点开弹窗才是天赋树 */
-function talentEntryHtml(st: State): string {
-  const locked = st.rebirths < 1;
-  const desc = locked
-    ? "转生后解锁:魂晶 ✧ 是转生收获的永久货币,在此消费"
-    : `总等级 ${st.talent_total} · 持有魂晶 ✧${fmt(st.essence)}` +
-      (st.essence > 0 ? " · 有可分配" : "");
-  return `<div class="set-row" style="margin-top:12px"><div class="lbl">✧ 深渊天赋` +
-    `<div class="d">${desc}</div></div>` +
-    (locked
-      ? `<button class="btn" disabled title="首次转生后解锁">🔒 转生解锁</button>`
-      : `<button class="btn" data-local="talents">加点 ▾</button>` +
-        (st.essence > 0 ? `<span class="qm-dot"></span>` : "")) +
-    `</div>`;
-}
-
-/** 深渊天赋弹窗:三支系 × 各节点(升级/门槛/满级);点「+1」即买,弹窗保持打开 */
+/** 转生中心弹窗:两个分栏(转生 / 深渊天赋);点「+1」即买天赋,弹窗保持打开 */
 let talentMenu = false;
+let rebirthView: "rebirth" | "talents" = "rebirth";
 function renderTalentModal(st: State): void {
   const m = $("talent-modal");
   if (!talentMenu || !st.class_id) {
@@ -1700,7 +2048,16 @@ function renderTalentModal(st: State): void {
     return;
   }
   m.classList.add("show");
-  $("talent-sub").textContent =
+  document.querySelectorAll<HTMLButtonElement>("#talent-tabs [data-tview]").forEach(b =>
+    b.classList.toggle("on", b.dataset.tview === rebirthView));
+  const sub = $("talent-sub");
+  if (rebirthView === "rebirth") {
+    sub.style.display = "none";
+    $("talent-body").innerHTML = rebirthBlockHtml(st);
+    return;
+  }
+  sub.style.display = "";
+  sub.textContent =
     `持有魂晶 ✧${fmt(g.essence)} · 终身获得 ${fmt(g.lifetimeEssence)} · 总等级 ${st.talent_total}` +
     `;天赋永久生效,转生不重置;节点按转生世数逐步解锁`;
   const branchHtml = D.TALENT_BRANCHES.map(br => {
@@ -1989,12 +2346,16 @@ function questModalBody(st: State, view: QuestModalView): string {
     for (const a of st.achievements) {
       let pips = "";
       for (let i = 0; i < a.total; i++) pips += `<i class="${i < a.tiers ? "on" : ""}"></i>`;
-      ach += `<div class="ach-row"><div class="ach-info"><div class="nm">${esc(a.name)}</div>` +
-        `<div class="pr">当前 ${fmt(a.val)}` +
-        (a.next !== null ? ` · 下一档 ${fmt(a.next)}` : " · 已满档") + `</div></div>` +
-        `<div class="ach-pips">${pips}</div>` +
-        `<div class="ach-bonus">${esc(a.stat)} +${a.stat.includes("点") ? a.bonus : pctTxt(a.bonus)}` +
-        (a.next !== null ? ` <span class="nx">(每档+${a.per})</span>` : "") + `</div></div>`;
+      // 两行结构:上行 名称+加成(右侧),下行 圆点+进度(右侧)——单行三段在窄屏会把名称挤成竖排
+      const val = a.stat.includes("点") ? `+${a.bonus}` : `+${pctTxt(a.bonus)}`;
+      const per = a.stat.includes("点") ? `每档+${a.per}点` : `每档+${a.per}%`;
+      ach += `<div class="ach-row">` +
+        `<div class="ach-top"><div class="nm">${esc(a.name)}</div>` +
+        `<div class="ach-bonus">${esc(a.stat)} ${val}` +
+        (a.next !== null ? ` <span class="nx">(${per})</span>` : "") + `</div></div>` +
+        `<div class="ach-sub"><div class="ach-pips">${pips}</div>` +
+        `<div class="pr">${fmt(a.val)}` +
+        (a.next !== null ? ` → ${fmt(a.next)}` : " · 已满档") + `</div></div></div>`;
     }
     return ach;
   }
@@ -2561,6 +2922,8 @@ document.addEventListener("click", (e: MouseEvent) => {
   if (sub) { switchTab("hero"); switchHeroSub(sub.dataset.sub!); return; }
   const qmEl = target.closest<HTMLElement>("[data-quest-modal]");
   if (qmEl) { questModal = qmEl.dataset.questModal as QuestModalView; renderNow(); return; }
+  const tvEl = target.closest<HTMLElement>("[data-tview]");
+  if (tvEl) { rebirthView = tvEl.dataset.tview as "rebirth" | "talents"; renderNow(); return; }
   const gearEl = target.closest<HTMLElement>("[data-gear]");
   if (gearEl) {
     const [kind, val] = (gearEl.dataset.gear ?? "").split(":");
@@ -2590,7 +2953,8 @@ function localCmd(name: string): void {
   } else if (name === "import") ($("file-input") as HTMLInputElement).click();
   else if (name === "autosell") { autoSellMenu = true; renderNow(); }
   else if (name === "titles") { titlesMenu = true; renderNow(); }
-  else if (name === "talents") { talentMenu = true; renderNow(); }
+  else if (name === "talents") { rebirthView = "talents"; talentMenu = true; renderNow(); }
+  else if (name === "rebirth_menu") { rebirthView = "rebirth"; talentMenu = true; renderNow(); }
   else if (name === "forge") { forgeMenu = true; renderNow(); }
   else if (name === "help") $("help-modal").classList.add("show");
   else if (name === "sfx") toggleSfx();
@@ -3308,10 +3672,12 @@ function boot(): void {
   if (!HERO_MODEL) ($("hero-art") as HTMLElement).style.display = "none";
 
   // 调试钩子:__abyss.state() 验证推进;fx("warrior") 演示普攻特效与音效;
-  // skillfx("m_meteor") 演示任意技能的粒子特效;sfxcast("w_exec") 演示技能音效;sfx() 查看音效状态;
-  // lootbeam("epic") 演示掉落光柱
+  // skillfx("m_meteor") 演示任意技能的粒子特效;mobfx("酸液喷吐") 演示怪物技能特效;
+  // mobcast() 令当前怪下一拍真实施放技能(走完整事件链);sfxcast("w_exec") 演示技能音效;
+  // sfx() 查看音效状态;lootbeam("epic") 演示掉落光柱
   (window as unknown as { __abyss?: { state(): string; fx(cls?: string, crit?: boolean): void;
                                          sfx(): string; skillfx(sid: string): void;
+                                         mobfx(name: string): void; mobcast(): string | null;
                                          sfxcast(sid: string): void;
                                          lootbeam(rarity: string): void;
                                          dbg(): string } }).__abyss = {
@@ -3319,6 +3685,12 @@ function boot(): void {
     fx: (cls, crit) => { playAttackFx(cls, crit); playAttackHit(crit ?? false); },
     sfx: () => sfxDebug(),
     skillfx: (sid) => playSkillFx(sid),
+    mobfx: (name) => playMobSkillFx(name),
+    mobcast: () => {
+      const m = g.monster;
+      if (m?.skill) { m.skillTimer = m.skill.cd; return m.skill.name; }
+      return null;
+    },
     sfxcast: (sid) => playSkillCast(sid),
     lootbeam: (rarity) => playLootBeam(rarity),
     dbg: () => JSON.stringify({ auto_equip: g.settings.auto_equip,

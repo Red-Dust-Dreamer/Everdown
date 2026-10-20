@@ -258,12 +258,16 @@
   </div>
 </div>
 
-<!-- 深渊天赋(角色页功能按钮点入):魂晶消费端,三支系节点树 -->
+<!-- 转生中心(角色页功能按钮点入):转生 + 深渊天赋 两个分栏,魂晶消费端三支系节点树 -->
 <div class="overlay" id="talent-modal">
   <div class="modal wide">
     <button class="modal-x" id="talent-close" title="关闭">✕</button>
-    <h2>✧ 深渊天赋</h2>
-    <p class="dim" id="talent-sub"></p>
+    <h2>♻ 转生中心</h2>
+    <div class="lb-segbar" id="talent-tabs">
+      <button class="btn mini" data-tview="rebirth">♻ 转生</button>
+      <button class="btn mini" data-tview="talents">✧ 深渊天赋</button>
+    </div>
+    <p class="dim" id="talent-sub" style="display:none"></p>
     <div id="talent-body"></div>
   </div>
 </div>

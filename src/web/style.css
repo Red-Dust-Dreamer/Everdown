@@ -84,7 +84,8 @@ body{
 .sw-score{margin-top:8px;font-size:13px;color:var(--gold);font-weight:700}
 .sw-up{color:#6bff8f;font-weight:700}
 .sw-pow{margin-top:4px;font-size:12.5px;color:var(--dim)}   /* 换装战力变化(±值自带颜色) */
-.swap-ops{display:flex;gap:10px;justify-content:center;margin-top:12px}
+.swap-ops{display:flex;gap:10px;justify-content:center;margin-top:12px;
+  flex-wrap:wrap}   /* 字体缩放/窄屏下按钮组要能换行,否则爆出弹窗(换装/装备详情/择业共用) */
 @media (max-width:560px){.swap-grid{grid-template-columns:1fr}}
 
 /* 装备框:角色页 装备6槽+遗物4槽 网格,点击槽位弹详情 */
@@ -149,7 +150,8 @@ body{
   flex-wrap:wrap}
 .card h3 .dot{width:6px;height:6px;border-radius:50%;background:var(--red);
   box-shadow:0 0 8px var(--red);flex:none}
-.card h3 .rt{margin-left:auto;display:flex;gap:8px;align-items:center}
+.card h3 .rt{margin-left:auto;display:flex;gap:8px;align-items:center;
+  flex-wrap:wrap;justify-content:flex-end}   /* 字体缩放/窄屏下按钮组自身也要能换行,否则整组爆出屏幕 */
 
 /* ---------------- 战斗页 ---------------- */
 #battle-top{display:flex;gap:12px;flex:1;min-height:0}
@@ -268,8 +270,18 @@ body{
   box-shadow:0 0 12px rgba(95,211,95,.4)}
 .bar.xp .fill{background:linear-gradient(90deg,#2a4a8a,#5c9dff)}
 .bar.q .fill{background:linear-gradient(90deg,#8a6a1e,#ffd94a)}
+/* 护盾段:与血量同条,挂在当前血量右侧;流光扫过+辉光表示生效中,
+   宽度=盾量/max_hp(超出条尾封顶,真实厚度看数字行的 +百分比) */
 .bar .shield-mark{position:absolute;top:-2px;bottom:-2px;border-radius:0 4px 4px 0;
-  background:rgba(90,223,255,.35);border:1px solid rgba(90,223,255,.7)}
+  background:linear-gradient(100deg,rgba(90,223,255,.30) 0%,rgba(190,242,255,.62) 50%,rgba(90,223,255,.30) 100%);
+  background-size:200% 100%;
+  border:1px solid rgba(120,230,255,.85);
+  box-shadow:0 0 10px rgba(90,223,255,.55),inset 0 0 6px rgba(210,246,255,.55);
+  animation:shieldSheen 1.7s linear infinite}
+@keyframes shieldSheen{from{background-position:0% 0}to{background-position:-200% 0}}
+/* 有盾时血条本体微亮 */
+.bar.shielded{border-color:rgba(120,230,255,.55);
+  box-shadow:0 0 12px rgba(90,223,255,.35)}
 
 /* 飘字 */
 .floater{position:absolute;font-weight:800;pointer-events:none;white-space:nowrap;
@@ -446,6 +458,13 @@ body{
 
 /* 技能栏 */
 #skillbar{display:flex;gap:10px;flex-wrap:wrap;justify-content:center}
+/* 引导中:金框呼吸 + 剩余跳数(×3 速度下引导压缩到亚秒,飘字糊成瞬发,靠这个状态才看得见) */
+.skill.channeling{border-color:var(--gold);
+  box-shadow:0 0 12px rgba(255,217,74,.45);animation:chPulse .5s ease-in-out infinite}
+@keyframes chPulse{50%{box-shadow:0 0 20px rgba(255,217,74,.75)}}
+.skill.channeling .ic{text-shadow:0 0 12px rgba(255,217,74,.95)}
+.skill .chfill{position:absolute;left:0;right:0;bottom:0;background:#ffd94a2e;pointer-events:none}
+.skill .cdov.ch{background:#05050ab0;color:var(--gold)}
 .skill{width:62px;height:62px;border-radius:10px;background:#191926;
   border:1px solid var(--line2);display:flex;flex-direction:column;align-items:center;
   justify-content:center;gap:2px;position:relative;overflow:hidden;cursor:default}
@@ -631,18 +650,21 @@ body{
 .sk-ops .btn{min-width:58px}
 
 /* ---------------- 悬赏 / 成就页 ---------------- */
-.ach-row{display:flex;align-items:center;gap:12px;background:#15152299;
+/* 两行结构:上行 名称+加成,下行 圆点+进度——窄屏不挤名称(单行三段会把名称压成竖排) */
+.ach-row{display:flex;flex-direction:column;gap:5px;background:#15152299;
   border:1px solid #20202f;border-radius:10px;padding:10px 13px;margin-bottom:8px}
 .ach-row:last-child{margin-bottom:0}
-.ach-info{flex:1;min-width:0}
-.ach-info .nm{font-weight:700}
-.ach-info .pr{color:var(--dim);font-size:12px;font-variant-numeric:tabular-nums}
-.ach-pips{display:flex;gap:4px;flex:none}
-.ach-pips i{width:10px;height:10px;border-radius:50%;background:#22223a;
+.ach-top{display:flex;align-items:baseline;gap:10px}
+.ach-top .nm{flex:1;min-width:0;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ach-sub{display:flex;align-items:center;gap:10px}
+.ach-sub .pr{flex:1;min-width:0;text-align:right;color:var(--dim);font-size:12px;
+  font-variant-numeric:tabular-nums;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ach-pips{display:flex;gap:3px;flex:none}
+.ach-pips i{width:8px;height:8px;border-radius:50%;background:#22223a;
   border:1px solid var(--line2)}
 .ach-pips i.on{background:var(--gold);border-color:var(--gold);
   box-shadow:0 0 6px rgba(255,217,74,.6)}
-.ach-bonus{color:#ffd94a;font-size:12.5px;white-space:nowrap}
+.ach-bonus{color:#ffd94a;font-size:12.5px;white-space:nowrap;flex:none}
 .ach-bonus .nx{color:var(--dim)}
 
 /* ---------------- 设置页 ---------------- */
@@ -666,6 +688,8 @@ select.sel{background:#1b1b2a;color:var(--txt);border:1px solid var(--line2);
 .overlay{position:fixed;inset:0;z-index:50;background:rgba(5,5,12,.72);
   backdrop-filter:blur(3px);display:none;align-items:center;justify-content:center}
 .overlay.show{display:flex}
+/* 转生确认/择业要盖在转生中心弹窗之上(它在 DOM 更靠后,同 z-index 会反被盖住) */
+#rebirth-modal,#class-select{z-index:55}
 .modal{background:linear-gradient(180deg,#181826,#10101a);border:1px solid var(--line2);
   border-radius:14px;padding:22px 26px;max-width:430px;width:92%;
   max-height:86vh;overflow-y:auto;position:relative;
@@ -791,7 +815,6 @@ select.sel{background:#1b1b2a;color:var(--txt);border:1px solid var(--line2);
   .cls-card .ic{font-size:30px}
   .cls-card .ds{text-align:left}
   .modal{padding:18px 16px}
-  .ach-row{flex-wrap:wrap}
   /* 手机/APP 无键盘:快捷键提示整段隐藏,设置页脚只留版本号 */
   .set-hint .kbd-hint{display:none}
   /* 标签占满首行,控件(开关/按钮组)换行到第二行;空 div 的 .toggle 在
@@ -820,6 +843,8 @@ select.sel{background:#1b1b2a;color:var(--txt);border:1px solid var(--line2);
 .lb-segbar::-webkit-scrollbar{display:none}
 .lb-segbar .btn{flex:none}
 .lb-seg-split{width:1px;height:18px;flex:none;background:var(--line2);margin:0 2px}
+/* 转生中心弹窗里的分栏条:去掉榜单上下文用的负边距,别被弹窗顶边裁切 */
+#talent-tabs{margin:0}
 .lb-me-row .k{color:var(--dim);margin-right:4px}
 .lb-me-row b{color:#fff;font-variant-numeric:tabular-nums;margin-right:8px}
 .lb-rank-badge{margin-left:auto;font-size:12.5px;font-weight:700;color:var(--dim);
@@ -913,7 +938,7 @@ select.sel{background:#1b1b2a;color:var(--txt);border:1px solid var(--line2);
 .wk-row{display:flex;align-items:center;gap:8px;font-size:12px}
 .wk-row .nm{min-width:112px;white-space:nowrap;color:#cfd8ff}
 .wk-row.ok .nm{color:#6bff8f}
-.wk-row .bar{flex:1}
+.wk-row .bar{flex:1;min-width:0}   /* .bar 基础 min-width:120 在字体缩放下会把行顶爆,此处置零 */
 .wk-chests{display:flex;gap:8px;margin-top:9px;flex-wrap:wrap}
 
 /* 称号与世系(hero 页) */
@@ -985,3 +1010,132 @@ select.sel{background:#1b1b2a;color:var(--txt);border:1px solid var(--line2);
 /* ---- 定向锻造(2.4) ---- */
 .forge-lbl{font-size:12px;color:var(--dim);margin:8px 0 2px}
 .forge-cost{font-size:13px;text-align:center;margin:10px 0 2px;color:var(--txt)}
+
+/* ---- 怪物技能特效(mskill:<名字>,方向 怪→英雄,锚点与普攻特效同源) ---- */
+/* 受击泛红:怪物普攻/技能命中英雄时舞台内缘一瞬红晕(英雄立绘关闭期的受击反馈) */
+#stage.hurt::before{content:"";position:absolute;inset:0;z-index:5;pointer-events:none;
+  animation:stageHurt .26s ease-out forwards}
+@keyframes stageHurt{0%{box-shadow:inset 0 0 0 rgba(255,64,64,0)}
+  30%{box-shadow:inset 0 0 46px rgba(255,64,64,.38)}
+  100%{box-shadow:inset 0 0 0 rgba(255,64,64,0)}}
+/* 怪→英雄投射物(火焰投掷等):发光球直线飞行,--x 传负值向左,--c 主色 */
+.fx-mproj{position:absolute;width:22px;height:22px;margin:-11px 0 0 -11px;border-radius:50%;
+  background:radial-gradient(circle at 38% 35%, rgba(255,255,255,.55), var(--c,#ff9c54) 62%);
+  box-shadow:0 0 14px 2px var(--c,#ff9c54);animation:fxMproj .26s linear forwards}
+@keyframes fxMproj{0%{transform:translate(0,0);opacity:1}85%{opacity:1}
+  100%{transform:translate(var(--x,-160px),var(--y,0));opacity:0}}
+/* 卑鄙飞刀:翻滚的 🔪 飞向英雄 */
+.fx-knife{position:absolute;font-size:19px;line-height:1;
+  animation:fxKnife .3s linear forwards}
+@keyframes fxKnife{0%{transform:translate(0,0) rotate(0);opacity:1}
+  100%{transform:translate(var(--x,-160px),var(--y,0)) rotate(-720deg);opacity:.9}}
+/* 毒液落点污渍(酸液喷吐/尸毒喷发) */
+.fx-splat{position:absolute;width:36px;height:30px;margin:-15px 0 0 -18px;
+  border-radius:58% 42% 55% 45%/50% 60% 40% 50%;background:var(--c,#6bff8f);
+  box-shadow:0 0 10px var(--c,#6bff8f);animation:fxSplat .4s ease-out forwards}
+@keyframes fxSplat{0%{transform:scale(.2);opacity:0}35%{transform:scale(1.05);opacity:.95}
+  75%{opacity:.85}100%{transform:scale(1.15);opacity:0}}
+/* 白骨之刺:英雄脚下升起的三根骨刺 */
+.fx-spike{position:absolute;width:14px;height:30px;margin-left:-7px;
+  clip-path:polygon(50% 0,88% 26%,68% 100%,32% 100%,12% 26%);
+  background:linear-gradient(180deg,#fffdf2,#cfc8b4);transform-origin:50% 100%;
+  filter:drop-shadow(0 0 6px rgba(255,253,242,.5));animation:fxSpike .42s ease-out forwards}
+@keyframes fxSpike{0%{transform:scaleY(0);opacity:1}45%{transform:scaleY(1);opacity:1}
+  100%{transform:scaleY(1);opacity:0}}
+/* 大地震颤:地面扩散尘环 ×2 */
+.fx-quake{position:absolute;width:150px;height:44px;margin:-22px 0 0 -75px;
+  border:2px solid rgba(201,168,111,.55);border-bottom-color:rgba(232,216,176,.67);
+  border-radius:50%;animation:fxQuake .5s ease-out forwards}
+@keyframes fxQuake{0%{transform:scale(.25);opacity:.9}100%{transform:scale(1.7);opacity:0}}
+/* 缠丝连蛰:罩向英雄的蛛网 */
+.fx-web{position:absolute;width:120px;height:120px;margin:-60px 0 0 -60px;border-radius:50%;
+  background:
+    repeating-radial-gradient(circle at 50% 50%, rgba(230,240,255,.55) 0 1.5px, transparent 1.5px 15px),
+    linear-gradient(0deg,transparent 49.4%,rgba(230,240,255,.47) 49.4% 50.6%,transparent 50.6%),
+    linear-gradient(60deg,transparent 47%,rgba(230,240,255,.4) 47% 48.7%,transparent 48.7%),
+    linear-gradient(120deg,transparent 47%,rgba(230,240,255,.4) 47% 48.7%,transparent 48.7%);
+  animation:fxWeb .85s ease-in-out forwards}
+@keyframes fxWeb{0%{transform:scale(.5) rotate(-14deg);opacity:0}
+  25%{transform:scale(1) rotate(0);opacity:.95}70%{opacity:.9}100%{opacity:0}}
+/* 疯狂凝视/灭世之击:目标位置大图标脉冲 */
+.fx-glyph{position:absolute;font-size:54px;line-height:1;
+  filter:drop-shadow(0 0 6px var(--c,#e06bff)) drop-shadow(0 0 18px var(--c,#e06bff));
+  animation:fxGlyph .55s ease-out forwards}
+@keyframes fxGlyph{0%{transform:scale(.2);opacity:0}35%{transform:scale(1.18);opacity:1}
+  70%{transform:scale(1);opacity:.9}100%{transform:scale(1.25);opacity:0}}
+
+/* ---- 英雄技能专属特效(按技能名程序合成,零外部素材;方向 英雄→怪物) ---- */
+/* 怒吼冲击环:战吼/狂暴/毁灭怒吼/猎神之怒 —— 以英雄为圆心的扩散圆环 */
+.fx-ring{position:absolute;width:90px;height:90px;margin:-45px 0 0 -45px;border-radius:50%;
+  border:3px solid var(--c,#ff9c54);
+  box-shadow:0 0 12px var(--c,#ff9c54),inset 0 0 10px var(--c,#ff9c54);
+  animation:fxRing .55s cubic-bezier(.2,.7,.3,1) forwards}
+@keyframes fxRing{0%{transform:scale(.25);opacity:.95}70%{opacity:.55}
+  100%{transform:scale(2.4);opacity:0}}
+/* 护盾穹顶:护盾壁垒/法力护盾 —— 英雄侧半球闪光,--c 主色 */
+.fx-dome{position:absolute;width:130px;height:66px;margin:-60px 0 0 -65px;
+  border-radius:130px 130px 14px 14px;
+  background:radial-gradient(ellipse at 50% 100%,transparent 42%,var(--c,#7ff0ff) 46%,transparent 62%);
+  border:2px solid var(--c,#7ff0ff);border-bottom:none;
+  box-shadow:0 0 16px var(--c,#7ff0ff);animation:fxDome .7s ease-out forwards}
+@keyframes fxDome{0%{transform:scale(.5);opacity:0}25%{transform:scale(1.05);opacity:.95}
+  65%{opacity:.8}100%{transform:scale(1.1);opacity:0}}
+/* 旋风斩:英雄位置旋转刀刃环(四刃扇形,自转两周收束) */
+.fx-vortex{position:absolute;width:150px;height:150px;margin:-75px 0 0 -75px;border-radius:50%;
+  background:conic-gradient(from 0deg,
+    transparent 0 20deg,#ffe3bc 30deg,#ff5a3c 52deg,transparent 64deg,
+    transparent 110deg,#ffe3bc 120deg,#ff5a3c 142deg,transparent 154deg,
+    transparent 200deg,#ffe3bc 210deg,#ff5a3c 232deg,transparent 244deg,
+    transparent 290deg,#ffe3bc 300deg,#ff5a3c 322deg,transparent 334deg);
+  -webkit-mask:radial-gradient(circle,transparent 40%,#000 50%,#000 88%,transparent 96%);
+  mask:radial-gradient(circle,transparent 40%,#000 50%,#000 88%,transparent 96%);
+  animation:fxVortex 1.1s cubic-bezier(.15,.6,.3,1) forwards}
+@keyframes fxVortex{0%{transform:scale(.4) rotate(0);opacity:0}
+  15%{transform:scale(1) rotate(60deg);opacity:.95}
+  80%{transform:scale(1.05) rotate(660deg);opacity:.85}
+  100%{transform:scale(1.12) rotate(720deg);opacity:0}}
+/* 闪电链:JS 按起终点生成锯齿 clip-path 的电弧(双闪后消散) */
+.fx-chain{position:absolute;
+  background:linear-gradient(180deg,#ffffff,#ffe98a 40%,#5adfff);
+  filter:drop-shadow(0 0 8px #ffe98a) drop-shadow(0 0 14px #5adfff);
+  animation:fxChain .3s steps(2,end) forwards}
+@keyframes fxChain{0%{opacity:0}20%{opacity:1}45%{opacity:.4}70%{opacity:1}100%{opacity:0}}
+/* 冰霜新星:怪物位置大范围冰环扩散 */
+.fx-nova{position:absolute;width:170px;height:170px;margin:-85px 0 0 -85px;border-radius:50%;
+  border:4px solid #bfeeff;
+  box-shadow:0 0 22px #7ff0ff,inset 0 0 24px rgba(127,240,255,.7);
+  animation:fxNova .6s cubic-bezier(.2,.7,.3,1) forwards}
+@keyframes fxNova{0%{transform:scale(.15);opacity:1}100%{transform:scale(1.6);opacity:0}}
+/* 陨石:从右上方斜砸到目标的拖尾火球 */
+.fx-meteor{position:absolute;width:20px;height:20px;margin:-10px 0 0 -10px;border-radius:50%;
+  background:radial-gradient(circle at 40% 35%,rgba(255,255,255,.6),#ff9c54 55%,#ff5a3c);
+  box-shadow:0 0 14px 3px #ff9c54;
+  animation:fxMeteor .34s cubic-bezier(.5,0,.9,.4) forwards}
+.fx-meteor::after{content:"";position:absolute;left:9px;top:-48px;width:6px;height:54px;
+  border-radius:3px;background:linear-gradient(180deg,transparent,rgba(255,187,119,.67) 45%,#ffd9b0)}
+@keyframes fxMeteor{0%{transform:translate(44px,-160px) scale(.55);opacity:0}
+  12%{opacity:1}100%{transform:translate(0,0) scale(1.15);opacity:1}}
+/* 箭雨:➤ 箭头从天而降刺向目标 */
+.fx-rainarrow{position:absolute;font-size:15px;line-height:1;color:#d2ffdf;
+  text-shadow:0 0 6px #6bff8f;
+  animation:fxRainArrow .38s linear forwards}
+@keyframes fxRainArrow{0%{transform:translateY(-130px) rotate(90deg) scale(.7);opacity:0}
+  20%{opacity:1}100%{transform:translateY(0) rotate(90deg) scale(1);opacity:.9}}
+/* 穿透箭:贯穿全场的横向光束(穿透箭/穿云箭),--c 主色 */
+.fx-pierce{position:absolute;height:6px;margin-top:-3px;border-radius:3px;
+  background:linear-gradient(90deg,transparent,var(--c,#6bff8f) 12%,#eafff0 55%,var(--c,#6bff8f));
+  box-shadow:0 0 12px var(--c,#6bff8f);transform-origin:0 50%;
+  animation:fxPierce .3s cubic-bezier(.1,.7,.2,1) forwards}
+.fx-pierce::after{content:"";position:absolute;right:-2px;top:50%;width:0;height:0;
+  border:8px solid transparent;border-left:14px solid var(--c,#6bff8f);transform:translateY(-50%)}
+@keyframes fxPierce{0%{transform:scaleX(0);opacity:1}55%{transform:scaleX(1);opacity:1}
+  100%{transform:scaleX(1);opacity:0}}
+/* 疾行/后跳:英雄侧速度线,--c 主色 */
+.fx-lines{position:absolute;width:120px;height:46px;
+  background:
+    linear-gradient(90deg,transparent,var(--c,#7ff0ff) 30%,transparent 60%) 0 6px/100% 3px no-repeat,
+    linear-gradient(90deg,transparent,var(--c,#7ff0ff) 25%,transparent 55%) 0 22px/100% 2px no-repeat,
+    linear-gradient(90deg,transparent,var(--c,#7ff0ff) 35%,transparent 70%) 0 37px/100% 3px no-repeat;
+  animation:fxLines .32s ease-out forwards}
+@keyframes fxLines{0%{transform:translateX(-14px);opacity:0}30%{opacity:.95}
+  100%{transform:translateX(26px);opacity:0}}
