@@ -1080,8 +1080,11 @@ select.sel{background:#1b1b2a;color:var(--txt);border:1px solid var(--line2);
   box-shadow:0 0 16px var(--c,#7ff0ff);animation:fxDome .7s ease-out forwards}
 @keyframes fxDome{0%{transform:scale(.5);opacity:0}25%{transform:scale(1.05);opacity:.95}
   65%{opacity:.8}100%{transform:scale(1.1);opacity:0}}
-/* 旋风斩:英雄位置旋转刀刃环(四刃扇形,自转两周收束) */
-.fx-vortex{position:absolute;width:150px;height:150px;margin:-75px 0 0 -75px;border-radius:50%;
+/* 旋风斩:贴着怪物模型高速旋切的刀刃风暴,持续整个 2 秒引导(与引导同长,~2 转/秒)。
+   --sz 由 JS 按怪物立绘宽度定(罩住怪物),默认 170px;内层 ::after 反向再旋一层,
+   双层交错刀刃让"同心+高速"在任意瞬间都读得出来 */
+.fx-vortex{position:absolute;width:var(--sz,170px);height:var(--sz,170px);
+  margin:calc(var(--sz,170px)/-2) 0 0 calc(var(--sz,170px)/-2);border-radius:50%;
   background:conic-gradient(from 0deg,
     transparent 0 20deg,#ffe3bc 30deg,#ff5a3c 52deg,transparent 64deg,
     transparent 110deg,#ffe3bc 120deg,#ff5a3c 142deg,transparent 154deg,
@@ -1089,11 +1092,23 @@ select.sel{background:#1b1b2a;color:var(--txt);border:1px solid var(--line2);
     transparent 290deg,#ffe3bc 300deg,#ff5a3c 322deg,transparent 334deg);
   -webkit-mask:radial-gradient(circle,transparent 40%,#000 50%,#000 88%,transparent 96%);
   mask:radial-gradient(circle,transparent 40%,#000 50%,#000 88%,transparent 96%);
-  animation:fxVortex 1.1s cubic-bezier(.15,.6,.3,1) forwards}
-@keyframes fxVortex{0%{transform:scale(.4) rotate(0);opacity:0}
-  15%{transform:scale(1) rotate(60deg);opacity:.95}
-  80%{transform:scale(1.05) rotate(660deg);opacity:.85}
-  100%{transform:scale(1.12) rotate(720deg);opacity:0}}
+  filter:drop-shadow(0 0 12px rgba(255,120,60,.55));
+  animation:fxVortex 2.05s linear forwards}
+.fx-vortex::after{content:"";position:absolute;inset:14%;border-radius:50%;
+  background:conic-gradient(from 40deg,
+    transparent 0 30deg,#ffd9b0 44deg,#ff9c54 70deg,transparent 84deg,
+    transparent 130deg,#ffd9b0 146deg,#ff9c54 172deg,transparent 186deg,
+    transparent 240deg,#ffd9b0 256deg,#ff9c54 282deg,transparent 296deg);
+  -webkit-mask:radial-gradient(circle,transparent 46%,#000 56%,#000 90%,transparent 96%);
+  mask:radial-gradient(circle,transparent 46%,#000 56%,#000 90%,transparent 96%);
+  opacity:.75;
+  animation:fxVortexInner 2.05s linear forwards}
+@keyframes fxVortex{0%{transform:scale(.35) rotate(0);opacity:0}
+  7%{transform:scale(1) rotate(150deg);opacity:.95}
+  90%{transform:scale(1) rotate(1300deg);opacity:.92}
+  100%{transform:scale(1.1) rotate(1450deg);opacity:0}}
+@keyframes fxVortexInner{0%{transform:rotate(0)}
+  100%{transform:rotate(-1050deg)}}
 /* 闪电链:JS 按起终点生成锯齿 clip-path 的电弧(双闪后消散) */
 .fx-chain{position:absolute;
   background:linear-gradient(180deg,#ffffff,#ffe98a 40%,#5adfff);

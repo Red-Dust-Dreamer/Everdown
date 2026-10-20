@@ -925,8 +925,8 @@ function testBurstSkill(): void {
   castActive(g, whirl, g.monster!);
   ok(g.burst !== null, "旋风斩登记引导状态");
   const burst = g.burst!;
-  eq(burst.left, 4, "待发 4 跳");
-  eq(burst.interval, 0.5, "每 0.5s 一跳(2 秒打满)");
+  eq(burst.left, 6, "待发 6 跳");
+  close(burst.interval, 1 / 3, "每 1/3s 一跳(2 秒打满)", 1e-9);
   eq(burst.pct, skillVal(whirl, 1), "每跳% = lv1 技能值");
 
   // ---- 引导期间:无普攻、无其他技能掺入,跳伤按节拍落 ----
@@ -938,12 +938,12 @@ function testBurstSkill(): void {
   for (let t = 0; t < 1.05; t += 0.05) { g.time += 0.05; battleTick(g, 0.05); }
   eq(g.events.filter(e => e[0] === "anim" && e[1] === "hero_attack").length, 0,
     "引导期间不普攻");
-  close(hp0 - mon.hp, perHit * 2, "1.05s 恰 2 跳(重击 260% 未掺入)", 1e-6);
+  close(hp0 - mon.hp, perHit * 3, "1.05s 恰 3 跳(重击 260% 未掺入)", 1e-6);
 
-  // ---- 2.0s 打满 4 跳,引导结束(断言取在第 4 跳当拍,重击下一拍才会补发) ----
+  // ---- 2.0s 打满 6 跳,引导结束 ----
   for (let t = 0; t < 0.95; t += 0.05) { g.time += 0.05; battleTick(g, 0.05); }
-  eq(g.burst, null, "4 跳打满引导结束");
-  close(hp0 - mon.hp, perHit * 4, "引导总伤 = 每跳×4", 1e-6);
+  eq(g.burst, null, "6 跳打满引导结束");
+  close(hp0 - mon.hp, perHit * 6, "引导总伤 = 每跳×6", 1e-6);
 
   // ---- 引导结束后:普攻恢复 ----
   g.skillCd["w_whirl"] = 999;   // 直接 castActive 不走 castSkills,手动补 CD(真实流程 5s CD > 2s 引导,无连引导问题)
@@ -966,9 +966,9 @@ function testBurstSkill(): void {
     }
   }
   eq(g.stats.kills, kills0 + 1, "引导跳伤击杀走正常结算");
-  ok(g.burst === null, "剩余 3 跳在新目标身上打满,引导才结束");
+  ok(g.burst === null, "剩余 5 跳在新目标身上打满,引导才结束");
   const mon3 = g.monster as Monster;
-  close(mon3.maxHp - mon3.hp, perHit * 3, "新目标恰好吃满剩余 3 跳", 1e-6);
+  close(mon3.maxHp - mon3.hp, perHit * 5, "新目标恰好吃满剩余 5 跳", 1e-6);
 }
 
 // ================================================================ 24. 技能顺序施放(一拍只放一个,按装配顺序排队)
@@ -1639,6 +1639,27 @@ function testMobSkillFxEvent(): void {
     `塔怪走同一路径(${tmon.skill!.name})`);
 }
 
+// ================================================================ 34. 断签重置幂等(防「连续签到中断」日志刷屏)
+function testSigninStreakIdempotent(): void {
+  const g = newGame(426266);
+  g.chooseClass("warrior");
+  g.claimSignin();
+  eq(g.signinPos, 1, "领签后 pos=1");
+  // 上次领取拨回远古日期(隔天)→ 断签;rollDaily 每次击杀/悬赏打点都会调,
+  // 重置必须幂等:只重置一次、只提示一次(pos=0 后不再重复)
+  g.signinLast = "2020-01-01";
+  g.events.length = 0;
+  g.rollDaily();
+  g.rollDaily();
+  g.rollDaily();
+  const breaks = g.events.filter(e => e[0] === "log" && e[1].includes("连续签到中断")).length;
+  eq(breaks, 1, "断签重置仅提示一次(不刷屏)");
+  eq(g.signinPos, 0, "7 日进度重置");
+  // 同日正常补领不受影响
+  g.claimSignin();
+  eq(g.signinPos, 1, "重置后可重新领签");
+}
+
 // ================================================================ runner
 const TESTS: [string, () => void][] = [
   ["1.RNG(MT19937 与 CPython 对拍)", testRng],
@@ -1674,6 +1695,7 @@ const TESTS: [string, () => void][] = [
   ["31.成就第三梯队(经济打点/新维度跨档)", testAchThirdWave],
   ["32.悬赏目标封顶(深区不爆指数)", testQuestTargetCap],
   ["33.怪物技能特效事件(mskill:<名字>)", testMobSkillFxEvent],
+  ["34.断签重置幂等(防日志刷屏)", testSigninStreakIdempotent],
 ];
 
 let failed = 0;

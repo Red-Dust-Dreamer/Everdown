@@ -803,8 +803,10 @@ let multiHitColor = "#a5ffbe";
 function playSkillCast(skillId: string): void {
   const def = SKILL_DEF.get(skillId);
   if (!def) return;
-  if (def.kind === "multi") {
-    multiHitUntil = performance.now() + 1400;
+  if (def.kind === "multi" || def.channel) {
+    // 多段技/引导技的每一下命中都给命中闪;引导技窗口盖满吟唱时长
+    // (旋风斩 2 秒 6 连斩全程逐跳有反馈)
+    multiHitUntil = performance.now() + (def.channel ? def.channel * 1000 + 250 : 1400);
     multiHitColor = (FX_COLORS[def.color] ?? FX_COLORS.white)[0];
   }
   const mapped = SFX_SKILL[skillId];
@@ -886,8 +888,9 @@ function drainEvents(): void {
       } else if (text === "mob_attack") {
         heroHurt();
       } else if (text === "skill_hit") {
-        // 多段技每一下的命中节拍(单段技的施放特效已覆盖,不叠加大特效)
+        // 多段技/引导技每一下的命中节拍(单段技的施放特效已覆盖,不叠加大特效)
         if (performance.now() < multiHitUntil) {
+          flashMon();   // 怪物受击白闪:逐跳打击感(旋风斩 2 秒 6 连闪)
           const p = monCenterPx();
           if (p) fxSpawn("fx-tick",
             p.x + Math.random() * 36 - 18, p.y + Math.random() * 36 - 18,
@@ -1058,14 +1061,24 @@ function playAttackFx(cls0?: string, crit = false): void {
       { "--r": `${Math.floor(Math.random() * 70 - 55)}deg` });
   } else if (cls === "mage") {
     const dy = Math.floor(Math.random() * 28 - 14);
-    const x0 = heroMuzzleX();   // 从英雄侧锚点(舞台内)射向怪物,不再屏幕外飞入
-    fxSpawn("fx-bolt" + c, x0, hy + dy, { "--x": `${hx - x0}px` });
-    fxSpawn("fx-burst" + c, hx, hy + dy).style.animationDelay = "160ms";
+    if (HERO_MODEL) {
+      const x0 = heroMuzzleX();   // 有立绘:从立绘前沿射向怪物
+      fxSpawn("fx-bolt" + c, x0, hy + dy, { "--x": `${hx - x0}px` });
+      fxSpawn("fx-burst" + c, hx, hy + dy).style.animationDelay = "160ms";
+    } else {
+      // 无立绘:投射物不再从空处飞入,能量弹直接在怪物身上炸开
+      fxSpawn("fx-burst" + c, hx, hy + dy);
+    }
   } else if (cls === "ranger") {
     const dy = Math.floor(Math.random() * 22 - 11);
-    const x0 = heroMuzzleX();
-    fxSpawn("fx-arrow" + c, x0, hy + dy, { "--x": `${hx - x0}px` });
-    fxSpawn("fx-hit" + c, hx, hy + dy).style.animationDelay = "110ms";
+    if (HERO_MODEL) {
+      const x0 = heroMuzzleX();
+      fxSpawn("fx-arrow" + c, x0, hy + dy, { "--x": `${hx - x0}px` });
+      fxSpawn("fx-hit" + c, hx, hy + dy).style.animationDelay = "110ms";
+    } else {
+      // 无立绘:箭矢化作怪物身上的十字穿刺光
+      fxSpawn("fx-hit" + c, hx, hy + dy);
+    }
   }
 }
 
@@ -1214,9 +1227,14 @@ function heroSkillDom(sid: string): void {
         { "--r": `${mobRnd(-60, -25)}deg`, "--c1": "#fff3c4", "--c2": "#ffb347", "--s": "1.5" });
       stageShake(200);
       break;
-    case "w_whirl":    // 旋风斩:英雄位置旋转刀刃环(引导期视觉锚)
-      fxSpawn("fx-vortex", hx, hy);
+    case "w_whirl": {  // 旋风斩:刀刃风暴贴着怪物模型高速旋切,转满整个 2 秒引导
+      // 尺寸罩住怪物立绘(留边),头目更大环也更大
+      const art = stage.querySelector<HTMLElement>(".mon-art");
+      const monW = art ? art.getBoundingClientRect().width : 120;
+      const size = Math.round(Math.max(130, Math.min(200, monW + 46)));
+      fxSpawn("fx-vortex", mx, my, { "--sz": `${size}px` });
       break;
+    }
     case "w_warcry":   // 战吼:以英雄为心的三重冲击环
       [0, 1, 2].forEach(i => later(i * 95, () =>
         fxSpawn("fx-ring", hx, hy, { "--c": "#ff9c54" })));
@@ -1378,12 +1396,20 @@ function playSkillFx(sid: string): void {
       fire(mon, 90, 360, 42, n + 8);
       break;
     case "side":
-      fire({ x: heroMuzzleNorm(), y: mon.y }, 25, 26, 85, Math.round(n * 0.8));
-      fire(mon, 90, 70, 40, Math.round(n * 0.4));
+      if (HERO_MODEL) {   // 有立绘:斜射弹幕从立绘侧扫向怪物
+        fire({ x: heroMuzzleNorm(), y: mon.y }, 25, 26, 85, Math.round(n * 0.8));
+        fire(mon, 90, 70, 40, Math.round(n * 0.4));
+      } else {            // 无立绘:整波弹幕直接在怪物身上迸开
+        fire(mon, 55, 75, 70, Math.round(n * 1.2));
+      }
       break;
     case "zip":
-      fire({ x: heroMuzzleNorm(), y: mon.y }, 12, 14, 110, n);
-      fire(mon, 90, 60, 30, 10);
+      if (HERO_MODEL) {
+        fire({ x: heroMuzzleNorm(), y: mon.y }, 12, 14, 110, n);
+        fire(mon, 90, 60, 30, 10);
+      } else {
+        fire(mon, 45, 45, 95, n);
+      }
       break;
     case "rain": {
       const waves = fx.waves ?? 3;

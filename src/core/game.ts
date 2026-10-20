@@ -1392,7 +1392,9 @@ export class Game {
     const t = new Date();
     const d = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
     // 断签检测(独立于悬赏日期变化:上次领取不是昨天且已隔天 → 7 日进度重置)
-    if (this.signinLast && this.signinLast !== d) {
+    // 幂等守卫:pos 已是 0 就没有可重置的;否则每次 rollDaily(击杀/悬赏/周常打点
+    // 都会调)都会因 signinLast 仍未更新而重复刷「连续签到中断」日志
+    if (this.signinLast && this.signinLast !== d && this.signinPos !== 0) {
       const dayStart = (dt: Date): number =>
         new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime();
       const last = new Date(this.signinLast + "T00:00:00");
