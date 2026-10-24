@@ -3,7 +3,14 @@
 > 建立日期:2026-10-03
 > 状态:**实施级方案**(面板形态与接口契约已定稿,交两名实现者并行落地)
 > 面向读者:仓库主人(使用说明)+ 实现者(契约与验收)
-> 硬约束回顾:①无覆盖文件时游戏输出与现状逐位一致,`scripts/parity.sh 180` 退出码恒 0;②冒烟测试固定 `scripts/admin-smoke.ts`;③不新增 npm 依赖;④生产构建必须通过——**Git Bash/MSYS 下验收命令为 `cmd //c "npm run build"`**(双斜杠防 MSYS 把 `/c` 转成盘符路径;`cmd /c npm run build` 在 Git Bash 下会启动交互式 cmd 后 EOF 退出、退出码 0 但**构建根本没跑**=假绿,本方案设计时亲历),cmd.exe 原生 shell 下按约束字面用 `cmd /c npm run build`。
+> 硬约束回顾:①无覆盖文件时游戏输出与现状逐位一致(`scripts/parity.sh` 已随 Python 镜像归档,现为回归测试 + 冒烟守护;见下方增量记录);②冒烟测试固定 `scripts/admin-smoke.ts`;③不新增 npm 依赖;④生产构建必须通过——**Git Bash/MSYS 下验收命令为 `cmd //c "npm run build"`**(双斜杠防 MSYS 把 `/c` 转成盘符路径;`cmd /c npm run build` 在 Git Bash 下会启动交互式 cmd 后 EOF 退出、退出码 0 但**构建根本没跑**=假绿,本方案设计时亲历),cmd.exe 原生 shell 下按约束字面用 `cmd /c npm run build`。
+
+> ### 增量记录:随 2.2–2.4 项目演进的适配(2026-10-24)
+> 项目批次(转生/爬塔重做 2.2.0、放置承诺 2.2.2、节拍层 2.3.0、转生深度加权 2.3.1、转生中心 2.4.x;存档版本已至 v9)后面板同步更新:
+> - **存档编辑器**:新增「签到与周常」「转生与世系」「深渊图鉴」分组,进度组补 `death_tier`/`auto_farm`,装备条目补 `skill_sid`/`locked`;`validateSaveDict` 同步覆盖批次新字段(均为 warn 级,引擎有容错)。
+> - **数值覆盖面**:ROOTS 与核心 registry 纳入 `SIGNIN_REWARDS`/`WEEKLY_GOALS`/`WEEKLY_CHEST`/`TITLES`/`REDEEM_CODES`,新分类「签到周常与兑换」「转生与称号」,BAL 标签补 13 键,锁定清单双端同步加 `hash`(兑换码匹配键)。
+> - **Python/对拍**:`abyss/` 镜像与 `scripts/parity.sh` 已归档至 `archive/python-mirror` 分支;本文中 Python/对拍相关段落(§4.5 等)保留为历史设计记录,覆盖机制现状不变(TS CLI + dev Web)。
+> - 旧文中「37 个顶层字段」「v7 字典」等计数按当时版本写就,以本记录为准。
 
 ---
 

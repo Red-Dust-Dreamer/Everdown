@@ -5,8 +5,9 @@
 import { validateSaveDict, type SaveIssue } from "../../core/savefile.ts";
 import { Game, migrateSave, SAVE_VERSION } from "../../core/game.ts";
 import {
-  ACTIVE_SKILLS, AFFIXES, ALTAR_LINES, CLASSES, MAIN_ROLLS, PASSIVE_SKILLS,
-  QUEST_TYPES, RARITIES, RELIC_EFFECTS, SLOTS, STAT_NAMES,
+  ACTIVE_SKILLS, AFFIXES, ALTAR_LINES, CLASSES, MAIN_ROLLS, MONSTERS,
+  PASSIVE_SKILLS, QUEST_TYPES, RARITIES, REDEEM_CODES, RELIC_EFFECTS, SLOTS,
+  STAT_NAMES, TITLES, WEEKLY_CHEST, WEEKLY_GOALS,
 } from "../../core/data.ts";
 import { rollItem } from "../../core/items.ts";
 import { SAVE_KEY, deepCopy, download, esc, fmt, stamp, toast, topDiff } from "./admin-dom.ts";
@@ -301,6 +302,9 @@ function renderEditor(): void {
   editorBox.appendChild(group("装备与背包", gEquipBag()));
   editorBox.appendChild(group("遗物与塔", gRelicTower()));
   editorBox.appendChild(group("悬赏", gQuests()));
+  editorBox.appendChild(group("签到与周常", gDaily()));
+  editorBox.appendChild(group("转生与世系", gRebirth()));
+  editorBox.appendChild(group("深渊图鉴", gCodex()));
   editorBox.appendChild(group("统计与成长", gStats()));
   editorBox.appendChild(group("设置", gSettings()));
   editorBox.appendChild(dangerGroup());
@@ -389,8 +393,134 @@ function gProgress(): HTMLElement {
     () => String(d!.mode ?? "push"), v => d!.mode = v), "mode"));
   box.appendChild(fldRow("farm_stage 挂机层", numInput(() => d!.farm_stage, v => d!.farm_stage = v, { int: true }), "farm_stage"));
   box.appendChild(fldRow("deaths_row 连败数", numInput(() => d!.deaths_row, v => d!.deaths_row = v, { int: true }), "deaths_row"));
+  box.appendChild(fldRow("death_tier 战败参考tier", numInput(() => d!.death_tier ?? -1, v => d!.death_tier = v, { int: true }), "death_tier"));
+  box.appendChild(fldRow("auto_farm 受阻自动转入", selInput(
+    [{ value: "false", label: "false" }, { value: "true", label: "true" }],
+    () => String(d!.auto_farm === true), v => d!.auto_farm = v === "true"), "auto_farm"));
   box.appendChild(fldRow("ema_kill 击杀时长均值", numInput(() => d!.ema_kill, v => d!.ema_kill = v), "ema_kill"));
   return box;
+}
+
+/** 复选清单(选项现读核心表;用于 string[] 型 id 集合) */
+function checkList(caption: string, options: { id: string; label: string }[],
+                   getArr: () => string[], fieldBase: string): HTMLElement {
+  const col = document.createElement("div");
+  col.style.cssText = "border:1px solid var(--line);border-radius:8px;padding:6px 8px;min-width:230px";
+  const t = document.createElement("div");
+  t.className = "muted small";
+  t.textContent = caption;
+  col.appendChild(t);
+  for (const o of options) {
+    const lbl = document.createElement("label");
+    lbl.className = "small";
+    lbl.style.cssText = "display:block;margin:1px 0;cursor:pointer";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.checked = getArr().includes(o.id);
+    cb.setAttribute("data-field", `${fieldBase}.${o.id}`);
+    cb.addEventListener("change", () => {
+      const list = getArr();
+      const i = list.indexOf(o.id);
+      if (cb.checked && i < 0) list.push(o.id);
+      if (!cb.checked && i >= 0) list.splice(i, 1);
+      onEdit();
+    });
+    lbl.appendChild(cb);
+    lbl.appendChild(document.createTextNode(" " + o.label));
+    col.appendChild(lbl);
+  }
+  return col;
+}
+
+/** 2.3:签到 / 周常目标与宝箱 / 兑换码(引擎对 id 越界均有容错,但仍现读表给选项) */
+function gDaily(): HTMLElement {
+  const box = document.createElement("div");
+  box.appendChild(fldRow("signin_pos 签到进度(0 起,按周期取模)", numInput(
+    () => d!.signin_pos ?? 0, v => d!.signin_pos = v, { int: true }), "signin_pos"));
+  box.appendChild(fldRow("signin_last 上次签到日", txtInput(
+    () => d!.signin_last ?? "", v => d!.signin_last = v || null, 10), "signin_last"));
+  box.appendChild(fldRow("week_key 周键(YYYY-Www)", txtInput(
+    () => d!.week_key ?? "", v => d!.week_key = v || null, 10), "week_key"));
+  box.appendChild(kvGroup("weekly 周常进度(目标id → 数值)", d!.weekly ?? (d!.weekly = {}),
+    WEEKLY_GOALS.map(g2 => g2.id), "weekly"));
+  const wrap = document.createElement("div");
+  wrap.className = "fld";
+  const lab = document.createElement("label");
+  lab.textContent = "已领宝箱 / 已兑码";
+  wrap.appendChild(lab);
+  wrap.appendChild(checkList("weekly_claimed 周常宝箱",
+    WEEKLY_CHEST.map(c => ({ id: c.id, label: `${c.id} ${c.label}` })),
+    () => d!.weekly_claimed ?? (d!.weekly_claimed = []), "weekly_claimed"));
+  wrap.appendChild(checkList("redeemed 已兑换(按哈希)",
+    REDEEM_CODES.map(c => ({ id: String(c.hash), label: c.label })),
+    () => (d!.redeemed ?? (d!.redeemed = [])).map(String), "redeemed"));
+  box.appendChild(wrap);
+  return box;
+}
+
+/** 2.2-2.3:转生计数 / 称号 / 本世深度锚 / 世系履历(引擎只保留前 50 条) */
+function gRebirth(): HTMLElement {
+  const box = document.createElement("div");
+  box.appendChild(fldRow("rebirths 转生世数(可为小数:深度加权 k)", numInput(
+    () => d!.rebirths ?? 0, v => d!.rebirths = v), "rebirths"));
+  const titleOpts = [{ value: "", label: "(无称号)" },
+    ...TITLES.map(t => ({ value: t.id, label: `${t.id} ${t.name}` }))];
+  box.appendChild(fldRow("title 当前称号", selInput(titleOpts,
+    () => String(d!.title ?? ""), v => d!.title = v), "title"));
+  const tl = document.createElement("div");
+  tl.className = "fld";
+  const lab = document.createElement("label");
+  lab.textContent = "titles 已获称号";
+  tl.appendChild(lab);
+  tl.appendChild(checkList("已获称号(勾选=拥有)",
+    TITLES.map(t => ({ id: t.id, label: `${t.name}(${t.cond})` })),
+    () => d!.titles ?? (d!.titles = []), "titles"));
+  box.appendChild(tl);
+  box.appendChild(fldRow("run_start_playtime 本世起始时长(秒)", numInput(
+    () => d!.run_start_playtime ?? 0, v => d!.run_start_playtime = v), "run_start_playtime"));
+  box.appendChild(fldRow("run_max_zone 本世最远区(转生加权 k 输入)", numInput(
+    () => d!.run_max_zone ?? 1, v => d!.run_max_zone = v, { int: true }), "run_max_zone"));
+
+  // 世系履历:只读行 + 删除(引擎 unshift 到队首,cap 50)
+  const lin = document.createElement("div");
+  lin.className = "grp";
+  lin.setAttribute("data-field", "lineage");
+  const h = document.createElement("h4");
+  h.textContent = `lineage 世系履历(${(d!.lineage ?? []).length}/50,新在前)`;
+  lin.appendChild(h);
+  (d!.lineage ?? (d!.lineage = [])).forEach((e: any, i: number) => {
+    const row = document.createElement("div");
+    row.className = "kv-row small";
+    row.setAttribute("data-field", `lineage.${i}`);
+    row.textContent = `#${i + 1} ${e?.cls ?? "?"} · Lv${e?.level ?? "?"} · ${e?.zone ?? "?"}区 · ${e?.kills ?? "?"}杀 · ${e?.dur ?? "?"}s`;
+    const del = document.createElement("button");
+    del.className = "btn mini danger";
+    del.textContent = "删";
+    del.addEventListener("click", () => {
+      if (!confirm(`删除世系第 ${i + 1} 条?`)) return;
+      d!.lineage.splice(i, 1);
+      renderEditor(); onEdit();
+    });
+    row.appendChild(del);
+    lin.appendChild(row);
+  });
+  const clr = document.createElement("button");
+  clr.className = "btn mini danger";
+  clr.textContent = "清空世系";
+  clr.addEventListener("click", () => {
+    if (!d!.lineage?.length || !confirm("清空全部世系履历?")) return;
+    d!.lineage = [];
+    renderEditor(); onEdit();
+  });
+  lin.appendChild(clr);
+  box.appendChild(lin);
+  return box;
+}
+
+/** 2.2:深渊图鉴(怪物击杀计数;键 = MONSTERS id) */
+function gCodex(): HTMLElement {
+  return kvGroup("mon_kills 图鉴击杀数(怪物id → 次数)", d!.mon_kills ?? (d!.mon_kills = {}),
+    Object.keys(MONSTERS), "mon_kills");
 }
 
 function gClass(): HTMLElement {
@@ -554,6 +684,30 @@ function itemEditor(item: any, where: string): HTMLElement {
   r2.appendChild(labeled("name", txtInput(() => item.name ?? "", v => item.name = v)));
   r2.children[r2.children.length - 1].setAttribute("data-field", `${where}.name`);
   box.appendChild(r2);
+  // 2.3:附带技能(装备 grant 技能)与锁定标记(锁定/批量分解判定)
+  const r3 = document.createElement("div");
+  r3.className = "row";
+  const sidOpts = [{ value: "", label: "skill_sid:无" },
+    ...[...ACTIVE_IDS, ...PASSIVE_IDS].map(s => ({ value: s.id, label: `skill_sid:${s.label}` }))];
+  r3.appendChild(labeled("", selInput(sidOpts, () => item.skill_sid ?? "", v => {
+    if (v === "") delete item.skill_sid; else item.skill_sid = v;
+  })));
+  r3.children[r3.children.length - 1].setAttribute("data-field", `${where}.skill_sid`);
+  const lockLbl = document.createElement("label");
+  lockLbl.className = "small";
+  lockLbl.style.cssText = "display:inline-flex;align-items:center;gap:4px;cursor:pointer";
+  const lockCb = document.createElement("input");
+  lockCb.type = "checkbox";
+  lockCb.checked = item.locked === true;
+  lockCb.setAttribute("data-field", `${where}.locked`);
+  lockCb.addEventListener("change", () => {
+    if (lockCb.checked) item.locked = true; else delete item.locked;
+    onEdit();
+  });
+  lockLbl.appendChild(lockCb);
+  lockLbl.appendChild(document.createTextNode("locked 锁定"));
+  r3.appendChild(lockLbl);
+  box.appendChild(r3);
 
   const afBox = document.createElement("div");
   afBox.setAttribute("data-field", `${where}.affixes`);

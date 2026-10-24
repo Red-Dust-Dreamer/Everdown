@@ -67,11 +67,12 @@ export function initHelp(rootEl: HTMLElement): void {
 
   <div class="card">
     <h3><span class="dot"></span>字段安全等级速查(校验表摘录)</h3>
-    <p class="danger-note">⛔ error 级(阻断写回;不改掉写出去就是崩溃/丢数据档):version 缺失/非整数/&gt;7;gear_rules_21 ≠ true(载入即清空装备+背包);
+    <p class="danger-note">⛔ error 级(阻断写回;不改掉写出去就是崩溃/丢数据档):version 缺失/非整数/&gt;当前版本;gear_rules_21 ≠ true(载入即清空装备+背包);
       class_id 非 CLASSES 键;mode ∉ {push,farm};equip/bag/装备条目(slot/rarity 6 档/tier/plus/main_val/affixes)结构坏;
       quests[].type ∉ 悬赏 4 类或数值字段坏;relics 非数组、遗物条目 rarity/tier/effects 坏;level 非正整数;tower 形状坏。</p>
     <p class="small">⚠ warn 级(提示不阻断):loadout 含未知/他职业技能;skill_lv 键值越界;stats/settings 形状怪;
-      zone/stage 越界;金币经验为负;seed 非整数;last_saved 非数字;bag/relic_bag 超容量;relics≠4 槽 / quests≠3 条;遗物 skill_id 不在池;name 非字符串。</p>
+      zone/stage 越界;金币经验为负;seed 非整数;last_saved 非数字;bag/relic_bag 超容量;relics≠4 槽 / quests≠3 条;遗物 skill_id 不在池;name 非字符串;
+      2.2-2.3 新字段:signin_pos 非整数 / weekly 键或进度坏 / weekly_claimed·titles·title·redeemed 不在核心表 / lineage 条目或超 50 / mon_kills 键值坏 / run_max_zone 非正整数 / 装备 skill_sid·locked 类型怪。</p>
     <p class="small">🔒 危险字段(编辑器内默认锁定):version、gear_rules_21、seed —— 误改后果见编辑器红字说明。</p>
     <p class="small">ℹ 已知怪癖(不修复只标注):Python CLI 写过的档缺 relic_bag/relic_bag_lv(TS 宿主专属,载入时面板会提示);
       seed 只改未来随机流不坏档;last_saved 决定离线收益(封顶12h),面板不自动改写。</p>

@@ -10,8 +10,8 @@
 import {
   ACHIEVEMENTS, ACTIVE_SKILLS, AFFIXES, AFFIX_SUFFIX, ALTAR_LINES, BAL, CAPS,
   CLASSES, MAIN_ROLLS, MONSTERS, PASSIVE_SKILLS, POTIONS, QUEST_TYPES, RARITIES,
-  RARITY_PREFIX, RELIC_EFF_COUNT, RELIC_EFFECTS, SLOTS, SLOT_INNATE, STAT_NAMES,
-  THEMES, TOWER,
+  RARITY_PREFIX, REDEEM_CODES, RELIC_EFF_COUNT, RELIC_EFFECTS, SIGNIN_REWARDS,
+  SLOTS, SLOT_INNATE, STAT_NAMES, THEMES, TITLES, TOWER, WEEKLY_CHEST, WEEKLY_GOALS,
 } from "./data.ts";
 
 export type OverrideValue = number | string | boolean;
@@ -33,12 +33,14 @@ export class OverrideFormatError extends Error {
 /** BAL 为 as const(类型只读、运行时可写),经 Writable 映射类型转换后入注册表 */
 type Writable<T> = { -readonly [K in keyof T]: T[K] };
 
-/** 注册表根 = data.ts 的 22 张策划数值表(方案 §4.1;引用即 data.ts 导出对象本体) */
+/** 注册表根 = data.ts 的 27 张策划数值表(方案 §4.1;引用即 data.ts 导出对象本体;
+ *  2.3 批次补签到/周常/称号/兑换码五表) */
 const registry: Record<string, unknown> = {
   BAL: BAL as Writable<typeof BAL>,
   RARITIES, RARITY_PREFIX, SLOTS, MAIN_ROLLS, SLOT_INNATE, AFFIXES, AFFIX_SUFFIX,
   CAPS, CLASSES, ACTIVE_SKILLS, PASSIVE_SKILLS, THEMES, MONSTERS, ACHIEVEMENTS,
   QUEST_TYPES, ALTAR_LINES, POTIONS, STAT_NAMES, TOWER, RELIC_EFFECTS, RELIC_EFF_COUNT,
+  SIGNIN_REWARDS, WEEKLY_GOALS, WEEKLY_CHEST, TITLES, REDEEM_CODES,
 };
 
 /** 模块加载时(任何 apply 之前)的默认值快照:路径 → 原始类型叶子当前值 */
@@ -103,6 +105,7 @@ function walk(rootObj: unknown, segs: string[]): WalkResult {
 /** 末段为这些键的叶子是被别处按键引用的标识/行为选择器(方案 §4.3 R6①) */
 const LOCKED_KEYS: ReadonlySet<string> = new Set([
   "id", "key", "cls", "stat", "hook", "op", "type", "metric", "buff", "kind", "pct",
+  "hash",   // REDEEM_CODES.hash:兑换码匹配键(2.3)
 ]);
 
 /** R6 结构键判定(parts = 完整路径段,parts[0] 为根名):

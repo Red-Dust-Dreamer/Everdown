@@ -6,8 +6,9 @@
  */
 import { SAVE_VERSION } from "./game.ts";
 import {
-  ACTIVE_DEF, AFFIX_DEF, ALTAR_LINES, BAL, CLASSES, MAIN_ROLLS, PASSIVE_DEF,
-  QUEST_TYPES, RARITY_IDX, RELIC_EFF_DEF, SLOTS,
+  ACTIVE_DEF, AFFIX_DEF, ALTAR_LINES, BAL, CLASSES, MAIN_ROLLS, MONSTERS,
+  PASSIVE_DEF, QUEST_TYPES, RARITY_IDX, REDEEM_CODES, RELIC_EFF_DEF,
+  SIGNIN_REWARDS, SLOTS, TITLES, WEEKLY_CHEST, WEEKLY_GOALS,
 } from "./data.ts";
 
 export interface SaveIssue { field: string; level: "error" | "warn"; message: string }
@@ -90,6 +91,17 @@ export function validateItemDict(item: any, where: string): SaveIssue[] {
   }
   if (item.name !== undefined && item.name !== null && typeof item.name !== "string") {
     out.push(issue(`${where}.name`, "warn", `name 应为字符串(当前 ${fmtVal(item.name)}),否则显示异常`));
+  }
+  // 2.3:装备附带技能 / 锁定标记(items.ts toDict 条件序列化)
+  if (item.skill_sid !== undefined && item.skill_sid !== null
+      && (typeof item.skill_sid !== "string"
+          || (!Object.hasOwn(ACTIVE_DEF, item.skill_sid) && !Object.hasOwn(PASSIVE_DEF, item.skill_sid)))) {
+    out.push(issue(`${where}.skill_sid`, "warn",
+      `skill_sid 不在技能池(当前 ${fmtVal(item.skill_sid)}),技能折算/显示忽略`));
+  }
+  if (item.locked !== undefined && typeof item.locked !== "boolean") {
+    out.push(issue(`${where}.locked`, "warn",
+      `locked 应为布尔(当前 ${fmtVal(item.locked)}),锁定/批量分解判定异常`));
   }
   return out;
 }
@@ -356,6 +368,118 @@ export function validateSaveDict(d: Record<string, any>): SaveIssue[] {
   if (d.rebirths !== undefined && !(isInt(d.rebirths) && d.rebirths >= 0)) {
     out.push(issue("rebirths", "warn",
       `rebirths 应为 ≥0 的整数(当前 ${fmtVal(d.rebirths)}),非法值回落 0 = 丢转生加成`));
+  }
+
+  // ---- warn:2.2-2.3 批次新字段(签到/周常/称号/世系/兑换/图鉴/自动化) ----
+  if (d.signin_pos !== undefined && !isInt(d.signin_pos)) {
+    out.push(issue("signin_pos", "warn",
+      `signin_pos 应为整数(当前 ${fmtVal(d.signin_pos)}),引擎按周期取模,非法值回落 0`));
+  }
+  if (d.signin_last !== undefined && d.signin_last !== null && typeof d.signin_last !== "string") {
+    out.push(issue("signin_last", "warn", `signin_last 应为字符串日期(当前 ${fmtVal(d.signin_last)})`));
+  }
+  if (d.week_key !== undefined && d.week_key !== null && typeof d.week_key !== "string") {
+    out.push(issue("week_key", "warn", `week_key 应为字符串(当前 ${fmtVal(d.week_key)}),异常则周进度重置`));
+  }
+  if (d.weekly !== undefined && !isObj(d.weekly)) {
+    out.push(issue("weekly", "warn", `weekly 应为普通对象(当前 ${fmtVal(d.weekly)})`));
+  } else if (isObj(d.weekly)) {
+    for (const [gid, prog] of Object.entries(d.weekly)) {
+      if (!WEEKLY_GOALS.some(g => g.id === gid)) {
+        out.push(issue(`weekly.${gid}`, "warn", `键不在 WEEKLY_GOALS(当前 ${fmtVal(gid)}),显示忽略`));
+      }
+      if (!isFiniteNum(prog) || prog < 0) {
+        out.push(issue(`weekly.${gid}`, "warn", `进度应为 ≥0 数字(当前 ${fmtVal(prog)})`));
+      }
+    }
+  }
+  if (d.weekly_claimed !== undefined) {
+    if (!Array.isArray(d.weekly_claimed)) {
+      out.push(issue("weekly_claimed", "warn", `weekly_claimed 应为数组(当前 ${fmtVal(d.weekly_claimed)})`));
+    } else {
+      for (const cid of d.weekly_claimed) {
+        if (!WEEKLY_CHEST.some(c => c.id === cid)) {
+          out.push(issue("weekly_claimed", "warn", `宝箱 id 不在 WEEKLY_CHEST(当前 ${fmtVal(cid)})`));
+        }
+      }
+    }
+  }
+  if (d.titles !== undefined) {
+    if (!Array.isArray(d.titles)) {
+      out.push(issue("titles", "warn", `titles 应为数组(当前 ${fmtVal(d.titles)})`));
+    } else {
+      for (const tid of d.titles) {
+        if (!TITLES.some(t => t.id === tid)) {
+          out.push(issue("titles", "warn", `称号 id 不在 TITLES(当前 ${fmtVal(tid)}),显示为原值`));
+        }
+      }
+    }
+  }
+  if (d.title !== undefined && d.title !== null && d.title !== ""
+      && !TITLES.some(t => t.id === d.title)) {
+    out.push(issue("title", "warn", `当前称号 id 不在 TITLES(当前 ${fmtVal(d.title)})`));
+  }
+  if (d.lineage !== undefined) {
+    if (!Array.isArray(d.lineage)) {
+      out.push(issue("lineage", "warn", `lineage 应为数组(当前 ${fmtVal(d.lineage)}),非数组静默忽略`));
+    } else {
+      d.lineage.forEach((e: any, i: number) => {
+        if (!isObj(e)) {
+          out.push(issue(`lineage.${i}`, "warn", `世系条目应为普通对象(当前 ${fmtVal(e)})`));
+          return;
+        }
+        if (typeof e.cls !== "string") {
+          out.push(issue(`lineage.${i}.cls`, "warn", `cls 应为字符串("?" 合法;当前 ${fmtVal(e.cls)})`));
+        }
+        for (const k of ["level", "zone", "kills", "dur"] as const) {
+          if (!isFiniteNum(e[k])) {
+            out.push(issue(`lineage.${i}.${k}`, "warn", `${k} 应为数字(当前 ${fmtVal(e[k])})`));
+          }
+        }
+      });
+      if (d.lineage.length > 50) {
+        out.push(issue("lineage", "warn", `世系 ${d.lineage.length} 条超 50,引擎只保留前 50`));
+      }
+    }
+  }
+  if (d.run_start_playtime !== undefined && !isFiniteNum(d.run_start_playtime)) {
+    out.push(issue("run_start_playtime", "warn", `应为数字(当前 ${fmtVal(d.run_start_playtime)})`));
+  }
+  if (d.run_max_zone !== undefined && !(isInt(d.run_max_zone) && d.run_max_zone >= 1)) {
+    out.push(issue("run_max_zone", "warn",
+      `应为 ≥1 整数(当前 ${fmtVal(d.run_max_zone)}),转生深度加权 k 的输入`));
+  }
+  if (d.redeemed !== undefined) {
+    if (!Array.isArray(d.redeemed)) {
+      out.push(issue("redeemed", "warn", `redeemed 应为数组(当前 ${fmtVal(d.redeemed)})`));
+    } else {
+      const hashes = new Set(REDEEM_CODES.map(c => c.hash));
+      for (const h of d.redeemed) {
+        if (!isInt(h) || !hashes.has(h)) {
+          out.push(issue("redeemed", "warn", `兑换哈希不在 REDEEM_CODES(当前 ${fmtVal(h)})`));
+        }
+      }
+    }
+  }
+  if (d.mon_kills !== undefined) {
+    if (!isObj(d.mon_kills)) {
+      out.push(issue("mon_kills", "warn", `mon_kills 应为普通对象(当前 ${fmtVal(d.mon_kills)})`));
+    } else {
+      for (const [mid, n] of Object.entries(d.mon_kills)) {
+        if (!Object.hasOwn(MONSTERS, mid)) {
+          out.push(issue(`mon_kills.${mid}`, "warn", `键不在 MONSTERS(当前 ${fmtVal(mid)}),图鉴不显示`));
+        }
+        if (!isInt(n) || n < 0) {
+          out.push(issue(`mon_kills.${mid}`, "warn", `击杀数应为 ≥0 整数(当前 ${fmtVal(n)})`));
+        }
+      }
+    }
+  }
+  if (d.death_tier !== undefined && !isFiniteNum(d.death_tier)) {
+    out.push(issue("death_tier", "warn", `death_tier 应为数字(-1=无;当前 ${fmtVal(d.death_tier)})`));
+  }
+  if (d.auto_farm !== undefined && typeof d.auto_farm !== "boolean") {
+    out.push(issue("auto_farm", "warn", `auto_farm 应为布尔(当前 ${fmtVal(d.auto_farm)})`));
   }
   return out;
 }

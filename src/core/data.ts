@@ -454,6 +454,8 @@ export const REDEEM_CODES: RedeemDef[] = [
   { hash: 2332319329, label: "上线礼包:◈10万 + ✦5 + 🔑1", gold: 100000, stones: 5, keys: 1 },
   { hash: 3102457229, label: "深潜者礼包:✦3", stones: 3 },
   { hash: 456085019, label: "首杀礼包:◈2万", gold: 20000 },
+  { hash: 179156654, label: "VIP礼包:◈30万 + ✦6 + 🔑2", gold: 300000, stones: 6, keys: 2 },
+  { hash: 3586404200, label: "VIP礼包:◈30万 + ✦6 + 🔑2", gold: 300000, stones: 6, keys: 2 },
 ];   // 由 scripts/gen_redeem.ts 生成注入
 
 // ---------------------------------------------------------------- 悬赏任务

@@ -1,14 +1,17 @@
 /// <reference lib="dom" />
 /** 管理面板 · 数值覆盖元数据:分类树 / 中文标签 / 🔒锁定行 / ⚠警示行。
  *  🔒清单与核心层 R6 双保险(docs/admin-panel.md §4.3):
- *   ① 末段 ∈ {id,key,cls,stat,hook,op,type,metric,buff,kind,pct}
+ *   ① 末段 ∈ {id,key,cls,stat,hook,op,type,metric,buff,kind,pct,hash}
  *   ② 路径前缀命中 THEMES.<n>.mobs.<i>
- *   ③ 根=SLOT_INNATE 且路径恰 3 段且末段==="0" */
+ *   ③ 根=SLOT_INNATE 且路径恰 3 段且末段==="0"
+ *  不入 ROOTS:ART(终端 ASCII 立绘,纯展示)、VIRTUAL_STATS(虚拟属性键元数据)、
+ *  RARITY_IDX/AFFIX_DEF 等 * _DEF/* _IDX 派生索引。 */
 import {
   ACHIEVEMENTS, AFFIXES, AFFIX_SUFFIX, ACTIVE_SKILLS, ALTAR_LINES, BAL, CAPS,
   CLASSES, MAIN_ROLLS, MONSTERS, PASSIVE_SKILLS, POTIONS, QUEST_TYPES, RARITIES,
-  RARITY_PREFIX, RELIC_EFF_COUNT, RELIC_EFFECTS, SLOTS, SLOT_INNATE, STAT_NAMES,
-  THEMES, TOWER,
+  RARITY_PREFIX, REDEEM_CODES, RELIC_EFF_COUNT, RELIC_EFFECTS, SIGNIN_REWARDS,
+  SLOTS, SLOT_INNATE, STAT_NAMES, THEMES, TITLES, TOWER, WEEKLY_CHEST,
+  WEEKLY_GOALS,
 } from "../../core/data.ts";
 
 export const ROOTS: Record<string, unknown> = {
@@ -16,6 +19,8 @@ export const ROOTS: Record<string, unknown> = {
   AFFIX_SUFFIX, CAPS, CLASSES, ACTIVE_SKILLS, PASSIVE_SKILLS, THEMES, MONSTERS,
   ACHIEVEMENTS, QUEST_TYPES, ALTAR_LINES, POTIONS, STAT_NAMES, TOWER,
   RELIC_EFFECTS, RELIC_EFF_COUNT,
+  // 2.3.x 批次新表:签到/周常/称号/兑换码(数值皆可覆盖;hash 为兑换匹配键,🔒)
+  SIGNIN_REWARDS, WEEKLY_GOALS, WEEKLY_CHEST, TITLES, REDEEM_CODES,
 };
 
 // ---------------------------------------------------------------- 12 分类
@@ -30,8 +35,10 @@ export const CATEGORIES: Category[] = [
   { id: "class", name: "职业" },
   { id: "relic", name: "遗物与爬塔" },
   { id: "econ", name: "经济与消耗" },
-  { id: "quest", name: "悬赏与成就" },
+  { id: "quest", name: "悬赏成就与图鉴" },
   { id: "altar", name: "祭坛与药剂" },
+  { id: "daily", name: "签到周常与兑换" },
+  { id: "rebirth", name: "转生与称号" },
   { id: "misc", name: "解锁节奏与杂项" },
 ];
 
@@ -81,6 +88,16 @@ const BAL_LABELS: Record<string, string> = {
   offline_item_cap: "离线掉落件数上限",
   respawn_sec: "复活等待秒数",
   death_row_to_farm: "连败转挂机次数",
+  // 2.2-2.3 批次新增
+  potion_cost0: "药剂初始价", potion_cost_cap: "药剂单次购买价上限",
+  farm_stuck_row: "挂机连败退层阈值",
+  rebirth_min_level: "转生门槛等级",
+  rebirth_depth_ref: "转生深度锚点区数", rebirth_k_min: "转生权重下限",
+  rebirth_k_max: "转生权重上限", rebirth_stat_pct: "每基准世三围加成",
+  rebirth_gain_pct: "每基准世金币经验加成",
+  auto_enhance_lv: "自动强化解锁等级", auto_skill_lv: "自动升技能解锁等级",
+  auto_altar_lv: "自动献祭解锁等级",
+  codex_per: "图鉴每种加成",
 };
 
 /** 数组型 BAL 键 → 单元素标签(下标自动拼上) */
@@ -111,11 +128,14 @@ const FIELD_LABELS: Record<string, string> = {
   unit: "单位", growth: "成长系数", goldK: "金币系数", stones: "重铸石奖励",
   pct: "百分比口径", buff: "buff 键", metric: "计量键", thresholds: "门槛",
   per_lv: "每级", base_n: "基数",
+  // 2.3 批次新表字段
+  gold: "金币", keys: "塔钥匙数", target: "目标值", need: "需完成项数",
+  cond: "达成条件", hash: "兑换哈希(🔒)",
 };
 
 // ---------------------------------------------------------------- 锁定/警示
 const LOCKED_KEYS = new Set(["id", "key", "cls", "stat", "hook", "op", "type",
-  "metric", "buff", "kind", "pct"]);
+  "metric", "buff", "kind", "pct", "hash"]);
 
 /** 数组下标段(与核心 overrides.ts NUM_SEG 同款) */
 const NUM_SEG = /^\d+$/;
@@ -150,6 +170,8 @@ const CAT_BY_ROOT: Record<string, string> = {
   RARITIES: "drop", RARITY_PREFIX: "drop", THEMES: "combat", MONSTERS: "combat",
   SLOTS: "gear", MAIN_ROLLS: "gear", SLOT_INNATE: "gear", AFFIXES: "gear",
   AFFIX_SUFFIX: "gear", CAPS: "gear", STAT_NAMES: "misc",
+  SIGNIN_REWARDS: "daily", WEEKLY_GOALS: "daily", WEEKLY_CHEST: "daily",
+  REDEEM_CODES: "daily", TITLES: "rebirth",
 };
 
 const CAT_BY_BAL: [RegExp, string][] = [
@@ -160,7 +182,9 @@ const CAT_BY_BAL: [RegExp, string][] = [
   [/^relic_bag/, "relic"],
   [/^gold[0-9_]|^gold_k|^gold_p|^xp[0-9_]|^xp_k|^xp_p|^altar_|^potion_|^skill_cost|^skill_lv_max/, "econ"],
   [/^quest_/, "quest"],
-  [/^loadout_unlock|^speed_unlock|^undying_cd|^offline_|^respawn_sec|^death_row/, "misc"],
+  [/^rebirth_/, "rebirth"],
+  [/^codex_per/, "quest"],
+  [/^loadout_unlock|^speed_unlock|^undying_cd|^offline_|^respawn_sec|^death_row|^farm_stuck_row|^auto_/, "misc"],
 ];
 
 export function categoryOf(path: string): string {

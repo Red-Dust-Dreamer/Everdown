@@ -19,7 +19,7 @@ import {
   SLOTS, STAT_NAMES, THEMES, TOWER,
 } from "../src/core/data.ts";
 import { Game, migrateSave } from "../src/core/game.ts";
-import { validateSaveDict, type SaveIssue } from "../src/core/savefile.ts";
+import { validateItemDict, validateSaveDict, type SaveIssue } from "../src/core/savefile.ts";
 import { rollItem } from "../src/core/items.ts";
 import { PyRandom } from "../src/core/rng.ts";
 import { coerceInput } from "../src/web/admin/admin-dom.ts";
@@ -309,6 +309,36 @@ check("C4 MAIN_ROLLS 标签显示 stat 中文名而非数组下标", () => {
   ok(lbl.includes(STAT_NAMES[st] ?? st),
     `标签应含 stat 中文名「${STAT_NAMES[st] ?? st}」,实际 ${lbl}`);
   ok(!/·\d+·/.test(lbl), `标签不应含裸下标,实际 ${lbl}`);
+});
+
+check("C5 批次增量:新表叶子可覆盖,hash 锁定,新存档字段校验生效", () => {
+  const leaves = listOverridableLeaves();
+  for (const p of ["SIGNIN_REWARDS.0.gold", "WEEKLY_GOALS.0.target",
+    "WEEKLY_CHEST.1.stones", "TITLES.0.name", "REDEEM_CODES.0.gold",
+    "REDEEM_CODES.3.gold"]) {   // [3] = VIP666(注意:REDEEM_CODES 顺序与 gen_redeem.ts 一致)
+    ok(p in leaves, `应含批次新表叶子 ${p}`);
+  }
+  ok(isLockedPath("REDEEM_CODES.0.hash"), "REDEEM_CODES.hash 应为锁定键(兑换匹配)");
+  const c = JSON.parse(JSON.stringify(edited));
+  c.signin_pos = 1.5;
+  c.titles = ["t_reb1", "t_nope"];
+  c.mon_kills = { slime: 3, nope: -1 };
+  c.weekly = { w_kill: 10, w_nope: 1 };
+  c.run_max_zone = 0;
+  const iss = validateSaveDict(c);
+  ok(iss.some(i => i.field === "signin_pos" && i.level === "warn"), "signin_pos 非整数应 warn");
+  ok(iss.some(i => i.field === "titles" && i.level === "warn"), "未知称号 id 应 warn");
+  ok(iss.some(i => i.field === "mon_kills.nope"), "未知怪物键/负击杀数应 warn");
+  ok(iss.some(i => i.field === "weekly.w_nope"), "未知周常目标键应 warn");
+  ok(iss.some(i => i.field === "run_max_zone"), "run_max_zone 非正整数应 warn");
+  const it = JSON.parse(JSON.stringify(edited.bag[0]));
+  it.skill_sid = "nope";
+  it.locked = "yes";
+  const itIss = validateItemDict(it, "bag.0");
+  ok(itIss.some(i => i.field === "bag.0.skill_sid" && i.level === "warn"),
+    "装备 skill_sid 不在池应 warn");
+  ok(itIss.some(i => i.field === "bag.0.locked" && i.level === "warn"),
+    "装备 locked 非布尔应 warn");
 });
 
 // ================================================================ 汇总(退出码契约:全过 0 / 任一 FAIL 非 0)

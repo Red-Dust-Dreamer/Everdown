@@ -7,6 +7,10 @@ const CODES: Array<{ code: string; label: string; gold?: number; stones?: number
   { code: "ABYSS2026", label: "上线礼包:◈10万 + ✦5 + 🔑1", gold: 100000, stones: 5, keys: 1 },
   { code: "DEEPDIVER", label: "深潜者礼包:✦3", stones: 3 },
   { code: "FIRSTBLOOD", label: "首杀礼包:◈2万", gold: 20000 },
+  // VIP 渠道码(2026-10-24):两码同值,双渠道发放;合计 60万金+12石+4钥已实测
+  // 距排行榜包络 3.8x 余量(1h 战力 39222 vs 148064),加速体感明显但不破均衡。
+  { code: "VIP666", label: "VIP礼包:◈30万 + ✦6 + 🔑2", gold: 300000, stones: 6, keys: 2 },
+  { code: "VIP888", label: "VIP礼包:◈30万 + ✦6 + 🔑2", gold: 300000, stones: 6, keys: 2 },
 ];
 
 /** FNV-1a 32bit(与 game.ts redeemCode 同一口径) */
@@ -30,8 +34,9 @@ const rows = CODES.map(c => {
 
 const dataPath = new URL("../src/core/data.ts", import.meta.url);
 let src = fs.readFileSync(dataPath, "utf8");
-const marker = /export const REDEEM_CODES: RedeemDef\[\] = .*$/m;
-if (!marker.test(src)) { console.error("REDEEM_CODES 标记行未找到"); process.exit(1); }
+// 匹配整个块(声明行 → 首个行首 "];"),否则旧多行条目会残留成悬空代码
+const marker = /export const REDEEM_CODES: RedeemDef\[\] = \[[\s\S]*?^\];.*$/m;
+if (!marker.test(src)) { console.error("REDEEM_CODES 标记块未找到"); process.exit(1); }
 src = src.replace(marker, `export const REDEEM_CODES: RedeemDef[] = [\n${rows}\n];   // 由 scripts/gen_redeem.ts 生成注入`);
 fs.writeFileSync(dataPath, src, "utf8");
 
