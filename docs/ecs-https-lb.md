@@ -30,6 +30,7 @@ curl -s --max-time 8 https://47.99.151.214:8788/healthz                         
 
 - **外部 curl 8788 超时,服务器本地 `curl -sk https://127.0.0.1:8788/healthz` 通** → 阿里云安全组没放行 8788(最常见);其次 nftables(`nft list chain inet filter input`)。
 - **证书过期(TapTap 端排行榜整片失败,网站版 8787 不受影响)** → 看续期日志;手动补:`ssh ecs /usr/local/bin/abyss-cert-renew.sh`(脚本内部 `--force`,不到 3 天不会动)。游戏本体离线可玩,榜单断了不影响进程。
+- **⚠️ 2026-10-24 实际事故与根因**:证书 10-22 过期两天才发现——timer 每日跑但 acme.sh 报 `'47.99.151.214' is not an issued domain, skipping` 空转。根因:**systemd 服务环境没有 `HOME`,acme.sh 找不到 `~/.acme.sh` 状态目录**(`HOME= acme.sh --list` 直接空表)。修复:续期脚本头部加 `export HOME=/root`。教训:例行检查除了看 timer active,**要看 journalctl 上次动作是不是真 renew/skip 而非报错**。
 - **nginx -t 报证书文件缺失** → 证书从未安装或被清:`/root/.acme.sh/acme.sh --install-cert -d 47.99.151.214 --ecc --fullchain-file /etc/nginx/ssl/abyss-ip/fullchain.pem --key-file /etc/nginx/ssl/abyss-ip/key.pem --reloadcmd "systemctl reload nginx"`。
 - 注意:从 ECS 自身 curl 公网 IP 的 8788 会超时(hairpin NAT 不支持),自测用 `127.0.0.1`。
 
