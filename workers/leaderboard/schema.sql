@@ -59,3 +59,30 @@ CREATE TABLE IF NOT EXISTS save_sync (
   bytes      INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
 );
+
+-- 世界BOSS(周轮合力,2.6):全服每周对同一头目异步输出,伤害只升不降聚合进总血池。
+-- 轮次滚动 = weekKeyNow + 惰性结算(无 cron);仅保留最近两轮(当轮+上轮供 prev)。
+CREATE TABLE IF NOT EXISTS boss_rounds (
+  round      TEXT    NOT NULL PRIMARY KEY,  -- ISO 周标识,如 '2026-W43'(与周榜同口径)
+  total_hp   INTEGER NOT NULL,              -- 上轮击杀×1.6/未杀×0.8(下限 50 万),首轮 200 万
+  killed     INTEGER NOT NULL DEFAULT 0,    -- 惰性结算:SUM(dmg)≥total_hp → 1
+  created_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS boss_damage (
+  round      TEXT    NOT NULL,
+  uuid       TEXT    NOT NULL,
+  name       TEXT    NOT NULL,
+  dmg        INTEGER NOT NULL,              -- 同轮同 uuid 只升不降(MAX UPSERT)
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (round, uuid)
+);
+
+-- 异步切磋(2.7):阵容快照(每 uuid 最新一份,UPSERT 覆盖;胜负在挑战方本地模拟,无 result 上报);
+-- 上行 POST /arena/snapshot(浅校验 ≤4KB),拉取 GET /arena/opponents(战力邻域采样,脱 uuid)
+CREATE TABLE IF NOT EXISTS arena_snaps (
+  uuid       TEXT    NOT NULL PRIMARY KEY,
+  name       TEXT    NOT NULL,
+  power      INTEGER NOT NULL DEFAULT 0,
+  squad_json TEXT    NOT NULL DEFAULT '[]', -- 裁剪后的防守阵容(≤数 KB)
+  updated_at INTEGER NOT NULL
+);

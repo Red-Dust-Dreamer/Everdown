@@ -134,6 +134,18 @@ export function battleTick(g: Game, dt: number): void {
     return;
   }
   S.tickBuffs(g);
+  // 终局一击(手动大招)CD 递减:与 castSkills 的『g.skillCd[sid] ?? 0』同范式 ——
+  // ULTS 不进 skillCd 重建循环(constructor/fromDict 只铺 ACTIVE_SKILLS 键),
+  // 未释放过时 ult 键不存在;条件写保证不写入 NaN,释放后才落键递减。
+  // 放在 `if (!mon) return` 之前:换怪间隙 CD 照走(在线 tick 才走,
+  // 离线 resolveOffline 不放大招 —— 手动特权)。注意:复活倒计时与死亡窗口
+  // 已被上方 respawnTimer/hp<=0 两个提前 return 挡住,期间 CD 不递减
+  // (与 castSkills 的技能 CD 同口径,更保守)。
+  const ultDef = g.ultOf();
+  if (ultDef) {
+    const ucd = g.skillCd[ultDef.id] ?? 0;
+    if (ucd > 0) g.skillCd[ultDef.id] = ucd - dt;
+  }
   if (!mon) return;
 
   castSkills(g, dt, mon);
@@ -376,6 +388,7 @@ function monsterAttack(g: Game, mon: Monster): void {
 
 function onMonsterKilled(g: Game, mon: Monster): void {
   const h = g.hero;
+  g.emit("anim", "mon_die");   // 宿主死亡表现(白闪/烟尘消散;表现层用)
   if (g.lastSpawnTime !== null) {
     const kt = Math.max(0.5, g.time - g.lastSpawnTime);
     g.emaKill = g.emaKill ? g.emaKill * 0.7 + kt * 0.3 : kt;
@@ -416,7 +429,7 @@ function onMonsterKilled(g: Game, mon: Monster): void {
   if (g.rng.random() < dropChance) {
     const minIdx = mon.boss ? 2 : 0;
     const boost = mon.boss ? 0.6 : mon.elite ? 0.25 : 0;
-    const item = rollItem(mon.tier, g.rng, h.luck ?? 0, minIdx, boost, g.classId);
+    const item = rollItem(mon.tier, g.rng, h.luck ?? 0, minIdx, boost, g.classId, g.zone);
     g.addItem(item);
     if (RARITY_IDX[item.rarity] >= 2) g.questProgress("loot", 1);
     // 紫色(epic)或更好:发掉落光柱事件(宿主表现层用,纯视觉)

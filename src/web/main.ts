@@ -12,6 +12,8 @@ import * as systems from "../core/systems.ts";
 import { effLv, skillVal, buffPct, atkNow, dotVal } from "../core/skills.ts";
 import { heroPower, powerWithEquip, powerWithRelic } from "../core/power.ts";
 import type { PowerBreakdown } from "../core/power.ts";
+import { makeSquad, parseSquad, arenaSimulate, arenaSeed } from "../core/arena.ts";
+import type { ArenaSquad } from "../core/arena.ts";
 import { plusBonus, Item, PCT_MAINS } from "../core/items.ts";
 import type { Relic } from "../core/relics.ts";
 import { DpsMeter } from "./dps-meter.ts";
@@ -104,6 +106,12 @@ function toast(text: string): void {
 }
 
 // ---------------------------------------------------------------- UI 快照类型
+/** 深渊套装展示信息:n = 件数(已装备件为身穿口径;背包/掉落件为「穿上后」口径,
+ *  由 buildState 按 suitN 计算 —— itemUI 自身不知道这件在哪) */
+interface SuitUI {
+  id: string; name: string; icon: string; color: string;
+  n: number; b2: string; b4: string;
+}
 interface ItemUI {
   name: string; rarity: string; rid: number; rname: string; rcolor: string;
   slot: string; slot_name: string; plus: number; tier: number;
@@ -113,6 +121,7 @@ interface ItemUI {
   score: number; sell: number; ecost: number; dgold: number; dstones: number;
   pb: number; pb_next: number;
   locked: boolean;
+  suit: SuitUI | null;
 }
 interface SkillUI {
   id: string; name: string; icon: string; kind: string; unlock: number; cd: number;
@@ -169,6 +178,11 @@ interface State {
   skill_cd: Record<string, number>;
   /** 引导中的技能(技能栏显示吟唱状态;×3 速度下引导被压缩,纯靠飘字看不出在引导) */
   burst: { sid: string; left: number; hits: number } | null;
+  /** 终局一击(手动大招):unlocked 驱动大招槽出现(Lv35);ready/cd_left/cd_total
+   *  驱动就绪呼吸与 CD 环倒数;cd_total 已含冷却缩减(与 castUlt 同式) */
+  ult: { id: string; name: string; icon: string; color: string; desc: string;
+         ready: boolean; cd_left: number; cd_total: number;
+         unlock_lv: number; unlocked: boolean } | null;
   tower: { keys: number; max_floor: number };
   in_tower: boolean;
   tower_floor_sel: number;
@@ -200,15 +214,31 @@ interface State {
   /** 周常:目标进度 + 已完成数 + 宝箱领取态 */
   weekly: { goals: { id: string; name: string; cur: number; target: number }[];
             done: number; claimed: string[];
-            chests: { id: string; label: string; need: number; stones: number }[] };
+            chests: { id: string; label: string; need: number; stones: number;
+              title: string | null }[] };
   /** 世系档案 + 称号 */
   lineage: { cls: string; level: number; zone: number; kills: number; dur: number }[];
   titles: { id: string; name: string; cond: string; owned: boolean }[];
   title: string;
+  /** 深渊套装(2.5):8 套主题特产的身穿件数与效果文案(角色页套装区块) */
+  suits: SuitUI[];
+  /** 世界BOSS·周轮合力(2.6):本地轮次状态(挑战次数/最好成绩/领取记录) */
+  boss: { last_round: string; my_best: number; attempts: number; claimed: string[] };
+  /** 上轮有未领奖励的轮号(纯本地判定,null=无)→ 排行榜 tab 红点 */
+  boss_pending: string | null;
+  /** 异步切磋(2.7):本地战绩(挑战结算计数,称号发放在核心) */
+  arena: { wins: number; losses: number };
 }
 
 // ---------------------------------------------------------------- 快照构建
-function itemUI(it: Item): ItemUI {
+/** 套装效果文案:统一 +N%(2 件 pct 直乘区与 add 点数(金币/幸运/暴伤等点值统计上
+ *  均为百分比点,与词缀/遗物的显示口径一致)) */
+function suitEffText(b: D.SuitBonus): string {
+  return `${D.STAT_NAMES[b.stat] ?? b.stat} +${numTxt(b.v)}%`;
+}
+
+/** n 省略时按 1 件计(孤件);装备中/背包件的口径差异由调用方传入(buildState) */
+function itemUI(it: Item, n?: number): ItemUI {
   const rid = D.RARITY_IDX[it.rarity];
   const rar = D.RARITIES[rid];
   const mstat = it.mainStat();
@@ -228,6 +258,12 @@ function itemUI(it: Item): ItemUI {
     innate = { name: D.STAT_NAMES[inn[0]],
                val: Math.round(inn[1] * rid * 10) / 10 };   // 固有不吃强化
   }
+  const sd = it.suitDef();
+  const suit: SuitUI | null = sd ? {
+    id: sd.id, name: sd.name, icon: sd.icon,
+    color: D.THEMES[sd.themeIdx]?.color ?? "white",
+    n: n ?? 1, b2: suitEffText(sd.bonus2), b4: suitEffText(sd.bonus4),
+  } : null;
   const [dgold, dstones] = it.dismantle();
   const pb = plusBonus(it.plus);
   return {
@@ -243,6 +279,7 @@ function itemUI(it: Item): ItemUI {
     ecost: it.enhanceCost(), dgold, dstones,
     pb: Math.round(pb * 1000) / 10,
     pb_next: Math.round((plusBonus(it.plus + 1) - pb) * 1000) / 10,
+    suit,
   };
 }
 
@@ -288,6 +325,21 @@ function buildState(g: Game): State {
     ? D.CLASSES[g.classId] : { name: "", icon: "", desc: "", color: "" };
   const theme = D.THEMES[(g.zone - 1) % D.THEMES.length];
   const cycle = Math.floor((g.zone - 1) / D.THEMES.length) + 1;
+  // 深渊套装(2.5):已装备件数(同 suitId 跨槽)—— 套装快照与装备/掉落件的 n/4 共用
+  const suitN: Record<string, number> = {};
+  for (const it of Object.values(g.equip)) {
+    if (it.suitId && D.SUIT_DEF[it.suitId]) suitN[it.suitId] = (suitN[it.suitId] ?? 0) + 1;
+  }
+  const suits: SuitUI[] = D.SUITS.map(s => ({
+    id: s.id, name: s.name, icon: s.icon,
+    color: D.THEMES[s.themeIdx]?.color ?? "white",
+    n: suitN[s.id] ?? 0, b2: suitEffText(s.bonus2), b4: suitEffText(s.bonus4),
+  }));
+  /** 装备中件:身穿口径(含本件);背包/掉落件:穿上后口径(+1) */
+  const eqSuitN = (it: Item): number | undefined =>
+    it.suitId ? (suitN[it.suitId] ?? 0) : undefined;
+  const bagSuitN = (it: Item): number | undefined =>
+    it.suitId ? (suitN[it.suitId] ?? 0) + 1 : undefined;
 
   let dps = g.theoreticalDps();
   if (!Number.isFinite(dps)) dps = 0;
@@ -339,7 +391,7 @@ function buildState(g: Game): State {
     sec: g.pendingOffline.sec, kills: g.pendingOffline.kills,
     deaths: g.pendingOffline.deaths, gold: g.pendingOffline.gold, xp: g.pendingOffline.xp,
     levels: g.pendingOffline.levels, zones: g.pendingOffline.zones,
-    items: g.pendingOffline.items.map((i: Item) => itemUI(i)),
+    items: g.pendingOffline.items.map((i: Item) => itemUI(i, bagSuitN(i))),
   } : null;
 
   // 换装对比的战力差:预览要临时换装重算,按新件引用缓存(每帧 buildState 不重复算)
@@ -372,8 +424,8 @@ function buildState(g: Game): State {
       ? (D.SLOT_NAMES[g.pendingSwap.slot ?? ""] ?? g.pendingSwap.slot ?? "")
       : `遗物${(g.pendingSwap.relicSlot ?? 0) + 1}`,
     old_item: g.pendingSwap.kind === "item" && g.pendingSwap.slot && g.equip[g.pendingSwap.slot]
-      ? itemUI(g.equip[g.pendingSwap.slot]!) : null,
-    new_item: g.pendingSwap.item ? itemUI(g.pendingSwap.item) : null,
+      ? itemUI(g.equip[g.pendingSwap.slot]!, eqSuitN(g.equip[g.pendingSwap.slot]!)) : null,
+    new_item: g.pendingSwap.item ? itemUI(g.pendingSwap.item, bagSuitN(g.pendingSwap.item)) : null,
     old_relic: g.pendingSwap.kind === "relic"
       ? (g.relics[g.pendingSwap.relicSlot ?? 0] ? relicUI(g.relics[g.pendingSwap.relicSlot ?? 0]!) : null)
       : null,
@@ -405,8 +457,8 @@ function buildState(g: Game): State {
     respawn: g.respawnTimer, ema_kill: g.emaKill,
     hero, monster, buffs,
     power: g.classId ? heroPower(g) : null,
-    equip: Object.fromEntries(Object.entries(g.equip).map(([k, v]) => [k, itemUI(v)])),
-    bag: g.bag.map(itemUI),
+    equip: Object.fromEntries(Object.entries(g.equip).map(([k, v]) => [k, itemUI(v, eqSuitN(v))])),
+    bag: g.bag.map(it => itemUI(it, bagSuitN(it))),
     bag_size: D.BAL.bag_size,
     bag_cap: g.bagCap(), bag_expand_cost: g.bagExpandCost(),
     quests, achievements,
@@ -419,6 +471,21 @@ function buildState(g: Game): State {
     skills, skill_cd: g.skillCd,
     burst: g.burst ? { sid: g.burst.sid, left: g.burst.left,
       hits: D.ACTIVE_DEF[g.burst.sid]?.hits ?? g.burst.left } : null,
+    // 终局一击(手动大招):门槛/就绪/倒数快照;cd_total 与 castUlt 同式(含 cd_reduce)
+    ult: (() => {
+      const u = g.ultOf();
+      if (!u) return null;
+      const cdCut = 1 - Math.min((h.cd_reduce ?? 0) / 100, 0.4);
+      return {
+        id: u.id, name: u.name, icon: u.icon, color: u.color,
+        desc: skillUI(g, u).desc,
+        ready: (g.skillCd[u.id] ?? 0) <= 0,
+        cd_left: g.skillCd[u.id] ?? 0,
+        cd_total: u.cd * cdCut,
+        unlock_lv: u.unlock,
+        unlocked: g.level >= u.unlock,
+      };
+    })(),
     tower: { keys: g.tower.keys, max_floor: g.tower.max_floor },
     altar: D.ALTAR_LINES.map(l => {
       const lv = g.altarLv[l.id] ?? 0;
@@ -456,11 +523,17 @@ function buildState(g: Game): State {
         cur: Math.min(g.weekly[w.metric] ?? 0, w.target), target: w.target })),
       done: g.weeklyDoneCount(),
       claimed: [...g.weeklyClaimed],
-      chests: D.WEEKLY_CHEST.map(c => ({ id: c.id, label: c.label, need: c.need, stones: c.stones })),
+      chests: D.WEEKLY_CHEST.map(c => ({ id: c.id, label: c.label, need: c.need, stones: c.stones,
+        title: c.title ?? null })),
     },
     lineage: g.lineage.slice(0, 12),
     titles: D.TITLES.map(t => ({ ...t, owned: g.titles.includes(t.id) })),
     title: g.title,
+    suits,
+    boss: { last_round: g.boss.last_round, my_best: g.boss.my_best,
+            attempts: g.boss.attempts, claimed: [...g.boss.claimed] },
+    boss_pending: g.bossPendingClaim(),
+    arena: { wins: g.arena.wins, losses: g.arena.losses },
   };
 }
 
@@ -499,12 +572,29 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
     case "equip_skill": if (a) g.equipSkill(a, (b ?? "active") as "active" | "passive"); break;
     case "unequip_skill": if (a) g.unequipSkill(a); break;
     case "skill_up": if (a) g.skillUp(a); break;
+    case "ult": g.castUlt(); break;   // 终局一击(手动大招):大招槽点击/键盘 Q 同入口
     case "tower_enter": {
-      g.towerEnter();
+      // data-a=层号(选层重打);无参 = 默认 max_floor+1。坏值(NaN/小数/越界)原样
+      // 交给 towerEnter 校验拒绝 —— 不在此吞掉,否则 NaN 会静默回退成默认层进塔扣钥
+      const fl = a !== null && a !== "" ? Number(a) : undefined;
+      g.towerEnter(fl);
       if (g.inTower) switchTab("battle");   // 进塔后切回战斗页看爬塔
+      // 进塔/撤退后选层器回默认"下一层":爬完回来不该还停在进塔前手选的旧层
+      towerFloorPick = null;
       break;
     }
-    case "tower_exit": g.towerExit(false); break;   // 撤退:视作战败,仅耗已用的钥匙
+    case "tower_floor": {
+      // ◀▶ 选层器(会话级,不进快照):夹取 1..max_floor+1,与 altarBatch 同款先例
+      const dlt = Number(a);
+      if (Number.isFinite(dlt)) {
+        const max = g.tower.max_floor + 1;
+        towerFloorPick = Math.min(Math.max(1, (towerFloorPick ?? max) + dlt), max);
+      }
+      break;
+    }
+    // 撤退:视作战败,仅耗已用的钥匙;选层器同步回默认"下一层"
+    case "tower_exit": g.towerExit(false); towerFloorPick = null; break;
+    case "tower_bag_toggle": towerBagOpen = !towerBagOpen; break;   // 塔页背包折叠头
     case "altar_up": if (a) g.altarUp(a); break;
     case "altar_up_multi": if (a) g.altarUpMulti(a, altarBatch); break;
     case "altar_batch": {
@@ -653,7 +743,7 @@ const SFX_FILES = ["attack-hit", "skill-heavy", "skill-magic", "skill-arrow",
                    "skill-burst", "skill-buff", "skill-shield", "skill-execute",
                    "skill-fire", "skill-ice", "skill-zap", "skill-roar",
                    "skill-ult", "skill-drain", "skill-mark", "skill-dash",
-                   "dot-burn", "dot-bleed"] as const;
+                   "dot-burn", "dot-bleed", "mob-hit", "mskill", "mon-die"] as const;
 type SfxKey = typeof SFX_FILES[number];
 const SFX_STYLE: Record<SfxKey, { gain: number; rateLo: number; rateHi: number; throttleMs: number }> = {
   "attack-hit":    { gain: 0.5,  rateLo: 0.92, rateHi: 1.08, throttleMs: 70 },
@@ -674,6 +764,9 @@ const SFX_STYLE: Record<SfxKey, { gain: number; rateLo: number; rateHi: number; 
   "skill-dash":    { gain: 0.72, rateLo: 0.95, rateHi: 1.1,  throttleMs: 120 },
   "dot-burn":      { gain: 0.78, rateLo: 0.95, rateHi: 1.04, throttleMs: 140 },
   "dot-bleed":     { gain: 0.75, rateLo: 0.92, rateHi: 1.02, throttleMs: 140 },
+  "mob-hit":       { gain: 0.55, rateLo: 0.9,  rateHi: 1.0,  throttleMs: 110 },
+  "mskill":        { gain: 0.5,  rateLo: 0.94, rateHi: 1.04, throttleMs: 220 },
+  "mon-die":       { gain: 0.5,  rateLo: 0.92, rateHi: 1.06, throttleMs: 140 },
 };
 let sfxOn = localStorage.getItem(SFX_KEY) !== "0";
 let bgmOn = localStorage.getItem(BGM_KEY) !== "0";
@@ -686,7 +779,9 @@ let bgmSrc: AudioBufferSourceNode | null = null;
 const sfxBufs = new Map<SfxKey, AudioBuffer>();
 const sfxLastMs = new Map<SfxKey, number>();
 const sfxPlays = new Map<SfxKey, number>();
-const SKILL_DEF = new Map(D.ACTIVE_SKILLS.map(s => [s.id, s]));
+const SKILL_DEF = new Map([...D.ACTIVE_SKILLS, ...D.ULTS].map(s => [s.id, s]));
+// ↑ 含 ULTS(终局一击):cast:ult_xxx 特效/音效按 def 取色与回落职业分音,
+//   伤害统计面板(dps-meter)按来源 id 聚合,天然统计大招输出(零改动)。
 
 /** 页面加载即建 context 并预解码全部音效(suspended 态可解码),首次交互只需 resume。
  *  同时建总音量母线(masterGain)并预取 BGM 循环;音效或 BGM 任一开启即建。 */
@@ -796,6 +891,10 @@ const SFX_SKILL: Partial<Record<string, SfxKey>> = {
   r_dash: "skill-dash",     // 疾行(位移嗖声)
   r_sky: "skill-ult",       // 穿云箭
   r_god: "skill-ult",       // 猎神之怒(全属性大招)
+  // 终局一击(手动大招)
+  ult_w_judg: "skill-ult",  // 深渊断罪
+  ult_m_stars: "skill-ult", // 湮灭星陨
+  ult_r_rain: "skill-ult",  // 万箭归宗
 };
 /** 多段技(skill_hit 连发)的命中节拍窗口:窗口内每个 skill_hit 播小型命中闪(带技能主色) */
 let multiHitUntil = 0;
@@ -886,7 +985,13 @@ function drainEvents(): void {
         playSkillCast(text.slice(5));
         playSkillFx(text.slice(5));
       } else if (text === "mob_attack") {
+        // 怪物普攻:冲撞动作 + 英雄侧爪痕 + 撞击音(受击红晕在 heroHurt)
+        monLunge();
+        const hp = heroSidePx();
+        if (hp) fxSpawn("fx-slash", hp.x, hp.y + mobRnd(-16, 16),
+          { "--r": `${mobRnd(25, 65)}deg`, "--c1": "#ffb0b0", "--c2": "#ff5a5a", "--s": "0.85" });
         heroHurt();
+        playSfx("mob-hit");
       } else if (text === "skill_hit") {
         // 多段技/引导技每一下的命中节拍(单段技的施放特效已覆盖,不叠加大特效)
         if (performance.now() < multiHitUntil) {
@@ -899,9 +1004,13 @@ function drainEvents(): void {
       } else if (text.startsWith("loot:")) {
         playLootBeam(text.slice(5));
       } else if (text.startsWith("mskill:")) {
-        // 怪物技能:受击泛红统一走 heroHurt,特效按技能名差异化(未知名回落通用斩击)
+        // 怪物技能:冲撞起手 + 施法音,特效按技能名差异化(未知名回落通用斩击)
+        monLunge();
+        playSfx("mskill");
         heroHurt();
         playMobSkillFx(text.slice(6));
+      } else if (text === "mon_die") {
+        playMonDie();
       } else if (text.startsWith("dot:")) {
         // 挂上持续伤害的一瞬:怪物位置一小撮同色粒子上浮(状态徽章/泛光由渲染层常驻)
         const def = SKILL_DEF.get(text.slice(4));
@@ -999,6 +1108,28 @@ function heroHurt(): void {
   el.classList.remove("lunge", "crit", "skill");
   void el.offsetWidth;
   el.classList.add("hurt");
+}
+
+
+/** 怪物攻击冲撞:向英雄方向突进半步再回位(怪物的"动作",与英雄 bump-mon 镜像) */
+function monLunge(): void {
+  const st = $("stage");
+  st.classList.remove("mon-atk");
+  void st.offsetWidth;   // 重新触发动画
+  st.classList.add("mon-atk");
+  setTimeout(() => st.classList.remove("mon-atk"), 260);
+}
+
+/** 怪物死亡消散:白环收缩 + 烟尘粒子迸散(模型本体随重渲染即刻消失,由特效交代死亡) */
+function playMonDie(): void {
+  const stage = document.getElementById("stage");
+  const p = monCenterPx();
+  if (!stage || !p) return;
+  fxSpawn("fx-die", p.x, p.y);
+  fxBoom({ colors: ["#c8c8d8", "#9a9ab2", "#f2f2f7"], particleCount: 18,
+    origin: { x: p.x / stage.clientWidth, y: p.y / stage.clientHeight },
+    angle: 90, spread: 360, startVelocity: 34, gravity: 0.9, ticks: 190, scalar: 0.95 });
+  playSfx("mon-die");
 }
 
 // ---------------------------------------------------------------- 普攻特效(每职业一套)
@@ -1133,7 +1264,7 @@ interface SkillFx {
   big?: boolean; frost?: boolean;
 }
 
-/** 30 技能逐一配置。burst=命中爆开 ring=环形冲击 side=左缘斜射 zip=高速直线
+/** 33 技能(30 主动 + 3 终局一击)逐一配置。burst=命中爆开 ring=环形冲击 side=左缘斜射 zip=高速直线
  *  rain=从天而降 rise=增益上升流 multi=连发波 storm=环爆+落雨;
  *  big=大招震屏,frost=冰冻覆盖。 */
 const SKILL_FX: Record<string, SkillFx> = {
@@ -1170,6 +1301,10 @@ const SKILL_FX: Record<string, SkillFx> = {
   r_deadly: { mode: "multi", n: 40, waves: 3 },
   r_sky: { mode: "zip", n: 28, scalar: 1.5, big: true },
   r_god: { mode: "ring", n: 70, big: true },
+  // 终局一击(手动大招):全 big 震屏,粒子量与倍率同档加码
+  ult_w_judg: { mode: "ring", n: 90, scalar: 1.7, big: true },
+  ult_m_stars: { mode: "storm", n: 90, scalar: 1.6, big: true },
+  ult_r_rain: { mode: "rain", n: 100, waves: 8, big: true },
 };
 
 /** 怪物中心(canvas-confetti 的 origin 相对 #fx-canvas 即舞台,取 0-1) */
@@ -1687,6 +1822,8 @@ function updateBadges(st: State): void {
   }
   setBadge("#speed-btn", st.max_speed > st.speed);   // 更高档已解锁未启用
   setBadge("#gear-btn", cloudHintPending);           // 云档提醒待看
+  // 排行榜页:上轮世界BOSS有未领奖励(纯本地判定:last_round 停在上轮且参与过未领)
+  setBadge('.nav-item[data-tab="leaderboard"]', st.boss_pending !== null);
 }
 
 /** 卡墙教练卡(一次性):首次受阻,或"金币攒到 8 千+从未强化"的龟速爬行兜底
@@ -1907,9 +2044,30 @@ function renderBattle(st: State): void {
        : cd > 0 ? `<div class="cdfill" style="height:${cdPct}%"></div>` +
         `<div class="cdov">${Math.ceil(cd)}</div>` : "") + `</div>`;
   }
+  // 终局一击(手动大招):技能栏尾部的独立大招槽 —— Lv35 解锁才出现(此前不占位),
+  // 就绪态金边呼吸(复用 chPulse 关键帧),冷却时扇形遮罩(CD 环)+ 数字倒数;
+  // 点击走 data-cmd 全局委托,键盘 Q 同入口。紧凑一格,不遮挡战斗画面。
+  const u = st.ult;
+  let ultSlot = "";
+  if (u && u.unlocked) {
+    const cdPct = u.cd_total > 0 ? Math.min(100, u.cd_left / u.cd_total * 100) : 0;
+    ultSlot =
+      `<div class="skill${u.ready ? " ready" : ""}" data-cmd="ult"` +
+      ` style="cursor:pointer;${u.ready
+        ? "border-color:var(--gold);animation:chPulse 1.8s ease-in-out infinite"
+        : "border-color:#6a5a2a"}"` +
+      ` title="${esc(u.desc)}|终局一击 · 手动大招|冷却 ${u.cd_total}s|快捷键 Q(不自动施放、不吃离线)">` +
+      `<span class="ic">${u.icon}</span><span class="nm">${esc(u.name)}</span>` +
+      (u.ready
+        ? ``   // 就绪态只留金边呼吸,不再叠 Q 角标(手机无键盘,角标纯遮挡)
+        : `<div class="cdfill" style="height:${cdPct}%"></div>` +
+          `<div class="cdov" style="background:conic-gradient(rgba(5,5,10,.78) ${cdPct}%,rgba(5,5,10,.35) 0)">` +
+          `${Math.ceil(u.cd_left)}</div>`) +
+      `</div>`;
+  }
   $("skillbar-card").innerHTML =
     `<h3><span class="dot"></span>技能 · 自动施放中</h3>` +
-    (sk ? `<div id="skillbar">${sk}</div>`
+    ((sk || ultSlot) ? `<div id="skillbar">${sk}${ultSlot}</div>`
         : `<span style="color:var(--dim)">角色页·技能分栏装配主动技能</span>`);
 
   let q = "";
@@ -1938,8 +2096,9 @@ function renderHeroPage(st: State): void {
     frame += `<div class="gear-slot" data-gear="slot:${s}">` +
       `<div class="sl">${slotName(s)}</div>` +
       (it
-        ? `<div class="nm c-${it.rcolor}">${esc(it.name)}${it.plus ? ` <span style="color:#5adfff">+${it.plus}</span>` : ""}</div>` +
-          `<div class="sub">评分 ${fmt(it.score)} · 主属性${pctTxt(it.pb)}</div>`
+        ? `<div class="nm c-${it.rcolor}">${esc(it.name)}${it.plus ? ` <span style="color:#5adfff">+${it.plus}</span>` : ""}${it.locked ? " 🔒" : ""}</div>` +
+          `<div class="sub">评分 ${fmt(it.score)} · 主属性${pctTxt(it.pb)}` +
+          (it.suit ? ` · <span class="c-${it.suit.color}">${it.suit.icon}${esc(it.suit.name)} ${it.suit.n}/4</span>` : "") + `</div>`
         : `<div class="nm eq-empty">— 空 —</div><div class="sub">击败怪物获取</div>`) +
       `</div>`;
   }
@@ -1963,10 +2122,28 @@ function renderHeroPage(st: State): void {
     (pw ? `<div style="color:var(--dim);font-size:11.5px;margin:0 0 12px">` +
       `战力构成:输出 ${fmt(pw.offense)} · 生存 ${fmt(pw.defense)} · 功能 ${fmt(pw.utility)}` +
       `(按第 ${Math.max(1, st.stats.max_zone)} 区假人折算,含生效增益)</div>` : "") +
+    suitBlockHtml(st) +
     rebirthEntryHtml(st) +
     titleEntryHtml(st) +
     `<h3 style="margin-top:16px"><span class="dot"></span>装备框 · 点击槽位查看属性与操作</h3>` +
     `<div class="gear-frame">${frame}</div>`;
+}
+
+/** 深渊套装区块(角色页属性分栏底部):8 套主题特产的身穿件数与激活效果;
+ *  零件数的套暗显 —— 一眼可见「去哪个主题刷哪套」,不新开页不弹窗 */
+function suitBlockHtml(st: State): string {
+  const chips = st.suits.map(s =>
+    `<div style="padding:7px 9px;border:1px solid var(--line);border-radius:8px;` +
+      `opacity:${s.n > 0 ? 1 : 0.45};background:var(--panel,#161a24)">` +
+      `<div style="font-size:12.5px;font-weight:700" class="c-${s.color}">` +
+        `${s.icon} ${esc(s.name)} <span style="float:right" class="mono">${s.n}/4</span></div>` +
+      `<div style="font-size:11px;color:${s.n >= 2 ? "var(--gold)" : "var(--dim)"};margin-top:3px">✦2件 ${esc(s.b2)}</div>` +
+      `<div style="font-size:11px;color:${s.n >= 4 ? "var(--gold)" : "var(--dim)"}">✦4件 ${esc(s.b4)}</div>` +
+    `</div>`).join("");
+  return `<h3 style="margin-top:16px"><span class="dot"></span>深渊套装 · 主题特产</h3>` +
+    `<div style="color:var(--dim);font-size:11.5px;margin:-6px 0 8px">` +
+      `各区掉落该主题专属套装(锁定防折现),同套 2/4 件激活效果</div>` +
+    `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px">${chips}</div>`;
 }
 
 /** 称号与世系入口(功能按钮):角色页只留一行摘要,点开弹窗才是称号系统 */
@@ -2002,7 +2179,7 @@ function renderTitlesModal(st: State): void {
     `<span class="cl">${clsIcon[e.cls] ?? "?"} ${e.cls === "warrior" ? "战士" : e.cls === "mage" ? "法师" : e.cls === "ranger" ? "射手" : e.cls}</span>` +
     `<span class="dt">Lv.${e.level} · ${e.zone}区 · ${fmt(e.kills)}杀 · ${fmtTime(e.dur)}</span></div>`
   ).join("");
-  $("titles-body").innerHTML =
+  if (!modalPress) $("titles-body").innerHTML =
     `<div class="title-chips">${titleChips}</div>` +
     (rows
       ? `<h3 style="margin:14px 0 8px"><span class="dot"></span>📜 历代转生 · 最近 ${st.lineage.length} 世</h3>` +
@@ -2079,7 +2256,7 @@ function renderTalentModal(st: State): void {
   const sub = $("talent-sub");
   if (rebirthView === "rebirth") {
     sub.style.display = "none";
-    $("talent-body").innerHTML = rebirthBlockHtml(st);
+    if (!modalPress) $("talent-body").innerHTML = rebirthBlockHtml(st);
     return;
   }
   sub.style.display = "";
@@ -2110,7 +2287,7 @@ function renderTalentModal(st: State): void {
     return `<div class="tal-branch"><h4>${br.icon} ${br.name}` +
       `<span class="tal-blurb">${br.blurb}</span></h4>${nodes}</div>`;
   }).join("");
-  $("talent-body").innerHTML = `<div class="tal-branches">${branchHtml}</div>`;
+  if (!modalPress) $("talent-body").innerHTML = `<div class="tal-branches">${branchHtml}</div>`;
 }
 
 /** 一键出售的品质档(≤ 该档全卖);UI 会话级状态,默认精良(原「普通/精良」行为) */
@@ -2147,9 +2324,9 @@ function renderBag(st: State): void {
         ? `<button class="btn mini" data-cmd="bag_expand" title="金币扩容 +10 格">扩容 ◈${fmt(st.bag_expand_cost)}</button>`
         : `<span style="color:var(--dim);font-size:11px">背包已满级</span>`) +
       `<button class="btn" data-cmd="sell_junk">一键出售 ≤${D.RARITIES[junkSellMax].name}</button>` +
-      `<button class="btn" data-cmd="dismantle_junk" title="分解金币略高于出售价;史诗+附重铸石;锁定件跳过">分解 ≤${D.RARITIES[junkSellMax].name}✦</button></span></h3>` +
+      `<button class="btn" data-cmd="dismantle_junk" title="分解金币略高于出售价;史诗+附重铸石;锁定件与未凑齐套装件跳过">分解 ≤${D.RARITIES[junkSellMax].name}✦</button></span></h3>` +
     `<div class="sell-bar"><span class="lbl">品质档</span>${picks}` +
-      `<span class="hint">(出售/分解 ≤ 该品质;🔒 锁定件两侧都跳过)</span></div>` +
+      `<span class="hint">(出售/分解 ≤ 该品质;🔒 锁定件跳过;未凑齐的套装件保留)</span></div>` +
     (cards ? `<div class="bag-grid">${cards}</div>`
            : `<div style="color:var(--dim);padding:30px;text-align:center">背包空空如也</div>`);
 }
@@ -2178,7 +2355,7 @@ function renderForgeModal(st: State): void {
     ` title="${a.id === "skill_lv" ? "绑定当前职业一个随机技能" : ""}">` +
     `${esc(a.name)}${a.id === "skill_lv" ? "★" : ""}</button>`).join("");
   const ok = g.gold >= cost.gold && g.stones >= cost.stones;
-  $("forge-body").innerHTML =
+  if (!modalPress) $("forge-body").innerHTML =
     `<div class="forge-lbl">部位(必选其一)</div>` +
     `<div class="title-chips">${slotChips}</div>` +
     `<div class="forge-lbl">必带词缀(★=绑定随机技能)</div>` +
@@ -2297,6 +2474,16 @@ function achBadgeOn(st: State): boolean {
   return st.achievements.some(a => a.tiers > (seen[a.id] ?? 0));
 }
 
+/** 按住弹窗内任意元素期间冻结弹窗体重建:200ms 一拍的 innerHTML 重建会在
+ *  press→click 的间隙换掉按钮节点,click 落空 = "点了没反应"(兑换码/周宝箱/签到领取同族) */
+let modalPress = false;
+document.addEventListener("pointerdown", e => {
+  if ((e.target as HTMLElement).closest(".modal")) modalPress = true;
+});
+const modalPressEnd = () => { modalPress = false; };
+document.addEventListener("pointerup", modalPressEnd);
+document.addEventListener("pointercancel", modalPressEnd);
+
 /** 活动弹窗:五个功能共用一个壳,标题与内容随入口切换 */
 function renderQuestModal(st: State): void {
   const m = $("quest-modal");
@@ -2311,7 +2498,7 @@ function renderQuestModal(st: State): void {
     ach: "🏆 成就(永久加成)", codex: "👁 深渊图鉴",
   };
   $("quest-modal-title").textContent = titles[questModal];
-  $("quest-modal-body").innerHTML = questModalBody(st, questModal);
+  if (!modalPress) $("quest-modal-body").innerHTML = questModalBody(st, questModal);
 }
 
 function questModalBody(st: State, view: QuestModalView): string {
@@ -2345,8 +2532,10 @@ function questModalBody(st: State, view: QuestModalView): string {
       `<div class="wk-chests">` + wk.chests.map(c => {
         const claimed = wk.claimed.includes(c.id);
         const can = !claimed && wk.done >= c.need;
+        const reward = `✦${c.stones} 重铸石` +
+          (c.title ? ` + 称号「${D.TITLES.find(t => t.id === c.title)?.name ?? ""}」` : "");
         return `<button class="btn mini${can ? " sell-on" : ""}" data-cmd="weekly_chest" data-a="${c.id}"` +
-          ` ${can ? "" : "disabled"}>${claimed ? "✔" : "🎁"} ${esc(c.label)} ✦${c.stones}</button>`;
+          ` ${can ? "" : "disabled"} title="领取:${reward}">${claimed ? "✔ 已领" : "🎁"} ${esc(c.label)} → ${reward}</button>`;
       }).join("") + `</div></div>`;
   }
   // —— 悬赏任务(完成后自动刷新)——
@@ -2409,13 +2598,41 @@ function autoSellStateText(idx: number | null | undefined): string {
   const i = Number(idx ?? -1);
   return i < 0 ? "关(掉落保留)" : `开 · ${AUTO_SELL_NAMES[i + 1]}`;
 }
+/** 塔选层器会话状态(null=未选,默认 max_floor+1);参照 altarBatch/junkSellMax 先例,
+ *  不进快照 —— 刷新回默认层,避免存档里多一个 UI 字段 */
+let towerFloorPick: number | null = null;
+/** 塔页遗物背包展开态(会话级,默认收起):40~200 件全铺开页面过长,滚不到头也回不来 */
+let towerBagOpen = false;
+
+/** 遗物显示态签名:名字/系别/阶/色/全部效果值 —— 装备、卸下、分解、新掉落任一变化都会变 */
+function relicSig(r: { name: string; rname: string; tier: number; rcolor: string;
+                       effects: Array<{ name: string; val: number; unit: string }> } | null): string {
+  return r ? `${r.name}|${r.rname}|${r.tier}|${r.rcolor}|` +
+    r.effects.map(e => `${e.name}+${e.val}${e.unit}`).join(",") : "-";
+}
+
 function renderTower(st: State): void {
   const panel = $("tower-panel");
-  if (!st.class_id) { panel.innerHTML = ""; return; }
+  if (!st.class_id) { panel.innerHTML = ""; panel.dataset.sig = ""; return; }
   const tw = st.tower;
   const reach = tw.max_floor + 1;   // 下一层(爬塔起点)
-  const boss = reach % D.TOWER.boss_every === 0;
   const p = Math.min(100, tw.max_floor / reach * 100);
+  // 选层重打:会话级选择(null=未选,默认 max_floor+1),夹取 1..max_floor+1;不进快照
+  const pick = Math.min(Math.max(1, towerFloorPick ?? reach), reach);
+  const pickBoss = pick % D.TOWER.boss_every === 0;
+
+  // 显示态签名短路:renderNow 每 200ms 全量重建 innerHTML,会把背包内滚列表连元素一起
+  // 换掉 —— 触摸拖动/惯性滚动每 0.2s 被打断,表现为滑动卡顿。塔页可见字段拼成签名,
+  // 没变就不碰 DOM(滚动期间零重建)。金币只进"够不够"布尔,数值本身每秒都在涨不能进
+  const upCost0 = st.relic_bag_cost;
+  const sig = [st.class_id, tw.keys, tw.max_floor, st.in_tower ? 1 : 0,
+    st.in_tower ? st.tower_floor_sel : 0, pick, tw.keys < 1 ? 1 : 0,
+    st.tower_key_cost ?? "-", st.tower_keys_bought, towerBagOpen ? 1 : 0,
+    st.relic_bag.length, st.relic_bag_cap, upCost0 ?? "-",
+    upCost0 === null || st.gold >= upCost0 ? 1 : 0,
+    st.relics.map(relicSig).join(";"), st.relic_bag.map(relicSig).join(";")].join("#");
+  if (panel.dataset.sig === sig) return;
+  panel.dataset.sig = sig;
 
   // 遗物 4 槽:塔页更换,点击弹详情(与角色页装备框同款交互)
   let relicFrame = "";
@@ -2429,60 +2646,102 @@ function renderTower(st: State): void {
       `</div>`;
   });
 
+  // 2.4.3 手机端重排:状态一行 + 选层卡居中大按钮,说明性文字全部收进副行/摘要行,
+  // 不再用 stage-lbl inline 流式堆叠(390px 下换行 4~6 处、主按钮文字被折断)
+  const msNext = (Math.floor(tw.max_floor / D.TOWER.milestone_every) + 1) * D.TOWER.milestone_every;
   let html =
-    `<h3><span class="dot"></span>深渊塔 · 钥匙 ×${tw.keys}(每日 ${D.TOWER.keys_per_day} 把)` +
-      `<span class="rt">` +
+    `<h3><span class="dot"></span>深渊塔<span class="rt">` +
       (st.tower_key_cost !== null
-        ? `<button class="btn mini" data-cmd="tower_key" title="金币加购(今日 ${st.tower_keys_bought}/${D.BAL.tower_key_extra})">加购 ◈${fmt(st.tower_key_cost)}</button>`
+        ? `<button class="btn mini" data-cmd="tower_key" title="金币加购钥匙(今日 ${st.tower_keys_bought}/${D.BAL.tower_key_extra})">加购 ◈${fmt(st.tower_key_cost)}</button>`
         : `<span style="color:var(--dim);font-size:11px">今日加购已满</span>`) +
-      `<span style="color:var(--dim)">最高 第${tw.max_floor}层</span></span></h3>` +
-    `<div class="stage-lbl" style="margin:2px 0 8px;flex-wrap:wrap;gap:8px"><span>` +
-      `<span class="mono" style="font-size:16px;font-weight:800;margin:0 8px">下一层 第 ${reach} 层</span>` +
-      (boss ? `<span style="color:var(--gold);font-weight:700">头目!</span>` : "") +
-      `<span style="color:var(--dim);margin-left:10px">每${D.TOWER.boss_every}层头目(保底稀有)</span>` +
-    `</span><span class="act">` +
-      (st.in_tower
-        ? `<span style="color:#ff9c9c;font-weight:700">爬塔中 · 第${st.tower_floor_sel}层</span>` +
-          `<button class="btn warn" data-cmd="tower_exit">撤退(钥匙已消耗)</button>`
-        : `<button class="btn" data-cmd="tower_enter">⚔ 从第${reach}层开始爬(每层1钥匙,连胜连爬)</button>`) +
-    `</span></div>` +
-    `<div class="bar q lg"><div class="fill" style="width:${p}%"></div>` +
-      `<div class="num">第1层 → 第${tw.max_floor}层 · 下一层 第${reach}层</div></div>` +
+    `</span></h3>` +
+    `<div class="tw-top">` +
+      `<span class="tw-keys"${tw.keys < 1 ? ` style="color:#ff8a8a"` : ""}>🔑 ×${tw.keys}` +
+        `<small>每日${D.TOWER.keys_per_day}把 · 可囤${D.TOWER.keys_cap}</small></span>` +
+      `<span class="tw-best">最高 <b>第${tw.max_floor}层</b></span>` +
+    `</div>`;
+
+  if (st.in_tower) {
+    html += `<div class="tw-live">` +
+      `<span class="st">⚔ 爬塔中 · 第${st.tower_floor_sel}层</span>` +
+      `<span style="color:var(--dim);font-size:12px">胜利自动连爬下一层</span>` +
+      `<button class="btn warn" data-cmd="tower_exit">撤退(钥匙已消耗)</button></div>`;
+  } else {
+    html += `<div class="tw-pick">` +
+      `<div class="tw-floor-row">` +
+        `<button class="btn mini" data-cmd="tower_floor" data-a="-1" title="选上一层">◀</button>` +
+        `<div class="tw-floor mono">第${pick}层` +
+          (pickBoss ? `<span class="boss-tag">♛ 头目层 · 遗物保底稀有</span>` : ``) +
+        `</div>` +
+        `<button class="btn mini" data-cmd="tower_floor" data-a="1" title="选下一层">▶</button>` +
+      `</div>` +
+      `<div class="tw-sub">` +
+        (pick < reach
+          ? `重打已通层 · 通关不涨最高层,收益照旧(1~${tw.max_floor})`
+          : `新高度 · 胜利后自动连爬下一层`) +
+      `</div>` +
+      `<button class="btn big tw-go"${tw.keys < 1 ? ` style="opacity:.55"` : ""}` +
+        ` data-cmd="tower_enter"${pick !== reach ? ` data-a="${pick}"` : ""}` +
+        ` title="${pick !== reach ? `重打第${pick}层(通关不涨最高层)` : `从第${reach}层开始爬`}">` +
+        (pick < reach ? `⚔ 重打 · 第${pick}层` : `⚔ 开始爬塔 · 第${reach}层`) + `</button>` +
+      (tw.keys < 1
+        ? `<div class="tw-sub nokey">钥匙不足 · 明日 0 点刷新,或上方加购</div>`
+        : `<div class="tw-sub">每层消耗 1 把钥匙 · 连胜连爬</div>`) +
+    `</div>`;
+  }
+
+  html += `<div class="bar q lg" style="margin-top:10px"><div class="fill" style="width:${p}%"></div>` +
+      `<div class="num">${tw.max_floor > 0 ? `已爬到 第${tw.max_floor}层` : `尚未登塔 · 从第 1 层出发`}</div></div>` +
+    `<div class="tw-mile">🏆 里程碑 每${D.TOWER.milestone_every}层 +${D.TOWER.milestone_stones}✦(下一个 第${msNext}层)` +
+      ` · 每${D.TOWER.boss_every}层一头目(遗物保底稀有)</div>` +
     `<h3 style="margin-top:16px"><span class="dot"></span>遗物 · 4 槽(通关必得,空槽优先装满)` +
     `<span style="color:var(--dim);font-size:12px;font-weight:400;margin-left:8px">点击槽位查看详情</span></h3>` +
     `<div class="gear-frame">${relicFrame}</div>`;
 
-  // ---- 遗物背包(换装对比/分解/扩容;满槽装备=替换效果最少的一件) ----
+  // ---- 遗物背包(2.4.3 重构:默认折叠 + 展开限高内滚,200 件也不撑爆整页) ----
+  // 满槽装备=替换效果最少的一件;200ms 全量重建 innerHTML 会把内滚列表弹回顶部,
+  // 重建前记下 scrollTop 写回(参照 #log-body 贴底跟随要解决的同款问题,但日志是
+  // 增量追加,这里是全量重建,只能在 renderTower 内自保)
   const nBag = st.relic_bag.length;
-  const bagFull = nBag >= st.relic_bag_cap;
   const upCost = st.relic_bag_cost;
   const nextCap = Math.min(st.relic_bag_cap * 2, D.BAL.relic_bag_cap);
-  html += `<h3 style="margin-top:16px"><span class="dot"></span>遗物背包 · ${nBag}/${st.relic_bag_cap} 格` +
+  const oldList = panel.querySelector(".tw-bag-list") as HTMLElement | null;
+  const bagScroll = towerBagOpen ? (oldList?.scrollTop ?? 0) : 0;
+  html += `<h3 class="tw-bag-head${towerBagOpen ? " open" : ""}" data-cmd="tower_bag_toggle"` +
+    ` title="${towerBagOpen ? "收起" : "展开"}遗物背包">` +
+    `<span class="dot"></span>遗物背包 · ${nBag}/${st.relic_bag_cap} 格` +
+    `<span class="tw-bag-arrow">${towerBagOpen ? "▾" : "▸"}</span>` +
     `<span class="rt">${upCost !== null
       ? `<button class="btn mini" data-cmd="relic_bag_up" style="${st.gold < upCost ? "opacity:.55" : "border-color:#3a6a4a;color:#6bff8f"}">` +
-          `扩容 ${nextCap} 格 · ◈${fmt(upCost)}${st.gold < upCost ? "(金币不足)" : ""}</button>`
+          `扩容${nextCap} ◈${fmt(upCost)}${st.gold < upCost ? "(不足)" : ""}</button>`
       : `<span style="color:var(--dim)">已满级 ${st.relic_bag_cap} 格</span>`}</span></h3>`;
   if (!nBag) {
-    html += `<div class="slot-card"><div class="slot-m" style="color:var(--dim)">` +
-      (bagFull ? "背包已满:再掉落的遗物将自动替换装备中效果最少的一件"
-               : "遗物槽满时,新掉落的遗物会存入背包;卸下的遗物也保存在这里") +
-      `</div></div>`;
-  } else {
+    html += `<div class="tw-bag-empty">遗物槽满时新掉落存入这里;卸下的遗物也保存在这里` +
+      (nBag >= st.relic_bag_cap ? `。背包已满:再掉落将自动替换装备中效果最少的一件` : ``) + `</div>`;
+  } else if (towerBagOpen) {
+    html += `<div class="tw-bag-list">`;
     st.relic_bag.forEach((r, i) => {
       const effs = r.effects
         .map(e => `◈ ${e.name} +${e.unit === "级" ? Math.round(e.val) : pctTxt(e.val)}${e.unit}`)
         .join(" &nbsp; ");
-      html += `<div class="slot-card"><div class="slot-l"><div class="sl">背包${i + 1} · ${r.rname} T${r.tier}</div>` +
-        `<div class="nm c-${r.rcolor}">${esc(r.name)}</div></div>` +
-        `<div class="slot-m"><div class="af">${effs}</div></div>` +
-        `<div class="slot-r">` +
-        `<button class="btn mini" data-cmd="gear_cmp_relic" data-a="${i}"` +
-          ` title="对比目标槽后决定;4槽全满时替换效果最少的一件">装备▾</button>` +
-        `<button class="btn mini" data-cmd="relic_dismantle" data-a="${i}" title="分解得 1 颗重铸石(洗练用)">分解✦1</button>` +
+      html += `<div class="tw-bag-row">` +
+        `<div class="info"><div class="nm c-${r.rcolor}">${esc(r.name)}` +
+          `<span class="tier">${r.rname} T${r.tier}</span></div>` +
+          `<div class="af">${effs}</div></div>` +
+        `<div class="ops">` +
+          `<button class="btn mini" data-cmd="gear_cmp_relic" data-a="${i}"` +
+            ` title="对比目标槽后决定;4槽全满时替换效果最少的一件">装备</button>` +
+          `<button class="btn mini" data-cmd="relic_dismantle" data-a="${i}"` +
+            ` title="分解得 1 颗重铸石(洗练用)">分解</button>` +
         `</div></div>`;
     });
+    html += `</div>`;
+  } else {
+    html += `<div class="tw-bag-empty">点上方标题展开 ${nBag} 件(装备 / 分解)</div>`;
   }
   panel.innerHTML = html;
+  const newList = panel.querySelector(".tw-bag-list") as HTMLElement | null;
+  if (newList && bagScroll) newList.scrollTop = bagScroll;
 }
 
 // 掉落自动出售品质弹窗:点选档位即生效(替代旧的点击循环切换;J 键循环保留)
@@ -2508,11 +2767,15 @@ function renderAutoSellModal(st: State): void {
     const kept = names.slice(i + 1).join("/");
     rows += opt(i, `出售 ≤ ${qname(i)}`, `折现:${sold}` + (kept ? ` · 保留:${kept}` : ""));
   }
-  $("autosell-body").innerHTML = rows;
+  // 套装保护是档位之外的独立规则:不说清楚会被感知为"自动出售失效"(2.5 曾用掉落即锁,更困惑)
+  rows += `<div class="as-note">🛡 同套装不足 4 件时始终保留(不出售/不分解);凑齐 4 件后多出的件按档位正常清理</div>`;
+  if (!modalPress) $("autosell-body").innerHTML = rows;
 }
 
+let redeemEditing = false;   // 兑换码输入中:暂停设置页重建(200ms 重渲染会重建输入框导致失焦)
 function renderSettings(st: State): void {
   if (!st.class_id) { $("settings-panel").innerHTML = ""; return; }
+  if (redeemEditing) return;
   const autoSellIdx = Number(st.settings.auto_sell_idx ?? -1);
   const s = st.stats;
   // 自动化三开关:Lv 逐步解锁(放置承诺随进度兑现);未解锁显示门槛占位
@@ -2677,9 +2940,14 @@ function renderOverlays(st: State): void {
  *  并附「战力变化」——按实战折算(输出+生存+功能),比单件评分更能反映换装影响 */
 function renderSwapModal(p: NonNullable<State["pending_swap"]>): void {
   const isItem = p.kind === "item";
-  $("swap-title").textContent = isItem ? "⚔ 发现更强的装备" : "◆ 获得更强的遗物";
+  const suitDrop = isItem && p.new_item?.suit;
+  $("swap-title").textContent = isItem
+    ? (suitDrop ? "✦ 套装部件掉落" : "⚔ 发现更强的装备")
+    : "◆ 获得更强的遗物";
   $("swap-sub").textContent = isItem
-    ? `自动换装已关闭 — 「${p.slot_name}」的新掉落更强,用哪个?`
+    ? (suitDrop
+        ? `自动换装已关闭 — 「${p.slot_name}」掉落 ${suitDrop.name} 部件(不受评分门槛),换上凑 2/4 件激活?`
+        : `自动换装已关闭 — 「${p.slot_name}」的新掉落更强,用哪个?`)
     : `遗物槽已满 — 新遗物效果更多,要替换「${p.slot_name}」吗?`;
   const pd = p.power_delta;
   const powerLine = pd === null ? "" :
@@ -2692,6 +2960,15 @@ function renderSwapModal(p: NonNullable<State["pending_swap"]>): void {
   let cols: string;
   if (isItem) {
     const o = p.old_item, n = p.new_item;
+    // 套装行(两列各显示套装名/件数/激活效果;非套装件不显示)
+    const suitLine = (it: ItemUI | null): string => {
+      if (!it?.suit) return "";
+      const s = it.suit;
+      return `<div class="sw-line" style="margin:-2px 0 6px">` +
+        `<span class="c-${s.color}" style="font-weight:700">${s.icon} ${esc(s.name)} ${s.n}/4</span>` +
+        `<span style="${s.n >= 2 ? "color:var(--gold)" : ""}"> · 2件 ${esc(s.b2)}</span>` +
+        `<span style="${s.n >= 4 ? "color:var(--gold)" : ""}"> · 4件 ${esc(s.b4)}</span></div>`;
+    };
     const itemCol = (it: ItemUI | null, tag: string, isNew: boolean) => {
       if (!it) {
         return `<div class="swap-col"><div class="sw-tag">${tag}</div>` +
@@ -2704,8 +2981,9 @@ function renderSwapModal(p: NonNullable<State["pending_swap"]>): void {
       const innate = it.innate ? `<div>✦ ${it.innate.name} +${it.innate.val}</div>` : "";
       const delta = isNew && o ? Math.trunc(it.score - o.score) : 0;
       return `<div class="swap-col${isNew ? " new" : ""}"><div class="sw-tag">${tag}</div>` +
-        `<div class="nm c-${it.rcolor}">${esc(it.name)}${it.plus ? ` +${it.plus}` : ""}</div>` +
+        `<div class="nm c-${it.rcolor}">${esc(it.name)}${it.plus ? ` +${it.plus}` : ""}${it.locked ? " 🔒" : ""}</div>` +
         `<div class="sw-line">${it.slot_name} · ${it.rname} · Lv.${it.tier}</div>` +
+        suitLine(it) +
         `<div class="af"><div>主属性 ${it.main.name} +${it.main.val}${it.main.pct ? "%" : ""}</div>${innate}${affixes}</div>` +
         `<div class="sw-score">评分 ${fmt(it.score)}` +
         (isNew && o ? ` <span class="sw-up">(新 ${delta >= 0 ? "+" : ""}${fmt(delta)})</span>` : "") +
@@ -2752,15 +3030,22 @@ type GearView = {
 let gearView: GearView | null = null;
 let gearDeltaCache: { src: object; delta: number } | null = null;
 
-/** 装备详情单列(与换装对比同款卡片,含全部属性行) */
+/** 装备详情单列(与换装对比同款卡片,含全部属性行;套装件附套装名+件数行) */
 function gearItemCol(it: ItemUI, tag: string, extra = ""): string {
   const affixes = it.affixes.map(a =>
     `<div>◈ ${a.name} +${a.val}${a.pct ? "%" : ""}</div>`).join("");
   const innate = it.innate ? `<div>✦ ${it.innate.name} +${it.innate.val}%</div>` : "";
+  const suitLine = it.suit
+    ? `<div class="sw-line" style="margin:-2px 0 6px">` +
+      `<span class="c-${it.suit.color}" style="font-weight:700">${it.suit.icon} ${esc(it.suit.name)} ${it.suit.n}/4</span>` +
+      `<span style="${it.suit.n >= 2 ? "color:var(--gold)" : ""}"> · 2件 ${esc(it.suit.b2)}</span>` +
+      `<span style="${it.suit.n >= 4 ? "color:var(--gold)" : ""}"> · 4件 ${esc(it.suit.b4)}</span></div>`
+    : "";
   return `<div class="swap-col${extra ? " " + extra : ""}">` +
     `<div class="sw-tag">${tag}</div>` +
-    `<div class="nm c-${it.rcolor}">${esc(it.name)}${it.plus ? ` +${it.plus}` : ""}</div>` +
+    `<div class="nm c-${it.rcolor}">${esc(it.name)}${it.plus ? ` +${it.plus}` : ""}${it.locked ? " 🔒" : ""}</div>` +
     `<div class="sw-line">${it.slot_name} · ${it.rname} · Lv.${it.tier}</div>` +
+    suitLine +
     `<div class="af"><div>主属性 ${it.main.name} +${it.main.val}${it.main.pct ? "%" : ""}</div>${innate}${affixes}</div>` +
     `<div class="sw-score">评分 ${fmt(it.score)} · 主属性+${pctTxt(it.pb)}</div>` +
     (extra === "new" ? "" : "") + `</div>`;
@@ -2832,7 +3117,9 @@ function renderGearModal(st: State): void {
     const newItem = v.item!;
     const live = g.bag.includes(newItem) ? newItem : null;   // 背包已变动(分解/售出)则失效
     if (!live) { gearView = null; m.classList.remove("show"); return; }
-    const n = itemUI(live);
+    // 背包件对比:套装件数按「穿上后」口径(已穿 n + 1)
+    const n = itemUI(live, live.suitId
+      ? (st.suits.find(s => s.id === live.suitId)?.n ?? 0) + 1 : undefined);
     const cur = st.equip[live.slot] ?? null;
     title.textContent = `⚔ 换装对比 · ${n.slot_name}`;
     sub.textContent = cur ? "对比当前装备与背包中的新装备,选择要用的" : "该部位为空,直接穿上";
@@ -2994,6 +3281,24 @@ document.addEventListener("input", (e: Event) => {
   const el = (e.target as HTMLElement).closest<HTMLInputElement>("[data-vol]");
   if (el) setMasterVol(Number(el.value));
 });
+// 兑换码输入框聚焦/失焦:委托监听 + 冻结设置页重建,否则 200ms 一重建输入框就丢焦。
+// focusin 为主;pointerdown(点按先于聚焦)与 input(首键)兜底,防个别 webview 事件延迟
+document.addEventListener("focusin", (e: Event) => {
+  if ((e.target as HTMLElement).id === "redeem-input") redeemEditing = true;
+});
+document.addEventListener("pointerdown", (e: Event) => {
+  if ((e.target as HTMLElement).id === "redeem-input") redeemEditing = true;
+});
+document.addEventListener("input", (e: Event) => {
+  if ((e.target as HTMLElement).id === "redeem-input") redeemEditing = true;
+});
+document.addEventListener("focusout", (e: Event) => {
+  if ((e.target as HTMLElement).id === "redeem-input") {
+    // 延迟解冻:点「兑换」按钮本身会先让输入框失焦,若立即重建面板,按钮节点会在
+    // click 落地前被替换(touchend→click 存在间隔),click 落空 = 点了没反应
+    setTimeout(() => { redeemEditing = false; renderNow(); }, 350);
+  }
+});
 $("file-input").addEventListener("change", (e: Event) => {
   const input = e.target as HTMLInputElement;
   const f = input.files && input.files[0];
@@ -3012,6 +3317,11 @@ $("file-input").addEventListener("change", (e: Event) => {
 
 document.addEventListener("keydown", (e: KeyboardEvent) => {
   const t = e.target as HTMLElement;
+  // 兑换码输入框:回车直接兑换(其余按键不进全局快捷键)
+  if (t.id === "redeem-input") {
+    if (e.key === "Enter") doCmd("redeem");
+    return;
+  }
   if (t.tagName === "SELECT" || t.tagName === "INPUT") return;
   // ESC:关闭弹窗(换装对比/装备详情/转生确认与择业/新手引导)
   if (e.key === "Escape") {
@@ -3046,6 +3356,8 @@ document.addEventListener("keydown", (e: KeyboardEvent) => {
   else if (e.key === "b" || e.key === "B") { doCmd("speed"); renderNow(); }
   else if (e.key === "j" || e.key === "J") { doCmd("cycle_sell"); renderNow(); }
   else if (e.key === "m" || e.key === "M") { toggleSfx(); renderNow(); }
+  // Q:终局一击(手动大招)—— 快捷键链追加,不占 1-6 数字键(切页)
+  else if (e.key === "q" || e.key === "Q") { doCmd("ult"); renderNow(); }
 });
 
 // ---------------------------------------------------------------- 启动
@@ -3170,6 +3482,9 @@ interface LbData { board: string; period?: string; top: LbRow[]; you: { rank: nu
 let lbBoard: "zone" | "level" | "tower" | "power" = "zone";
 type LbPeriod = "all" | "week";
 let lbPeriod: LbPeriod = "all";
+/** 排行榜页顶部分段:board=四榜 / boss=世界BOSS / arena=异步切磋 */
+type LbSection = "board" | "boss" | "arena";
+let lbSection: LbSection = "board";
 /** 缓存按 (周期, 榜) 分键,切换即取,互不污染 */
 const lbData: Partial<Record<string, LbData>> = {};
 const lbErr: Partial<Record<string, string>> = {};
@@ -3177,6 +3492,29 @@ const lbKey = (b: string, p: LbPeriod): string => `${p}:${b}`;
 let lbSubmitErr: string | null = null;  // 最近一次提交错误:常驻显示,不靠一闪而过的 toast
 let lbBusy = false;
 let lbEditing = false;        // 昵称编辑中:暂停本页重建,避免输入被打断
+
+// —— 世界BOSS(周轮合力):GET /boss 单端点单缓存(轮次+总血池+贡献榜+上轮 prev) ——
+interface BossRow { name: string; dmg: number; is_me?: boolean }
+interface BossData {
+  round: string; total_hp: number; dealt: number; killed: boolean; my_dmg: number;
+  prev: { round: string; total_hp: number; my_dmg: number; killed: boolean } | null;
+  top: BossRow[];
+}
+let bossData: BossData | null = null;
+let bossErr: string | null = null;
+let bossBusy = false;         // 挑战上传中:防连点并发(次数纯本地记账,单飞即可)
+/** 轮号 '2026-W43' → 头目序号(BOSS 名『深渊巨兽·其之N』用周序号) */
+function bossRoundNo(round: string): string {
+  const m = /^(\d+)-W(\d+)$/.exec(round);
+  return m ? m[2] : round;
+}
+
+// —— 异步切磋(2.7):对手快照(GET /arena/opponents 战力邻域采样,无 uuid);
+//    战斗本地模拟(独立 RNG 零主线污染),结算 g.arenaResult(仅称号) ——
+interface ArenaOpp { name: string; power: number; squad: Record<string, unknown> }
+let arenaOpps: ArenaOpp[] | null = null;   // null=未拉取(空数组=拉过但无对手)
+let arenaErr: string | null = null;
+let arenaReport: string[] | null = null;   // 最近一次挑战播报(行内展示,不开弹窗)
 
 function lbUuid(): string {
   let u = localStorage.getItem("abyss_uuid") ?? "";
@@ -3322,6 +3660,147 @@ async function lbSubmit(): Promise<string | null> {
   finally { lbBusy = false; }
 }
 
+// ================================================================ 世界BOSS(周轮合力,2.6)
+/** 拉取世界BOSS 轮次状态(进入排行榜页/分段时);成功即做轮次同步 ——
+ *  服务端 round ≠ g.boss.last_round 时清零 attempts/my_best(claimed 保留)。 */
+async function bossFetch(): Promise<string | null> {
+  if (!LEADERBOARD_API) return "未配置";
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 8000);
+    const r = await fetch(
+      `${LEADERBOARD_API}/boss?uuid=${encodeURIComponent(lbUuid())}`, { signal: ctl.signal });
+    clearTimeout(t);
+    if (!r.ok) { bossErr = `HTTP ${r.status}`; return bossErr; }
+    const d = await r.json() as BossData & { error?: string };
+    if (d.error) { bossErr = d.error; return d.error; }
+    bossData = d;
+    bossErr = null;
+    if (d.round) g.getBossSync(d.round);   // 跨轮:本轮计数清零(领取记录保留)
+    return null;
+  } catch { bossErr = "网络错误"; return bossErr; }
+}
+
+/** 世界BOSS挑战:核心折算(吃一次 RNG)→ POST /boss/hit;仅 200 才记次数与最好成绩。
+ *  失败 toast『上传失败,次数未消耗』—— 次数纯本地记账,不因网络问题被烧掉。 */
+async function bossChallengePost(): Promise<void> {
+  if (bossBusy || !LEADERBOARD_API) return;
+  const dmg = g.bossChallenge();
+  if (dmg === null) { renderNow(); return; }   // 核心已 toast 拒绝原因(次数用完/未开局)
+  bossBusy = true;
+  renderNow();
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 8000);
+    const r = await fetch(`${LEADERBOARD_API}/boss/hit`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ uuid: lbUuid(), name: lbMyName(), dmg,
+        kills: g.stats.kills, playtime: Math.trunc(g.playtime), level: g.level }),
+      signal: ctl.signal });
+    clearTimeout(t);
+    const d = await r.json() as { ok?: boolean; error?: string };
+    if (r.ok && !d.error) {
+      g.bossHitAccept(dmg);
+      toast(`⚔ 世界BOSS 受到 ${fmt(dmg)} 点伤害!`);
+      await bossFetch();
+    } else {
+      toast("上传失败,次数未消耗");
+    }
+  } catch { toast("上传失败,次数未消耗"); }
+  bossBusy = false;
+  renderNow();
+}
+
+// ================================================================ 异步切磋(2.7)
+/** 拉取战力邻域对手快照(服务端脱 uuid,最多 3 名);零网络/冷启动时切磋页
+ *  仍有『镜像自我』兜底 —— 首项恒在本地构造,功能完整可玩。 */
+async function arenaFetch(): Promise<string | null> {
+  if (!LEADERBOARD_API) return "未配置";
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 8000);
+    const r = await fetch(
+      `${LEADERBOARD_API}/arena/opponents?uuid=${encodeURIComponent(lbUuid())}` +
+      `&power=${heroPower(g, false).total}`, { signal: ctl.signal });
+    clearTimeout(t);
+    if (!r.ok) { arenaErr = `HTTP ${r.status}`; return arenaErr; }
+    const d = await r.json() as { opponents?: ArenaOpp[]; error?: string };
+    if (d.error) { arenaErr = d.error; return d.error; }
+    arenaOpps = (Array.isArray(d.opponents) ? d.opponents : []).slice(0, 3);
+    arenaErr = null;
+    return null;
+  } catch { arenaErr = "网络错误"; return arenaErr; }
+}
+
+/** 挑战:idx=0 镜像自我(本地构造,零网络);idx≥1 网络对手快照(防御式 parse)。
+ *  本地模拟 → g.arenaResult 计战绩/发称号 → toast + 行内播报(不开弹窗)。 */
+function arenaChallenge(idx: number): void {
+  if (g.classId === null) { toast("先选择职业"); return; }
+  const mine = makeSquad(g);
+  let foe: ArenaSquad, name: string;
+  if (idx <= 0) {
+    foe = mine; name = "镜像自我";
+  } else {
+    const opp = arenaOpps?.[idx - 1];
+    if (!opp) return;
+    foe = parseSquad(opp.squad);
+    name = opp.name;
+  }
+  const res = arenaSimulate(mine, foe, arenaSeed(name));
+  g.arenaResult(res.win);
+  arenaReport = res.report;
+  toast(res.win ? `⚔ 切磋胜 ${name}!` : `💀 切磋负于 ${name}`);
+  renderNow();
+}
+
+/** 排行榜页顶部分段条:排行(四榜)| 世界BOSS | 切磋 */
+function sectionSegs(): string {
+  return `<button class="btn mini ${lbSection === "board" ? "on" : ""}" data-lb="section" data-a="board">排行</button>` +
+    `<button class="btn mini ${lbSection === "boss" ? "on" : ""}" data-lb="section" data-a="boss">世界BOSS</button>` +
+    `<button class="btn mini ${lbSection === "arena" ? "on" : ""}" data-lb="section" data-a="arena">切磋</button>`;
+}
+
+/** 切磋分段渲染:上卡 = 战绩;下卡 = 镜像自我(恒在)+ 最多 3 名邻域对手 +
+ *  挑战按钮 → 行内播报。紧凑列表,不开弹窗、不遮挡战斗画面。 */
+function renderArena(st: State, mine: HTMLElement, list: HTMLElement): void {
+  mine.innerHTML =
+    `<h3><span class="dot"></span>⚔ 异步切磋 · 打别人的 build</h3>
+     <div class="lb-me-row">
+       <div><span class="k">战绩</span><b>${st.arena.wins} 胜 ${st.arena.losses} 负</b></div>
+       <span class="lb-rank-badge off">奖励仅称号(10 胜「切磋者」/ 50 胜「角斗士」)</span>
+     </div>`;
+  const clsName = (c: unknown): string => D.CLASSES[String(c ?? "")]?.name ?? "未知";
+  const rows =
+    `<div class="lb-row me">
+       <span class="lb-no">👤</span>
+       <span class="lb-name">镜像自我</span>
+       <span class="lb-sub">校验自己的 build · 零网络</span>
+       <button class="btn mini" data-lb="arena_challenge" data-a="0">⚔ 挑战</button>
+     </div>` +
+    (arenaOpps ?? []).map((o, i) =>
+      `<div class="lb-row">
+        <span class="lb-no">${i + 1}</span>
+        <span class="lb-name">${esc(o.name)}</span>
+        <span class="lb-sub">${clsName(o.squad?.cls)} · Lv.${Math.trunc(Number(o.squad?.level) || 1)} · 战力 ${fmt(o.power)}</span>
+        <button class="btn mini" data-lb="arena_challenge" data-a="${i + 1}">⚔ 挑战</button>
+      </div>`).join("");
+  const report = arenaReport
+    ? `<h3 style="margin-top:14px"><span class="dot"></span>最近战报</h3>` +
+      arenaReport.map(l => `<div class="boss-tier"><span class="lbl">${esc(l)}</span></div>`).join("")
+    : "";
+  list.innerHTML =
+    `<h3><span class="dot"></span>对手 · 战力邻域采样</h3>
+     <div class="lb-segbar">${sectionSegs()}</div>` +
+    (arenaErr
+      ? `<div class="lb-err">⚠ 对手拉取失败:${esc(arenaErr)}(镜像自我不受影响)</div>`
+      : "") + rows +
+    ((arenaOpps ?? []).length === 0 && !arenaErr
+      ? `<div style="color:var(--dim);padding:14px;text-align:center">暂无其他玩家快照 —— 先与镜像自我过招</div>`
+      : "") + report +
+    `<p style="color:var(--dim);font-size:11.5px;margin-top:10px">
+     对手快照来自其他玩家周期上传的裁剪阵容,挑战全程在本地模拟;胜负只计战绩与称号,不影响任何资源。</p>`;
+}
+
 // ================================================================ 存档周期上云(匿名 save-sync)
 // 每 10 分钟随自动存档节流上传整份存档 + 关页 sendBeacon 兜底;仅生产构建(线上/
 // TapTap)——dev 会话不上传,避免污染远端数据。监控型上行:失败静默,不影响游戏。
@@ -3341,6 +3820,88 @@ function saveSyncPush(beacon = false): void {
   void fetch(`${LEADERBOARD_API}/save-sync`, {
     method: "POST", headers: { "Content-Type": "application/json" }, body: payload,
   }).catch(() => { /* 监控型上行:失败不打扰玩家 */ });
+  // 切磋快照顺带上行(同一 10 分钟节流;裁剪阵容 ≤4KB,失败静默 —— 镜像自我零网络兜底)
+  void fetch(`${LEADERBOARD_API}/arena/snapshot`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ uuid: lbUuid(), name: lbMyName(),
+      power: heroPower(g, false).total, kills: g.stats.kills,
+      playtime: Math.trunc(g.playtime), level: g.level, squad: makeSquad(g) }),
+  }).catch(() => { /* 监控型上行:失败不打扰玩家 */ });
+}
+
+/** 世界BOSS 分段渲染:上卡 = BOSS 名+总血条+我的伤害/挑战按钮;下卡 = 分段条 +
+ *  贡献榜 Top10(他人无 uuid,服务端已脱敏)+ 上轮奖励领取 + 档位表。 */
+function renderBoss(st: State, mine: HTMLElement, list: HTMLElement): void {
+  const d = bossData;
+  const myBest = Math.max(st.boss.my_best, d?.my_dmg ?? 0);
+  if (!d) {
+    mine.innerHTML = `<h3><span class="dot"></span>🌍 世界BOSS · 周轮合力</h3>`;
+    list.innerHTML = `<h3><span class="dot"></span>世界BOSS</h3>
+      <div class="lb-segbar">${sectionSegs()}</div>` +
+      (bossErr
+        ? `<div class="lb-fail">⚠ 世界BOSS加载失败:${esc(bossErr)}<br>
+           <button class="btn mini" data-lb="retry">重试</button></div>`
+        : `<div style="color:var(--dim);padding:26px;text-align:center">加载中…</div>`);
+    return;
+  }
+  const pct = d.total_hp > 0 ? Math.min(100, d.dealt / d.total_hp * 100) : 0;
+  const attempts = st.boss.attempts;
+  mine.innerHTML =
+    `<h3><span class="dot"></span>🌍 深渊巨兽·其之${esc(bossRoundNo(d.round))}
+      ${d.killed ? `<span class="lb-rank-badge in">已击杀!</span>` : ""}</h3>
+    <div class="boss-hpbar">
+      <div class="boss-hpfill${d.killed ? " dead" : ""}" style="width:${pct.toFixed(1)}%"></div>
+      <span class="boss-hptext">全服合力 ${fmt(d.dealt)} / ${fmt(d.total_hp)}(${pct.toFixed(1)}%)</span>
+    </div>
+    <div class="lb-me-row">
+      <div><span class="k">我的最高伤害</span><b>${fmt(myBest)}</b>
+        <span class="k" style="margin-left:12px">挑战</span>
+        <b>${attempts}/${D.BAL.world_boss_attempts}</b></div>
+      <button class="btn mini" data-lb="boss_challenge">
+        ${bossBusy ? "挑战中…" : attempts >= D.BAL.world_boss_attempts
+          ? "次数已用完" : `⚔ 挑战(${D.BAL.world_boss_cast_sec}s 折算)`}</button>
+    </div>` +
+    (bossErr ? `<div class="lb-err">⚠ 上次拉取失败:${esc(bossErr)}</div>` : "");
+
+  let rows = d.top.map((r, i) => {
+    const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}`;
+    return `<div class="lb-row${r.is_me ? " me" : ""}">
+      <span class="lb-no">${medal}</span>
+      <span class="lb-name">${esc(r.name)}</span>
+      <span class="lb-sub">${r.is_me ? "我" : ""}</span>
+      <b class="lb-score">${fmt(r.dmg)}</b></div>`;
+  }).join("");
+  if (!rows) rows = `<div style="color:var(--dim);padding:26px;text-align:center">虚位以待——成为第一个挑战者</div>`;
+
+  // 上轮奖励领取入口:仅在「上轮参与过且未领取」时出现 —— 领取一次后消失
+  // (claimed 含该轮/未参与都不渲染,红点与入口同口径)
+  const prev = d.prev;
+  const claimRow = prev && prev.my_dmg > 0 && !st.boss.claimed.includes(prev.round)
+    ? `<div class="boss-claim">
+        <span>🎁 上轮 ${esc(prev.round)}${prev.killed ? "(全服击杀!)" : ""}:我的贡献 ${fmt(prev.my_dmg)}
+          (${prev.total_hp > 0 ? (prev.my_dmg / prev.total_hp * 100).toFixed(2) : "0"}%)</span>
+        <button class="btn mini" data-lb="boss_claim">领取奖励</button>
+      </div>`
+    : "";
+
+  // 奖励档位表(数值经 bossClaimTiers 现算,与 bossClaim 发奖同口径;总血取 1000 便于看百分比)
+  const tierRow = (label: string, t: { gold: number; stones: number; keys: number }): string => {
+    const parts = [t.gold ? `◈${fmt(t.gold)}` : "", t.stones ? `✦${t.stones}` : "", t.keys ? `🔑${t.keys}` : ""]
+      .filter(Boolean).join(" + ");
+    return `<div class="boss-tier"><span class="lbl">${label}</span><b class="lb-score">${parts || "—"}</b></div>`;
+  };
+  list.innerHTML =
+    `<h3><span class="dot"></span>贡献榜 · 本轮(伤害只升不降)</h3>
+    <div class="lb-segbar">${sectionSegs()}</div>${rows}
+    ${claimRow}
+    <h3 style="margin-top:14px"><span class="dot"></span>上轮奖励档位</h3>
+    ${tierRow("参与(伤害 > 0)", g.bossClaimTiers({ total_hp: 1000, my_dmg: 5, killed: false }))}
+    ${tierRow("贡献 ≥ 1%", g.bossClaimTiers({ total_hp: 1000, my_dmg: 10, killed: false }))}
+    ${tierRow("贡献 ≥ 5%", g.bossClaimTiers({ total_hp: 1000, my_dmg: 50, killed: false }))}
+    ${tierRow("上轮全服击杀(与左侧叠加)", g.bossClaimTiers({ total_hp: 1000, my_dmg: 50, killed: true }))}
+    <p style="color:var(--dim);font-size:11.5px;margin-top:10px">
+      每轮 ${D.BAL.world_boss_attempts} 次挑战,伤害按 ${D.BAL.world_boss_cast_sec} 秒输出折算;
+      全服打穿总血池 → 下周头目更强(×1.6),未打穿 → 稍弱(×0.8);周一 0 点轮换(与周榜同口径)。</p>`;
 }
 
 function renderLeaderboard(st: State): void {
@@ -3365,6 +3926,8 @@ function renderLeaderboard(st: State): void {
       main.ts 的 LEADERBOARD_API 即可启用(匿名上榜,无需登录)</span></div>`;
     return;
   }
+  if (lbSection === "boss") { renderBoss(st, mine, list); return; }
+  if (lbSection === "arena") { renderArena(st, mine, list); return; }
 
   const lastSub = Number(localStorage.getItem("abyss_lblast") ?? 0);
   const cooldown = Math.max(0, 10 * 60_000 - (Date.now() - lastSub));
@@ -3439,15 +4002,17 @@ function renderLeaderboard(st: State): void {
   }
   list.innerHTML =
     `<h3><span class="dot"></span>${LB_BOARD_NAMES[lbBoard]}${lbPeriod === "week" ? "(本周)" : ""}</h3>
+    <div class="lb-segbar">${sectionSegs()}</div>
     <div class="lb-segbar">${segs}<span class="lb-seg-split"></span>${periodSegs}</div>${rows}
     <p style="color:var(--dim);font-size:11.5px;margin-top:10px">
       匿名提交(设备标识,无需登录);仅保留每榜前 50 名,落榜数据不保留;周榜每周一 0 点重置。</p>`;
 }
 
-/** 进入排行榜页时自动拉取/按需提交(10 分钟节流) */
+/** 进入排行榜页时自动拉取/按需提交(10 分钟节流);世界BOSS 与切磋对手一并拉取
+ *  (跨轮同步与红点判定都靠它,与当前所在分段无关) */
 async function lbEnter(): Promise<void> {
   if (!LEADERBOARD_API) return;
-  await lbFetch(lbBoard);
+  await Promise.all([lbFetch(lbBoard), bossFetch(), arenaFetch()]);
   const lastSub = Number(localStorage.getItem("abyss_lblast") ?? 0);
   if (Date.now() - lastSub > 10 * 60_000) {
     const err = await lbSubmit();
@@ -3462,7 +4027,23 @@ document.addEventListener("click", (e: MouseEvent) => {
   const el = (e.target as HTMLElement).closest<HTMLElement>("[data-lb]");
   if (!el) return;
   const act = el.dataset.lb;
-  if (act === "board") {
+  if (act === "section") {
+    // 排行榜页顶部分段:排行(四榜)/ 世界BOSS / 异步切磋
+    lbSection = el.dataset.a === "boss" ? "boss" : el.dataset.a === "arena" ? "arena" : "board";
+    if (lbSection === "boss") void bossFetch().then(() => renderNow());
+    else if (lbSection === "arena") void arenaFetch().then(() => renderNow());
+    else void lbFetch(lbBoard).then(() => renderNow());
+    renderNow();
+  } else if (act === "boss_challenge") {
+    void bossChallengePost();
+  } else if (act === "arena_challenge") {
+    arenaChallenge(Number(el.dataset.a ?? "0") || 0);
+  } else if (act === "boss_claim") {
+    if (bossData?.prev) {
+      g.bossClaim(bossData.prev);   // 幂等:同轮重复领取核心层拒绝
+      renderNow();
+    }
+  } else if (act === "board") {
     lbBoard = (el.dataset.a === "level" ? "level" : el.dataset.a === "tower" ? "tower"
       : el.dataset.a === "power" ? "power" : "zone");
     void lbFetch(lbBoard).then(() => renderNow());
@@ -3472,7 +4053,9 @@ document.addEventListener("click", (e: MouseEvent) => {
     void lbFetch(lbBoard).then(() => renderNow());
     renderNow();
   } else if (act === "retry") {
-    void lbFetch(lbBoard).then(() => renderNow());
+    // 重试按所在分段分流:世界BOSS 段重拉 /boss,切磋段重拉 /arena/opponents,四榜段重拉 /board
+    void (lbSection === "boss" ? bossFetch()
+      : lbSection === "arena" ? arenaFetch() : lbFetch(lbBoard)).then(() => renderNow());
     renderNow();
   } else if (act === "submit") {
     void lbSubmit().then(err => {

@@ -125,6 +125,7 @@ const FIELD_LABELS: Record<string, string> = {
   ta0: "塔攻击基数", tak: "塔攻击系数", tap: "塔攻击指数",
   td0: "塔防御基数", tdk: "塔防御系数", tdp: "塔防御指数",
   boss_every: "头目层间隔", drop_gold_mult: "塔金币倍率", new_height_stones: "新高重铸石",
+  milestone_every: "里程碑层间隔", milestone_stones: "里程碑重铸石",
   unit: "单位", growth: "成长系数", goldK: "金币系数", stones: "重铸石奖励",
   pct: "百分比口径", buff: "buff 键", metric: "计量键", thresholds: "门槛",
   per_lv: "每级", base_n: "基数",

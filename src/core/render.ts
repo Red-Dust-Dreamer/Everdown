@@ -631,16 +631,20 @@ function tabTower(g: Game): string[] {
     + c(" │ ", "bright_black")
     + c(`最高第${g.tower.max_floor}层`, "bright_cyan", "", true)
     + c(" │ ", "bright_black")
-    + c("Enter 爬塔(连胜连爬)", "bright_black")
+    + c("Enter 进所选层 · ←→ 选层", "bright_black")
     + (g.inTower ? c(` │ 爬塔中·第${g.towerFloorSel}层`, "bright_magenta", "", true) : ""));
   rows.push(" " + c("─".repeat(64), "bright_black"));
   rows.push("");
 
-  const boss = reach % TOWER.boss_every === 0;
-  rows.push(" " + c("[下一层] ", "bright_black")
-    + c(`第 ${reach} 层`, "bright_white", "", true)
-    + (boss ? c(" 头目!", "bright_yellow", "", true) : "")
-    + c(` (每${TOWER.boss_every}层一个头目)`, "bright_black"));
+  // 选层重打:会话级选择(ui.tower_floor_pick,不进存档),默认 max_floor+1,夹取范围内
+  const pick = Math.min(Math.max(1, ui.tower_floor_pick ?? reach), reach);
+  const pickBoss = pick % TOWER.boss_every === 0;
+  rows.push(" " + c("[所选层] ", "bright_black")
+    + c(`第 ${pick} 层`, "bright_white", "", true)
+    + (pickBoss ? c(" 头目!", "bright_yellow", "", true) : "")
+    + (pick <= g.tower.max_floor ? c(" 重打", "bright_cyan", "", true) : "")
+    + c(` (←→ 选层${g.tower.max_floor >= 1 ? `,可重打已通层 1~${g.tower.max_floor}` : ""})`,
+      "bright_black"));
   rows.push(" " + c("第1层 ", "bright_black")
     + bar(g.tower.max_floor, Math.max(reach, 1), 44, "cyan")
     + c(` 第${reach}层`, "bright_black")
@@ -688,9 +692,14 @@ function tabTower(g: Game): string[] {
   rows.push(" " + c("▌规则", "bright_white", "", true));
   rows.push("  " + c(`· 每日 0 点刷新钥匙(每天 ${TOWER.keys_per_day} 把,可囤积,上限 ${TOWER.keys_cap})`,
     "bright_black"));
-  rows.push("  " + c("· Enter 从最高层+1 开始爬,连胜连爬,每层消耗 1 把钥匙", "bright_black"));
+  rows.push("  " + c("· Enter 从所选层开始爬,连胜连爬,每层消耗 1 把钥匙", "bright_black"));
+  rows.push("  " + c("· ←→ 可选层重打已通层:通关不涨最高层、不发新高石,其余收益照旧",
+    "bright_black"));
   rows.push("  " + c("· 通关必得遗物与金币,战败仅耗钥匙;分解背包遗物 +1 重铸石", "bright_black"));
   rows.push("  " + c(`· 首次到达新高度 +${TOWER.new_height_stones} 重铸石;头目层遗物保底稀有`,
+    "bright_black"));
+  const nextMs = (Math.floor(g.tower.max_floor / TOWER.milestone_every) + 1) * TOWER.milestone_every;
+  rows.push("  " + c(`· 下一里程碑 第${nextMs}层:首达 +${TOWER.milestone_stones}✦(每${TOWER.milestone_every}层整数位)`,
     "bright_black"));
   while (rows.length < BODY_ROWS) rows.push(" ".repeat(W));
   return padRows(rows);

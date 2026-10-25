@@ -1,5 +1,6 @@
 /** 外围系统:悬赏 / 成就 / resolve 懒结算(与 abyss/systems.py 一致) */
 import { BAL, QUEST_TYPES, RARITY_IDX, ACHIEVEMENTS, ACTIVE_DEF, ALTAR_LINES, TALENTS } from "./data.ts";
+import type { QuestTypeDef } from "./data.ts";
 import { pyRound, rollItem } from "./items.ts";
 import { mobGold, mobXp, spawnMonster, tierOf } from "./combat.ts";
 import type { Game } from "./game.ts";
@@ -9,12 +10,15 @@ import type { StatMod } from "./skills.ts";
 // ---------------------------------------------------------------- 悬赏
 export interface Quest { type: string; target: number; progress: number; gold: number; stones: number }
 
+/** 悬赏目标:指数在 30 区封顶(深区保持可完成;旧档钳制与新生成共用此口径) */
+export function questTarget(qt: QuestTypeDef, zone: number): number {
+  return Math.max(1, pyRound(qt.base *
+    Math.pow(qt.growth, Math.min(30, Math.max(0, zone - 1)))));
+}
+
 export function rollQuest(zone: number, rng: PyRandom): Quest {
   const qt = rng.choice(QUEST_TYPES);
-  // 目标指数在 30 区封顶:深区(150+ 区原公式目标会到 10 位以上)悬赏必须保持可完成,
-  // 否则整条悬赏收入线在深层断裂;奖励侧仍是次线性缓涨,无需封顶
-  const target = Math.max(1, pyRound(qt.base *
-    Math.pow(qt.growth, Math.min(30, Math.max(0, zone - 1)))));
+  const target = questTarget(qt, zone);
   const t = (zone - 1) * 10;
   const goldBase = BAL.gold0 + BAL.gold_k * Math.pow(t, BAL.gold_p);
   const gold = Math.trunc(goldBase * qt.goldK * (1 + rng.uniform(0, 0.3)));
@@ -80,6 +84,9 @@ export function achievementTiers(aid: string, val: number): [number, number] {
 export function autoEquipCheck(g: Game, item: any): boolean {
   if (!g.settings.auto_equip) return false;
   const cur = g.equip[item.slot];
+  // 已穿套装件不被自动换装顶掉:套装件评分天然偏低,静默顶换会在挂机中拆散 2/4 件套
+  // ——与掉落侧「套装件不走评分自动穿」对称;要换下套装件走手动换装(有对比弹窗)
+  if (cur?.suitId) return false;
   if (!cur || item.score() > cur.score() * 1.05) {
     g.equipItem(item, true);
     return true;
@@ -189,6 +196,14 @@ export function resolve(g: Game, elapsed: number): ResolveReport {
   };
   // 未选职业不结算(与 tick 冻结同口径):别让"幽灵战士"离线打工
   if (g.classId === null) return rep;
+  // 塔内离线不结算:补算模型按主线推 zone/stage/击杀/掉落,会碾过塔内会话
+  // (载入续战重开的是 towerFloorSel 层塔怪,不是主线怪)。只累计时长;
+  // kills/deaths/gold 全 0 → resolveOffline 自然返回 null,不弹离线报告
+  if (g.inTower) {
+    g.time += elapsed;
+    g.playtime += elapsed;
+    return rep;
+  }
   const lv0 = g.level, zone0 = g.zone;
   const gold0 = g.gold;
   let xpTotal = 0;
@@ -271,7 +286,7 @@ export function resolve(g: Game, elapsed: number): ResolveReport {
     if (mon.boss) chance = BAL.boss_drop;
     if (g.rng.random() < chance) {
       const item = rollItem(mon.tier, g.rng, g.hero.luck ?? 0,
-        mon.boss ? 2 : 0, mon.boss ? 0.6 : mon.elite ? 0.25 : 0, g.classId);
+        mon.boss ? 2 : 0, mon.boss ? 0.6 : mon.elite ? 0.25 : 0, g.classId, g.zone);
       if (rep.items.length < BAL.offline_item_cap) rep.items.push(item);
       g.addItem(item);
       if (RARITY_IDX[item.rarity] >= 2) g.questProgress("loot", 1);

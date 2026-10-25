@@ -25,3 +25,26 @@ scarab    <- undead/death_scarab.png        <- animals/emperor_scorpion.png
 drake     <- dragons/rime_drake.png         <- dragons/ice_dragon.png
 eye       <- eyes/shining_eye.png           <- eyes/great_orb_of_eyes.png
 (以上 8 怪取自 crawl/crawl 仓库 rltiles,同属 DCSS CC0 素材集;路径为 rltiles/mon/ 下)
+
+2026-10-25 扩展怪 20 种(同源 DCSS CC0;原路径前缀 crawl-ref/source/rltiles/mon/)
+游戏id        普通变体                            头目变体
+treant    <- fungi_plants/treant.png         <- fungi_plants/alderking0.png
+boar      <- animals/hog.png                 <- animals/hell_hog.png
+rat       <- animals/rat.png                 <- animals/orange_rat.png
+kobold    <- humanoids/kobold.png            <- humanoids/kobold_blastminer.png
+crystal   <- nonliving/jade_crystal_earth.png <- nonliving/crystal_guardian.png
+maggot    <- aquatic/lava_snake.png          <- nonliving/creeping_inferno1.png
+salamander<- demihumanoids/salamander.png    <- demihumanoids/salamander_tyrant.png
+obsidian  <- nonliving/gargoyle.png          <- nonliving/war_gargoyle.png
+yeti      <- animals/polar_bear.png          <- animals/ice_beast.png
+wisp      <- nonliving/will_o_the_wisp.png   <- nonliving/marshlight.png
+leech     <- animals/tyrant_leech.png        <- aquatic/swamp_worm.png
+toad      <- animals/cane_toad.png           <- animals/goliath_frog.png
+mirecrab  <- animals/ghost_crab.png          <- animals/fire_crab.png
+ghoul     <- undead/ghoul.png                <- undead/cognitogaunt.png
+banshee   <- undead/drowned_soul.png         <- undead/flayed_ghost.png
+bonehawk  <- animals/raven.png               <- animals/skyshark.png
+ghast     <- undead/glowmurk_ghast.png       <- undead/shadowghast.png
+crawler   <- animals/assassin_centipede.png   <- animals/broodmother.png
+voidling  <- amorphous/void_ooze.png         <- amorphous/star_jelly0.png
+shard     <- nonliving/shadow_prism1.png     <- nonliving/spatial_vortex1.png

@@ -12,6 +12,10 @@ export interface TowerState {
   max_floor: number;
   /** ISO 日期串 YYYY-MM-DD(本地时区) */
   last_refresh: string | null;
+  /** 会话在塔中(2.4.3:刷新/关页续战,已扣钥匙的那层不再作废;旧档缺省视为塔外) */
+  in_tower: boolean;
+  /** 在塔中正在挑战的层(1 起;不在塔时无意义,兜底 max_floor+1) */
+  floor_sel: number;
 }
 
 /** 塔系怪物:独立曲线,每 boss_every 层一个头目 */
@@ -79,8 +83,11 @@ export function refreshKeys(towerState: TowerState, nowTs: number): number {
   const last = towerState.last_refresh;
   if (last === null) {
     towerState.last_refresh = today;
-    towerState.keys = TOWER.keys_per_day;
-    return TOWER.keys_per_day;
+    // 补足而非绝对赋值:last_refresh 为空只说明"今天还没刷过",不代表钥匙是 0 ——
+    // 管理面板清空刷新日期写回的档,不能把囤积钥匙砸回 keys_per_day
+    const gained = Math.max(0, TOWER.keys_per_day - towerState.keys);
+    towerState.keys += gained;
+    return gained;
   }
   const days = isoDays(today, last);
   if (days <= 0) return 0;

@@ -4,9 +4,9 @@ import type { PyRandom } from "./rng.ts";
 import {
   ACTIVE_DEF, ACTIVE_SKILLS, AFFIX_DEF, AFFIX_SUFFIX, AFFIXES, BAL, CAPS,
   PASSIVE_DEF, PASSIVE_SKILLS, RARITIES, RARITY_IDX, RARITY_PREFIX, SLOTS,
-  SLOT_INNATE, MAIN_ROLLS, STAT_NAMES,
+  SLOT_INNATE, MAIN_ROLLS, STAT_NAMES, SUITS, SUIT_DEF, THEMES,
 } from "./data.ts";
-import type { StatKey } from "./data.ts";
+import type { StatKey, SuitDef } from "./data.ts";
 
 export const PCT_MAINS = ["haste", "crit", "crit_dmg", "goldfind", "lifesteal"];
 
@@ -40,13 +40,16 @@ export class Item {
   mainId: StatKey | null;
   /** skill_lv 词缀绑定的技能 id(roll 时随机,主动/被动);null=旧档未绑定,保持全技能聚合 */
   skillSid: string | null = null;
-  /** 玩家锁定:免于一键出售/批量分解(不掉落时产生,只由玩家手动上锁) */
+  /** 深渊套装(2.5):主题特产标记(roll 时按区主题命中);null=普通装备/旧存档 */
+  suitId: string | null = null;
+  /** 玩家锁定:免于一键出售/批量分解(只由玩家手动上锁,见 game.ts toggleLock;
+   *  套装件保护不再复用此标记 —— 改由 protectedSuit 按"未凑齐 4 件"独立判定) */
   locked = false;
 
   constructor(slot: string, rarity: string, tier: number, mainVal: number,
               affixes: AffixRoll[], plus = 0, name: string | null = null,
               rng?: PyRandom, mainId: StatKey | null = null,
-              skillSid: string | null = null) {
+              skillSid: string | null = null, suitId: string | null = null) {
     this.slot = slot;
     this.rarity = rarity;
     this.tier = tier;
@@ -56,6 +59,12 @@ export class Item {
     this.name = name ?? this.genName(rng);
     this.mainId = mainId;
     this.skillSid = skillSid;
+    this.suitId = suitId;
+  }
+
+  /** 所属套装定义(未知 id 返回 null,防御手改存档) */
+  suitDef(): SuitDef | null {
+    return this.suitId ? (SUIT_DEF[this.suitId] ?? null) : null;
   }
 
   /** 绑定技能名(skill_lv 词缀显示用);未绑定返回 null */
@@ -171,6 +180,7 @@ export class Item {
       name: this.name,
       ...(this.mainId ? { main_id: this.mainId } : {}),
       ...(this.skillSid ? { skill_sid: this.skillSid } : {}),
+      ...(this.suitId ? { suit_id: this.suitId } : {}),
       ...(this.locked ? { locked: true } : {}),
     };
   }
@@ -178,7 +188,8 @@ export class Item {
   static fromDict(d: any): Item {
     const it = new Item(d.slot, d.rarity, d.tier, d.main_val,
       d.affixes.map((a: any) => ({ id: a[0] as StatKey, val: a[1] })),
-      d.plus ?? 0, d.name, undefined, d.main_id ?? null, d.skill_sid ?? null);
+      d.plus ?? 0, d.name, undefined, d.main_id ?? null, d.skill_sid ?? null,
+      d.suit_id ?? null);
     it.locked = d.locked ?? false;
     return it;
   }
@@ -257,7 +268,7 @@ export function rollRarity(rng: PyRandom, luck = 0, minIdx = 0, boost = 0): numb
 }
 
 export function rollItem(tier: number, rng: PyRandom, luck = 0, minIdx = 0, boost = 0,
-                         cls: string | null = null): Item {
+                         cls: string | null = null, zone?: number): Item {
   const slotDef = SLOTS[rng.randrange(SLOTS.length)];
   const rid = rollRarity(rng, luck, minIdx, boost);
   const rar = RARITIES[rid];
@@ -288,7 +299,21 @@ export function rollItem(tier: number, rng: PyRandom, luck = 0, minIdx = 0, boos
       .filter(s => s.cls === cls).map(s => s.id);
     skillSid = sidPool.length ? rng.choice(sidPool) : null;
   }
-  return new Item(slotDef.id, rar.key, tier, mainVal, affixes, 0, null, rng, pick.stat, skillSid);
+  // 深渊套装(2.5):主题特产 —— 判定消耗一次 rng.random();命中即按区主题标记套装 id。
+  // 不再"掉落即锁":套装保护由 game.ts protectedSuit 按"未凑齐 4 件"独立判定,
+  // 🔒 只留给玩家手动上锁(否则到手即锁无法解释,自动出售跳过也被感知为失效)。
+  // zone 缺省(定向锻造/admin 造件等)不判不出套装;
+  // 主题按 (zone-1)%THEMES 轮换,与 combat.zoneTheme 同口径,套装永不过时。
+  // 塔中击杀同样走这里:套装主题按进塔前 g.zone、tier 按塔层(预期行为非 bug)。
+  let suitId: string | null = null;
+  if (zone !== undefined && Number.isFinite(zone)
+      && SUITS.length === THEMES.length
+      && rng.random() < BAL.suit_drop_chance) {
+    const zi = ((Math.trunc(zone) - 1) % THEMES.length + THEMES.length) % THEMES.length;
+    suitId = SUITS[zi]?.id ?? null;
+  }
+  return new Item(slotDef.id, rar.key, tier, mainVal, affixes, 0, null, rng,
+    pick.stat, skillSid, suitId);
 }
 
 /** 定向锻造(2.4):指定部位 + 一条必带词缀,稀有度保底稀有+;其余词缀与主属性

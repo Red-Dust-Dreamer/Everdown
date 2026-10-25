@@ -8,7 +8,7 @@ import { SAVE_VERSION } from "./game.ts";
 import {
   ACTIVE_DEF, AFFIX_DEF, ALTAR_LINES, BAL, CLASSES, MAIN_ROLLS, MONSTERS,
   PASSIVE_DEF, QUEST_TYPES, RARITY_IDX, REDEEM_CODES, RELIC_EFF_DEF,
-  SIGNIN_REWARDS, SLOTS, TITLES, WEEKLY_CHEST, WEEKLY_GOALS,
+  SIGNIN_REWARDS, SLOTS, SUIT_DEF, TITLES, WEEKLY_CHEST, WEEKLY_GOALS,
 } from "./data.ts";
 
 export interface SaveIssue { field: string; level: "error" | "warn"; message: string }
@@ -98,6 +98,13 @@ export function validateItemDict(item: any, where: string): SaveIssue[] {
           || (!Object.hasOwn(ACTIVE_DEF, item.skill_sid) && !Object.hasOwn(PASSIVE_DEF, item.skill_sid)))) {
     out.push(issue(`${where}.skill_sid`, "warn",
       `skill_sid 不在技能池(当前 ${fmtVal(item.skill_sid)}),技能折算/显示忽略`));
+  }
+  // 2.5:深渊套装标记 —— 非 null 必须在 SUIT_DEF 键集内(枚举现读 data.ts 表),
+  // 违规即 error:suitMods/suitDef 对未知 id 只能静默跳过 = 套装加成静默丢失
+  if (item.suit_id !== undefined && item.suit_id !== null
+      && (typeof item.suit_id !== "string" || !Object.hasOwn(SUIT_DEF, item.suit_id))) {
+    out.push(issue(`${where}.suit_id`, "error",
+      `suit_id 必须是 SUITS 中的套装 id(当前 ${fmtVal(item.suit_id)}),否则套装加成静默丢失`));
   }
   if (item.locked !== undefined && typeof item.locked !== "boolean") {
     out.push(issue(`${where}.locked`, "warn",
@@ -479,7 +486,65 @@ export function validateSaveDict(d: Record<string, any>): SaveIssue[] {
     out.push(issue("death_tier", "warn", `death_tier 应为数字(-1=无;当前 ${fmtVal(d.death_tier)})`));
   }
   if (d.auto_farm !== undefined && typeof d.auto_farm !== "boolean") {
-    out.push(issue("auto_farm", "warn", `auto_farm 应为布尔(当前 ${fmtVal(d.auto_farm)})`));
+    out.push(issue("auto_farm", "warn", `auto_farm 应为布尔(当前 ${fmtVal(d.auto_farm)}),异常回落 false`));
+  }
+
+  // ---- warn:世界BOSS·周轮合力(2.6)本地轮次状态(fromDict 全防御,坏值回落默认) ----
+  if (d.boss !== undefined) {
+    if (!isObj(d.boss)) {
+      out.push(issue("boss", "warn",
+        `boss 应为普通对象(当前 ${fmtVal(d.boss)}),非对象回落默认 = 丢 claimed 领取记录`));
+    } else {
+      if (d.boss.last_round !== undefined && d.boss.last_round !== null
+          && typeof d.boss.last_round !== "string") {
+        out.push(issue("boss.last_round", "warn",
+          `last_round 应为字符串轮号(当前 ${fmtVal(d.boss.last_round)}),非法值回 ""`));
+      }
+      if (d.boss.attempts !== undefined
+          && !(isInt(d.boss.attempts) && d.boss.attempts >= 0
+               && d.boss.attempts <= BAL.world_boss_attempts)) {
+        out.push(issue("boss.attempts", "warn",
+          `attempts 应 ∈ 0..${BAL.world_boss_attempts}(当前 ${fmtVal(d.boss.attempts)}),载入时钳制`));
+      }
+      if (d.boss.my_best !== undefined && !(isFiniteNum(d.boss.my_best) && d.boss.my_best >= 0)) {
+        out.push(issue("boss.my_best", "warn",
+          `my_best 应为 ≥0 数字(当前 ${fmtVal(d.boss.my_best)}),非法值回 0`));
+      }
+      if (d.boss.claimed !== undefined) {
+        if (!Array.isArray(d.boss.claimed)) {
+          out.push(issue("boss.claimed", "warn",
+            `claimed 应为字符串数组(当前 ${fmtVal(d.boss.claimed)}),非数组回空`));
+        } else {
+          d.boss.claimed.forEach((r: any, i: number) => {
+            if (typeof r !== "string") {
+              out.push(issue(`boss.claimed.${i}`, "warn",
+                `轮号应为字符串(当前 ${fmtVal(r)}),载入时过滤`));
+            }
+          });
+          if (d.boss.claimed.length > BAL.world_boss_claim_keep) {
+            out.push(issue("boss.claimed", "warn",
+              `已领 ${d.boss.claimed.length} 轮超保留上限 ${BAL.world_boss_claim_keep},下次同步裁剪`));
+          }
+        }
+      }
+    }
+  }
+
+  // ---- warn:异步切磋(2.7)本地战绩(fromDict 全防御,负数/非整数钳 0) ----
+  if (d.arena !== undefined) {
+    if (!isObj(d.arena)) {
+      out.push(issue("arena", "warn",
+        `arena 应为普通对象(当前 ${fmtVal(d.arena)}),非对象回落默认 = 丢战绩计数`));
+    } else {
+      if (d.arena.wins !== undefined && !(isInt(d.arena.wins) && d.arena.wins >= 0)) {
+        out.push(issue("arena.wins", "warn",
+          `wins 应为 ≥0 整数(当前 ${fmtVal(d.arena.wins)}),载入时钳 0`));
+      }
+      if (d.arena.losses !== undefined && !(isInt(d.arena.losses) && d.arena.losses >= 0)) {
+        out.push(issue("arena.losses", "warn",
+          `losses 应为 ≥0 整数(当前 ${fmtVal(d.arena.losses)}),载入时钳 0`));
+      }
+    }
   }
   return out;
 }

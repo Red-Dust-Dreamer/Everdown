@@ -29,6 +29,9 @@ export const STAT_NAMES: Record<string, string> = {
   skill_lv: "全技能等级", skill_dmg: "技能伤害", cd_reduce: "冷却缩减",
   dodge: "闪避", armor_pierce: "无视防御", xp_pct: "经验加成", luck: "幸运",
   boss_dmg_r: "猎首", kill_heal: "击杀回血", deathward: "不死",
+  // VIRTUAL_STATS 补全:套装效果文案(suitEffText)直查本表,缺键=裸键名漏给玩家;
+  // 命名与 RELIC_EFFECTS 同键条目一致(暴击追击/杀意)
+  crit_extra: "暴击追击", kill_haste: "杀意",
   // buff 键补充(buff 条/药剂显示用)
   gold: "金币", xp: "经验", all: "全属性",
 };
@@ -177,6 +180,33 @@ export const ACTIVE_SKILLS: ActiveSkill[] = [
 export const ACTIVE_DEF: Record<string, ActiveSkill> =
   Object.fromEntries(ACTIVE_SKILLS.map(s => [s.id, s]));
 
+// ---------------------------------------------------------------- 终局一击(职业手动大招)
+// 每职业 1 个手动终极技:长 CD 高倍率,由玩家在关键时刻点按(战斗页大招槽 / 键盘 Q)
+// —— 推层卡头目斩杀线、挂机暴毙边缘翻盘。
+// 刻意不进 ACTIVE_SKILLS / loadout:不进自动轮放队列(castSkills 只扫 loadout.active)、
+// 不可装配/升级(skillUp 只认 ACTIVE_DEF+PASSIVE_DEF)、不吃离线折算(离线走普攻口径
+// heroDps)—— 手动是它唯一的资格。
+// 结算零新代码:形状即 ActiveSkill,castActive/skillHit 对 damage/hits/must_crit/
+// freeze/def_down 全支持;倍率不吃等级成长(per 恒 0,成长由面板 atk 承担),
+// 吃 skill_dmg / crit 全乘区与 effLv 的全技能词缀聚合(skillVal 对 per=0 恒为 base)。
+// 收益标定 ≈0.15×atk/s(90s 一轮)≈ 手动党总输出 +10-15%。
+// CD 90s 走不入档的 g.skillCd(与全部技能同口径,重载清零;门槛用 ?? 0 兜底,
+// 详见 game.ts castUlt 与 combat.ts battleTick 的递减处)。
+export const ULTS: ActiveSkill[] = [
+  { id: "ult_w_judg", cls: "warrior", name: "深渊断罪", icon: "⚡", unlock: 35, cd: 90,
+    color: "bright_magenta", kind: "damage", base: 1200, per: 0, must_crit: true,
+    desc: "凝聚深渊之力斩下 {v}% 攻击力伤害,必定暴击" },
+  { id: "ult_m_stars", cls: "mage", name: "湮灭星陨", icon: "☄", unlock: 35, cd: 90,
+    color: "bright_red", kind: "damage", base: 300, per: 0, hits: 5, freeze: 2,
+    desc: "召唤 5 枚湮灭星辰坠落,每枚 {v}% 攻击力伤害并冻结敌人 2 秒" },
+  { id: "ult_r_rain", cls: "ranger", name: "万箭归宗", icon: "☔", unlock: 35, cd: 90,
+    color: "bright_green", kind: "damage", base: 160, per: 0, hits: 8,
+    def_down: 30, def_down_dur: 5,
+    desc: "八箭齐发贯穿一切,每箭 {v}% 攻击力伤害并降低敌人防御 30%,持续5秒" },
+];
+export const ULT_DEF: Record<string, ActiveSkill> =
+  Object.fromEntries(ULTS.map(s => [s.id, s]));
+
 // ---------------------------------------------------------------- 被动技能池
 export type HookName = "on_kill_buff" | "low_hp_dmg" | "undying" | "on_crit_haste"
   | "on_crit_dmg_next" | "on_hurt_dmg" | "boss_dmg" | "low_target_dmg";
@@ -227,15 +257,54 @@ export const PASSIVE_DEF: Record<string, PassiveSkill> =
 // ---------------------------------------------------------------- 地图主题
 export interface ThemeDef { name: string; mobs: string[]; boss: string; color: Color }
 export const THEMES: ThemeDef[] = [
-  { name: "幽暗森林", mobs: ["slime", "wolf", "goblin"], boss: "巨型史莱姆王", color: "green" },
-  { name: "废弃矿坑", mobs: ["bat", "skeleton", "golem"], boss: "骷髅领主", color: "bright_black" },
-  { name: "熔岩地狱", mobs: ["imp", "hound", "elemental"], boss: "炎魔男爵", color: "bright_red" },
-  { name: "寒冰冻土", mobs: ["wolf", "golem", "elemental", "drake"], boss: "霜暴巨兽", color: "bright_cyan" },
-  { name: "毒雾沼泽", mobs: ["mushroom", "spider", "snake"], boss: "沼泽蛛后", color: "green" },
-  { name: "白骨王座", mobs: ["husk", "wight", "scarab"], boss: "白骨君王", color: "white" },
-  { name: "腐沼墓地", mobs: ["slime", "skeleton", "bat"], boss: "亡灵大祭司", color: "magenta" },
-  { name: "虚空裂隙", mobs: ["imp", "goblin", "hound", "eye"], boss: "虚空吞噬者", color: "bright_magenta" },
+  { name: "幽暗森林", mobs: ["slime", "wolf", "goblin", "treant", "boar"], boss: "巨型史莱姆王", color: "green" },
+  { name: "废弃矿坑", mobs: ["bat", "skeleton", "golem", "rat", "kobold", "crystal"], boss: "骷髅领主", color: "bright_black" },
+  { name: "熔岩地狱", mobs: ["imp", "hound", "elemental", "maggot", "salamander", "obsidian"], boss: "炎魔男爵", color: "bright_red" },
+  { name: "寒冰冻土", mobs: ["wolf", "golem", "elemental", "drake", "yeti", "wisp"], boss: "霜暴巨兽", color: "bright_cyan" },
+  { name: "毒雾沼泽", mobs: ["mushroom", "spider", "snake", "leech", "toad", "mirecrab"], boss: "沼泽蛛后", color: "green" },
+  { name: "白骨王座", mobs: ["husk", "wight", "scarab", "ghoul", "banshee", "bonehawk"], boss: "白骨君王", color: "white" },
+  { name: "腐沼墓地", mobs: ["slime", "skeleton", "bat", "ghast", "crawler"], boss: "亡灵大祭司", color: "magenta" },
+  { name: "虚空裂隙", mobs: ["imp", "goblin", "hound", "eye", "voidling", "shard"], boss: "虚空吞噬者", color: "bright_magenta" },
 ];
+
+// ---------------------------------------------------------------- 深渊套装(2.5):主题特产装备
+// 每张主题地图出产专属套装(rollItem 按 zone 主题标记 suitId,掉率 BAL.suit_drop_chance),
+// 集齐 2/4 件激活主题风味效果 —— 挂机选址第一次有了真实决策(「去 33 区刷寒冰套」)。
+// SUITS 与 THEMES 逐索引对齐(themeIdx = 表下标),套装永不过时(主题按 (zone-1)%8 轮换)。
+// 效果键走 recalcHero 统一修饰管道(stat 为 string,agg 已预置 0):crit_extra/kill_haste 等
+// 是 VIRTUAL_STATS 键、不在 StatKey 联合内 —— 不为此扩 StatKey/CAPS。
+// 4 件效果值对照系(锚定实现时的数值依据):
+//   kill_heal 3=遗物同键 2-6 下限 / crit_extra 10=遗物 5-15 中位 / skill_dmg 15=遗物上限 5-15 /
+//   deathward 8=遗物 5-15 中档 / kill_haste 10=遗物 5-15 中位 / dodge 5=t_dodge 满级 5 点不超 /
+//   luck 6=词缀蓝档下限(rid=2,step=3 → 2×3+u(0,3)=6-9)/ armor_pierce 10=破甲被动 1 级整
+//   (pw_break base:10;CAPS 50,占 20%)/ crit_dmg 15=词缀绿档 10-20 中位。
+// 2 件对照:hp/def 8%≈t_hp/t_def 每 3%×2.7 级 / atk 6%≈t_atk 2.4 级 / goldfind 8=绿档 5-12
+//   中位 / lifesteal 4=词缀一条 roll / crit_dmg 15=绿档中位。
+export interface SuitBonus { stat: string; op: "add" | "pct"; v: number }
+export interface SuitDef {
+  id: string; name: string; icon: string; themeIdx: number;
+  bonus2: SuitBonus; bonus4: SuitBonus;
+}
+export const SUITS: SuitDef[] = [
+  { id: "s0", name: "荆棘之誓", icon: "🌿", themeIdx: 0,
+    bonus2: { stat: "hp", op: "pct", v: 8 }, bonus4: { stat: "kill_heal", op: "add", v: 3 } },
+  { id: "s1", name: "掘金者", icon: "⛏", themeIdx: 1,
+    bonus2: { stat: "goldfind", op: "add", v: 8 }, bonus4: { stat: "luck", op: "add", v: 6 } },
+  { id: "s2", name: "焚天", icon: "🔥", themeIdx: 2,
+    bonus2: { stat: "atk", op: "pct", v: 6 }, bonus4: { stat: "crit_extra", op: "add", v: 10 } },
+  { id: "s3", name: "霜寒", icon: "❄", themeIdx: 3,
+    bonus2: { stat: "def", op: "pct", v: 8 }, bonus4: { stat: "dodge", op: "add", v: 5 } },
+  { id: "s4", name: "淬毒", icon: "☣", themeIdx: 4,
+    bonus2: { stat: "lifesteal", op: "add", v: 4 }, bonus4: { stat: "skill_dmg", op: "add", v: 15 } },
+  { id: "s5", name: "白骨军团", icon: "🦴", themeIdx: 5,
+    bonus2: { stat: "hp", op: "pct", v: 8 }, bonus4: { stat: "deathward", op: "add", v: 8 } },
+  { id: "s6", name: "食腐", icon: "🧟", themeIdx: 6,
+    bonus2: { stat: "atk", op: "pct", v: 6 }, bonus4: { stat: "kill_haste", op: "add", v: 10 } },
+  { id: "s7", name: "虚空漫步", icon: "🌌", themeIdx: 7,
+    bonus2: { stat: "crit_dmg", op: "add", v: 15 }, bonus4: { stat: "armor_pierce", op: "add", v: 10 } },
+];
+export const SUIT_DEF: Record<string, SuitDef> =
+  Object.fromEntries(SUITS.map(s => [s.id, s]));
 
 export interface MobSkill {
   name: string; icon: string; cd: number; mult: number; hits: number;
@@ -280,6 +349,55 @@ export const MONSTERS: Record<string, MobDef> = {
     skill: { name: "寒霜吐息", icon: "❄", cd: 13, mult: 2.4, hits: 1, slow: [0.3, 5] } },
   eye: { name: "辉光邪眼", color: "bright_magenta", power: 1.1,
     skill: { name: "疯狂凝视", icon: "👁", cd: 12, mult: 1.9, hits: 1, stun: 1.0 } },
+  // ---- 扩展怪物 20 种(各区池补强;立绘为程序合成,见 scripts/make_mon_art.py) ----
+  // 幽暗森林
+  treant: { name: "枯树人", color: "green", power: 1.0,
+    skill: { name: "根须缠绕", icon: "🌿", cd: 12, mult: 1.0, hits: 1, stun: 0.8 } },
+  boar: { name: "獠牙野猪", color: "yellow", power: 1.05,
+    skill: { name: "蛮力冲撞", icon: "🪓", cd: 11, mult: 1.9, hits: 1 } },
+  // 废弃矿坑
+  rat: { name: "噬金鼠", color: "bright_black", power: 0.9,
+    skill: { name: "疫病啃咬", icon: "🦠", cd: 9, mult: 0.6, hits: 2, atkdown: [0.2, 4] } },
+  kobold: { name: "矿工狗头人", color: "bright_red", power: 1.0,
+    skill: { name: "炸药桶", icon: "💣", cd: 12, mult: 2.2, hits: 1 } },
+  crystal: { name: "活体晶簇", color: "bright_cyan", power: 1.05,
+    skill: { name: "晶刺迸射", icon: "💠", cd: 10, mult: 0.6, hits: 3, defdown: [0.25, 4] } },
+  // 熔岩地狱
+  maggot: { name: "熔浆幼虫", color: "red", power: 0.95,
+    skill: { name: "熔壳蜕吸", icon: "🕯", cd: 10, mult: 1.3, hits: 1, lifesteal: true } },
+  salamander: { name: "火蜥蜴", color: "bright_red", power: 1.05,
+    skill: { name: "灼热尾击", icon: "🦎", cd: 10, mult: 1.9, hits: 1, atkdown: [0.25, 4] } },
+  obsidian: { name: "黑曜石魔", color: "bright_black", power: 1.15,
+    skill: { name: "碎晶爆裂", icon: "🪨", cd: 13, mult: 2.5, hits: 1 } },
+  // 寒冰冻土
+  yeti: { name: "雪原巨怪", color: "white", power: 1.15,
+    skill: { name: "冰魄重锤", icon: "🔨", cd: 12, mult: 1.6, hits: 1, slow: [0.3, 4] } },
+  wisp: { name: "寒冰魂火", color: "bright_cyan", power: 0.9,
+    skill: { name: "魂火侵体", icon: "🔥", cd: 9, mult: 1.0, hits: 1, slow: [0.35, 5] } },
+  // 毒雾沼泽
+  leech: { name: "巨蛭", color: "magenta", power: 1.0,
+    skill: { name: "嗜血抽吸", icon: "💉", cd: 10, mult: 1.4, hits: 1, lifesteal: true } },
+  toad: { name: "沼泽蟾蜍", color: "green", power: 0.95,
+    skill: { name: "毒涎喷吐", icon: "💦", cd: 10, mult: 1.1, hits: 1, slow: [0.3, 4] } },
+  mirecrab: { name: "泥沼蟹", color: "yellow", power: 1.1,
+    skill: { name: "断钳夹击", icon: "🦀", cd: 11, mult: 0.9, hits: 2, defdown: [0.25, 4] } },
+  // 白骨王座
+  ghoul: { name: "食尸鬼", color: "bright_green", power: 1.0,
+    skill: { name: "腐爪撕扯", icon: "🧟", cd: 10, mult: 0.55, hits: 3, lifesteal: true } },
+  banshee: { name: "报丧女妖", color: "bright_magenta", power: 1.05,
+    skill: { name: "恸哭", icon: "📢", cd: 12, mult: 1.2, hits: 1, stun: 1.0 } },
+  bonehawk: { name: "骨翼鹰", color: "white", power: 0.95,
+    skill: { name: "俯冲撕裂", icon: "🪶", cd: 9, mult: 0.75, hits: 2 } },
+  // 腐沼墓地
+  ghast: { name: "腐臭浮灵", color: "magenta", power: 1.0,
+    skill: { name: "瘴气弥漫", icon: "☁", cd: 11, mult: 1.1, hits: 1, atkdown: [0.25, 5] } },
+  crawler: { name: "六肢行者", color: "bright_black", power: 1.05,
+    skill: { name: "麻痹之触", icon: "✋", cd: 10, mult: 1.3, hits: 1, slow: [0.35, 4] } },
+  // 虚空裂隙
+  voidling: { name: "虚空幼体", color: "bright_magenta", power: 1.0,
+    skill: { name: "相位撕咬", icon: "🌀", cd: 9, mult: 0.6, hits: 3 } },
+  shard: { name: "裂隙棱晶", color: "bright_cyan", power: 1.15,
+    skill: { name: "空间撕裂", icon: "🔮", cd: 13, mult: 2.2, hits: 1, defdown: [0.3, 4] } },
 };
 
 export const ART: Record<string, string[]> = {
@@ -300,6 +418,27 @@ export const ART: Record<string, string[]> = {
   scarab: ["    ____     ", "   /o^^o\\    ", "  |@ @@ @|   ", "   \\====/    ", "  _/    \\_   "],
   drake: ["  \\  /\\  /   ", "   ( oo )    ", "  --/  \\--   ", "  /|    |\\   ", "   |____|    "],
   eye: ["   .----.    ", "  / ---- \\   ", " |  (OO)  |  ", "  \\ ---- /   ", "   \\____/    "],
+  // ---- 扩展怪物 20 种 ----
+  treant: ["  \\ ,,, /    ", "   (o o)     ", "   |###|     ", "  /|   |\\    ", " _/ |___| \\_ "],
+  boar: ["   ____      ", "  (o __)     ", "   \\/|#|     ", "    ||       ", "   _/\\_      "],
+  rat: ["  ~  ~~      ", "  (o o)>     ", "   \\ - /     ", "   /   \\     ", "  _/   \\_    "],
+  kobold: ["   ,,,,      ", "  (^ ^)      ", "  <#  #>     ", "   |  |      ", "  _/  \\_     "],
+  crystal: ["     /\\      ", "    /oo\\     ", "    \\  /     ", "   /|##|\\    ", "  /_|__|_\\   "],
+  maggot: ["   ____      ", "  (o  o)     ", "  ( ~~~ )    ", "   \\____/    ", "    _/\\_     "],
+  salamander: ["  /\\  /      ", " (o )(       ", "  \\/#\\      ", "    ||       ", "   _/\\_      "],
+  obsidian: ["    /^^\\     ", "   |o  o|    ", "   | /`\\|    ", "   |    |    ", "  _/____\\_   "],
+  yeti: ["   /^^^^\\    ", "  ( o  o )   ", "  ( \\__/ )   ", "   |    |    ", "  _/    \\_   "],
+  wisp: ["     .       ", "    ( )      ", "   ( o )     ", "    ( )      ", "     .       "],
+  leech: ["    ~~~      ", "   (o  )     ", "   (~~ o)    ", "    \\ ~      ", "     \\_      "],
+  toad: ["    ____     ", "   (@  @)    ", "   ( ~~ )    ", "  /|    |\\   ", " _/|    |\\_  "],
+  mirecrab: ["  \\    /     ", " (o/  \\o)    ", "  | ~~ |     ", " /|    |\\    ", "_/ |    | \\_ "],
+  ghoul: ["    __       ", "   (o o)     ", "   / v  \\    ", "  |  ##  |   ", "   _|  |_    "],
+  banshee: ["    ~~~      ", "   (o  o)    ", "   ( ~~ )    ", "    \\ ~ /    ", "     \\|/     "],
+  bonehawk: [" \\      /    ", " \\(o  o)/    ", "  \\/\\ /     ", "    /\\       ", "   _/\\_      "],
+  ghast: ["    ~~~~     ", "   (o  o)    ", "  ~(    )~   ", "   ( ~~ )    ", "    ~  ~     "],
+  crawler: ["    ____     ", "   (o  o)    ", " //|##|\\\\   ", "    |  |     ", "   _/  \\_    "],
+  voidling: ["    .--.     ", "   ( o  )    ", "  (  ~~  )   ", "   (    )    ", "    `--'     "],
+  shard: ["     /\\      ", "    /  \\     ", "   | o* |    ", "   |    |    ", "  _/____\\_   "],
 };
 
 // ---------------------------------------------------------------- 成就
@@ -374,6 +513,15 @@ export const TITLES: TitleDef[] = [
   { id: "t_reb15", name: "涅槃之焰", cond: "转生 15 次" },
   { id: "t_reb40", name: "万劫归一", cond: "转生 40 次" },
   { id: "t_week", name: "周征服者", cond: "周常全部完成" },
+  // 2.7 异步切磋:纯枚举追加,旧档 titles 数组天然兼容
+  { id: "t_arena10", name: "切磋者", cond: "切磋 10 胜" },
+  { id: "t_arena50", name: "角斗士", cond: "切磋 50 胜" },
+];
+
+/** 切磋称号门槛(胜场 → TITLES id;game.arenaResult 按此发放,只发一次) */
+export const ARENA_TITLES: { wins: number; id: string }[] = [
+  { wins: 10, id: "t_arena10" },
+  { wins: 50, id: "t_arena50" },
 ];
 
 // ---------------------------------------------------------------- 深渊天赋(2.4):转生货币「魂晶」的消费端
@@ -588,13 +736,36 @@ export const BAL = {
   forge_min_rid: 2,          // 锻造稀有度保底:稀有+
   forge_rarity_boost: 0.5,   // 高稀有度权重增益(介于精英 0.25 与头目 0.6 之间)
 
+  // ---- 深渊套装(2.5):主题特产装备的掉率(rollItem 命中即按区主题标记 suitId 并锁定)
+  suit_drop_chance: 0.10,
+
   // ---- 玩家自动化三开关(2.2.2):逐步放手,先强化→技能→祭坛 ----
   auto_enhance_lv: 20,     // 自动强化解锁等级
   auto_skill_lv: 30,       // 自动升技能解锁等级
   auto_altar_lv: 40,       // 自动献祭解锁等级
 
   // ---- 图鉴二期(2.3):每点亮一种怪的永久加成(攻/生命各按此系数 × 已点亮数) ----
-  codex_per: 0.3,          // 每种 +0.3%;全 17 种 = 各 +5.1%(轻量,不扰动主线曲线)
+  codex_per: 0.15,         // 每种 +0.15%;全 37 种 = 各 +5.55%(扩怪前 17 种 +5.1%,维持轻量不扰动主线)
+
+  // ---- 世界BOSS·周轮合力(2.6):异步轮次 + 纯拉模式,伤害只升不降聚合总血池 ----
+  world_boss_cast_sec: 30,     // 客户端折算时长:dmg = heroDps × 30s × uniform(0.9,1.1)
+  world_boss_var_lo: 0.9,      // 折算浮动下界
+  world_boss_var_hi: 1.1,      // 折算浮动上界
+  world_boss_def: 2000,        // 折算假人防御(固定值;perBase 分量与真实差异 ≤ 约 3×)
+  world_boss_attempts: 3,      // 每轮挑战次数上限(纯本地记账,服务端靠包络+限流兜底)
+  world_boss_gold_k: 50,       // 参与档金币 = 当前区击杀金 × 50(≈10 分钟挂机收入,与签到同保守哲学)
+  world_boss_stones_pct: 2,    // ≥1% 贡献档:重铸石
+  world_boss_stones_kill: 2,   // 上轮全服击杀档:重铸石(可与贡献档叠加)
+  world_boss_claim_keep: 8,    // claimed 幂等记录滚动保留轮数(防存档膨胀)
+  // 服务端伤害包络系数(server.cjs/worker.js 的 world_boss_dmg_cap_k 同名常量互指,
+  // scripts/lb-smoke.ts G 组 readFileSync 断言双端各含该字样,漂移即 FAIL)。
+  // 包络余量:折算 ≤33s 等效输出,实际等效上界 ≈100s,对 1200s 额度余量约 10×;
+  // 调 world_boss_cast_sec 或 DPS 口径时,保持额度/cast_sec 比值 ≥5×。
+  world_boss_dmg_cap_k: 1200,
+
+  // ---- 异步切磋(2.7):阵容快照对战 —— 回合制期望对撞,奖励仅称号
+  arena_turn_sec: 0.5,        // 每回合等效输出秒数(120 回合 = 60s 等效战斗)
+  arena_max_rounds: 120,      // 回合上限;未分胜负按剩余血量百分比判,持平判攻方胜
 } as const;
 
 export const VIRTUAL_STATS = ["skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct",
@@ -608,6 +779,10 @@ export interface TowerDef {
   td0: number; tdk: number; tdp: number;
   boss_every: number;
   drop_gold_mult: number; new_height_stones: number;
+  /** 里程碑间隔:首次到达每 milestone_every 层整数位(10/20/30…)额外发宝箱 */
+  milestone_every: number;
+  /** 里程碑宝箱的重铸石份数 */
+  milestone_stones: number;
 }
 export const TOWER: TowerDef = {
   keys_per_day: 3, keys_cap: 99, relic_slots: 4,
@@ -616,6 +791,7 @@ export const TOWER: TowerDef = {
   td0: 5.0, tdk: 2.0, tdp: 1.0,
   boss_every: 5,
   drop_gold_mult: 2.0, new_height_stones: 2,
+  milestone_every: 10, milestone_stones: 20,
 };
 /** 遗物效果池:(id, 名, lo, hi, 单位) */
 export interface RelicEffDef { id: string; name: string; lo: number; hi: number; unit: string }

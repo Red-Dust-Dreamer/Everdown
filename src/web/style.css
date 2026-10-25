@@ -101,6 +101,55 @@ body{
   overflow:hidden;text-overflow:ellipsis}
 .gear-slot.relic{border-style:dashed}
 
+/* ---------------- 塔页 2.4.3:状态行/选层卡/主按钮(手机端零换行重排) ----------------
+   旧的 stage-lbl inline 流式堆叠在 390px 下换行 4~6 处、主按钮文字被折断;
+   新结构 = 一行状态 + 居中选层卡 + 单行摘要,说明文字不再散落 */
+.tw-top{display:flex;align-items:baseline;gap:10px;flex-wrap:nowrap;min-width:0;margin-top:2px}
+.tw-keys{font-size:17px;font-weight:800;color:var(--gold);white-space:nowrap;
+  font-variant-numeric:tabular-nums}
+.tw-keys small{font-size:11px;color:var(--dim);font-weight:400;margin-left:6px}
+.tw-best{margin-left:auto;font-size:12.5px;color:var(--dim);white-space:nowrap}
+.tw-best b{color:#5adfff;font-variant-numeric:tabular-nums}
+.tw-live{display:flex;align-items:center;gap:10px;margin-top:10px;padding:9px 12px;
+  border:1px solid #5c2a2a;border-radius:10px;background:#1a1016;flex-wrap:nowrap}
+.tw-live .st{color:#ff9c9c;font-weight:700;font-size:14px;white-space:nowrap}
+.tw-live .btn{margin-left:auto;flex:none}
+.tw-pick{margin-top:10px;padding:14px 12px 11px;border:1px solid var(--line2);
+  border-radius:12px;background:linear-gradient(180deg,#171726,#12121d);
+  display:flex;flex-direction:column;align-items:center;gap:7px}
+.tw-floor-row{display:flex;align-items:center;gap:12px}
+.tw-floor-row .btn{min-width:42px;min-height:42px;font-size:15px}   /* 步进按钮加大触区 */
+.tw-floor{min-width:140px;text-align:center;font-size:24px;font-weight:800;
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.tw-floor .boss-tag{display:block;font-size:12px;color:var(--gold);font-weight:700;margin-top:2px}
+.tw-go{width:100%;font-size:15px;padding:12px 0;font-weight:800;color:#6bff8f;
+  border-color:#3a6a4a;background:#1d3325}   /* 主行动按钮:绿=可进入,与换装 on 同色系 */
+.tw-go:hover{background:#25452f}
+.tw-go:active{transform:scale(.98)}
+.tw-sub{font-size:12px;color:var(--dim);white-space:nowrap;max-width:100%;
+  overflow:hidden;text-overflow:ellipsis}
+.tw-sub.nokey{color:#ff8a8a}
+.tw-mile{margin-top:8px;font-size:11.5px;color:var(--dim);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+/* 塔页遗物背包(2.4.3):默认折叠;展开限高内滚(200 件不撑爆整页),条目紧凑单行 */
+.tw-bag-head{cursor:pointer;user-select:none;-webkit-user-select:none;margin-top:16px}
+.tw-bag-head .tw-bag-arrow{margin-left:6px;color:var(--dim);font-size:11px}
+.tw-bag-head.open .tw-bag-arrow{color:#5adfff}
+.tw-bag-empty{font-size:12px;color:var(--dim);padding:8px 2px}
+.tw-bag-list{display:flex;flex-direction:column;gap:6px;max-height:46vh;
+  overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;
+  padding:2px 2px 4px}
+.tw-bag-row{display:flex;align-items:center;gap:8px;background:#15152299;
+  border:1px solid #20202f;border-radius:8px;padding:7px 10px;min-width:0;flex:none}
+.tw-bag-row .info{flex:1;min-width:0}
+.tw-bag-row .nm{font-weight:700;font-size:13px;white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.tw-bag-row .nm .tier{font-weight:400;font-size:11px;color:var(--dim);margin-left:6px}
+.tw-bag-row .af{font-size:11px;color:var(--dim);margin-top:2px;white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis}
+.tw-bag-row .ops{display:flex;gap:6px;flex:none}
+.tw-bag-row .ops .btn{min-height:36px}
+
 /* 云账号登录弹窗 */
 .login-form{display:flex;flex-direction:column;gap:10px;margin-top:14px}
 .login-form input{background:#10101a;border:1px solid var(--line2);border-radius:8px;
@@ -193,6 +242,18 @@ body{
   transition:transform .08s}
 .mon-art.flash{filter:brightness(2.2)}
 #stage.bump-mon .mon-art{transform:translateX(-6px)}
+/* 怪物攻击冲撞:向英雄方向(左)突进半步再回位(.mon-art 自带 transform 过渡) */
+#stage.mon-atk .mon-art{transform:translateX(-18px)}
+/* 怪物死亡消散:白环收缩渐隐 + 中心白闪 */
+.fx-die{position:absolute;width:110px;height:110px;margin:-55px 0 0 -55px;
+  border-radius:50%;pointer-events:none;
+  border:3px solid rgba(255,255,255,.9);
+  box-shadow:0 0 22px 6px rgba(255,255,255,.55),inset 0 0 18px rgba(255,255,255,.4);
+  animation:fxDie .42s ease-out forwards}
+.fx-die::after{content:"";position:absolute;inset:32%;border-radius:50%;
+  background:radial-gradient(circle,#fff,rgba(255,255,255,0) 72%)}
+@keyframes fxDie{0%{transform:scale(1.5);opacity:1}
+  100%{transform:scale(.25);opacity:0}}
 /* 怪物立绘(CC0 像素图,mon/<id>.png):默认显示图,失败回退 ASCII 小画 */
 .mon-art.spr{white-space:normal;font-size:0}
 .mon-art.spr img{image-rendering:pixelated;width:112px;filter:drop-shadow(0 6px 10px rgba(0,0,0,.55))}
@@ -558,6 +619,7 @@ body{
 .as-opt .as-ds{flex:1;min-width:0;color:var(--dim);font-size:11.5px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .as-opt .as-cur{flex:none;color:var(--gold);font-size:11.5px}
+.as-note{margin-top:10px;color:var(--dim);font-size:11.5px;line-height:1.6}
 
 /* ---------------- 通用文本色 ---------------- */
 .c-black{color:#000}.c-bright_black{color:#7a7a8c}.c-white{color:#e8e8ee}
@@ -869,6 +931,26 @@ select.sel{background:#1b1b2a;color:var(--txt);border:1px solid var(--line2);
 .lb-err{margin-top:8px;font-size:12.5px;color:#ff8a8a;line-height:1.6}   /* 提交失败常驻提示 */
 .lb-fail{padding:26px 10px;text-align:center;color:#ff8a8a;line-height:2.2;font-size:13px}
 .lb-fail .btn{margin-top:4px}
+
+/* ---------------- 世界BOSS(周轮合力) ---------------- */
+/* 总血条:全服合力伤害/总血;文字叠在条内,窄屏不溢出 */
+.boss-hpbar{position:relative;height:26px;border-radius:8px;overflow:hidden;
+  background:#15152299;border:1px solid #2a1420;margin:8px 0 10px}
+.boss-hpfill{position:absolute;inset:0 auto 0 0;width:0;
+  background:linear-gradient(90deg,#7a2438,#c23a55);transition:width .4s ease}
+.boss-hpfill.dead{background:linear-gradient(90deg,#4a3a1e,#8a6a1e)}   /* 已击杀:金色 */
+.boss-hptext{position:relative;z-index:1;display:block;height:26px;line-height:26px;
+  text-align:center;font-size:12px;color:#fff;text-shadow:0 1px 2px #000c;
+  font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* 上轮奖励领取行:仅可领时由渲染层出现,领取一次后整体撤下 */
+.boss-claim{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0;
+  padding:10px 12px;border-radius:8px;border:1px solid #6e5a1e;background:#2a2317;
+  font-size:13px}
+.boss-claim .btn{margin-left:auto}
+/* 奖励档位表:档名靠左、数额靠右,与贡献榜行同宽对齐 */
+.boss-tier{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;
+  background:#15152299;border:1px solid #20202f;margin-bottom:5px;font-size:12.5px}
+.boss-tier .lbl{flex:1;color:var(--dim)}
 
 /* ---------------- 祭坛页(金币消耗) ---------------- */
 .potion-row{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:8px}

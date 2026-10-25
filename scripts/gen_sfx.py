@@ -266,6 +266,44 @@ def gen_dot_bleed():
     return mix([1.15 * v for v in a], [1.0 * v for v in b], [0.55 * v for v in c2])
 
 
+def gen_mob_hit():
+    """怪物命中英雄:低闷撞击(噪声闷响+低频下坠)"""
+    n = int(SR * 0.3)
+    thud = [0.0] * n
+    y = 0.0
+    for i, x in enumerate(noise(n)):
+        a = 0.5 - 0.4 * (i / n)
+        y += a * (x - y)
+        thud[i] = y
+    thud = mul(thud, env(n, 3, 120, 0.25, 160, 0.8))
+    drop = mul(osc("sine", n, glide(150, 55, 0.3)), env(n, 2, 160, 0.1, 140, 0.85))
+    return mix([1.2 * v for v in thud], [0.7 * v for v in drop])
+
+
+def gen_mskill():
+    """怪物施法:低沉不协和双音(威慑起手)"""
+    n = int(SR * 0.42)
+    a = mul(osc("saw", n, glide(180, 130, 0.42)), lfo(n, 7, 0.3))
+    b = [0.6 * v for v in osc("saw", n, glide(184, 133, 0.42))]   # 微失谐拍频
+    e = env(n, 20, 220, 0.4, 180, 0.85)
+    bed = [0.4 * v for v in mul(lowpass(noise(n), 0.1), env(n, 10, 260, 0.3, 150, 0.9))]
+    return mix([mul(a, e)[i] for i in range(n)], [mul(b, e)[i] for i in range(n)], bed)
+
+
+def gen_mon_die():
+    """怪物死亡:碎裂噗声(宽噪声短迸+下滑消散)"""
+    n = int(SR * 0.36)
+    body = [0.0] * n
+    y = 0.0
+    for i, x in enumerate(noise(n)):
+        a = 0.55 - 0.5 * (i / n)
+        y += a * (x - y)
+        body[i] = y
+    body = mul(body, env(n, 2, 150, 0.15, 200, 0.85))
+    fall = mul(osc("triangle", n, glide(320, 80, 0.36)), env(n, 4, 200, 0.0, 150, 0.9))
+    return mix([1.15 * v for v in body], [0.5 * v for v in fall])
+
+
 if __name__ == "__main__":
     render("skill-fire", gen_fire())
     render("skill-ice", gen_ice())
@@ -277,3 +315,6 @@ if __name__ == "__main__":
     render("skill-dash", gen_dash())
     render("dot-burn", gen_dot_burn())
     render("dot-bleed", gen_dot_bleed())
+    render("mob-hit", gen_mob_hit())
+    render("mskill", gen_mskill())
+    render("mon-die", gen_mon_die())

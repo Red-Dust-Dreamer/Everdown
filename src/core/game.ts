@@ -7,10 +7,11 @@ import { c, fmt } from "./ansi.ts";
 import { battleTick, spawnMonster, tierOf, mobGold } from "./combat.ts";
 import type { Monster } from "./combat.ts";
 import {
-  ACTIVE_DEF, ACTIVE_SKILLS, ACHIEVEMENTS, AFFIX_DEF, BAL, CAPS, CLASSES, PASSIVE_DEF, PASSIVE_SKILLS,
-  RARITIES, RARITY_IDX, REDEEM_CODES, SIGNIN_REWARDS, SLOTS, STAT_NAMES, TALENT_DEF, TITLES,
-  WEEKLY_CHEST, WEEKLY_GOALS, TOWER, ALTAR_LINES, POTIONS,
+  ACTIVE_DEF, ACTIVE_SKILLS, ACHIEVEMENTS, AFFIX_DEF, ARENA_TITLES, BAL, CAPS, CLASSES, PASSIVE_DEF, PASSIVE_SKILLS,
+  QUEST_TYPES, RARITIES, RARITY_IDX, REDEEM_CODES, SIGNIN_REWARDS, SLOTS, STAT_NAMES, SUIT_DEF, TALENT_DEF, TITLES,
+  WEEKLY_CHEST, WEEKLY_GOALS, TOWER, ALTAR_LINES, POTIONS, ULTS,
 } from "./data.ts";
+import type { ActiveSkill } from "./data.ts";
 import { Item, rollItem, rollItemForged } from "./items.ts";
 import * as RL from "./relics.ts";
 import { Relic } from "./relics.ts";
@@ -20,7 +21,7 @@ import { PyRandom } from "./rng.ts";
 import * as systems from "./systems.ts";
 import * as S from "./skills.ts";
 
-export const SAVE_VERSION = 9;
+export const SAVE_VERSION = 11;
 
 /** 本地日期键 YYYY-MM-DD(签到口径,按玩家本地时区) */
 function todayKey(): string {
@@ -40,6 +41,10 @@ function isoWeekKey(t: Date): string {
 function titleName(id: string): string {
   return TITLES.find(t => t.id === id)?.name ?? id;
 }
+/** 当前 ISO 周键(世界BOSS 用:UI 判定 last_round 是否停在上轮 → 排行榜红点) */
+export function currentWeekKey(): string {
+  return isoWeekKey(new Date());
+}
 export const EVENT_CAP = 2000;
 
 /** 手动模式待确认换装:自动换装关闭时,更强掉落弹新旧对比由玩家定夺 */
@@ -55,6 +60,25 @@ const VIRTUAL_STATS = ["skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pc
   "boss_dmg_r", "kill_haste"];
 
 export type Loadout = { active: string[]; passive: string[] };
+
+/** 深渊套装(2.5)修饰器:数已装备件数(同 suitId 跨槽),≥2 给 bonus2、≥4 追加 bonus4。
+ *  效果键走统一 mods 管道(crit_extra/kill_haste 等 VIRTUAL_STATS 键 agg 已预置 0);
+ *  未知 suitId 防御跳过(手改存档)。 */
+export function suitMods(equip: Record<string, Item>): { stat: string; op: "add" | "pct"; v: number }[] {
+  const count: Record<string, number> = {};
+  for (const it of Object.values(equip)) {
+    if (it.suitId && SUIT_DEF[it.suitId]) {
+      count[it.suitId] = (count[it.suitId] ?? 0) + 1;
+    }
+  }
+  const mods: { stat: string; op: "add" | "pct"; v: number }[] = [];
+  for (const [sid, n] of Object.entries(count)) {
+    const def = SUIT_DEF[sid]!;
+    if (n >= 2) mods.push(def.bonus2);
+    if (n >= 4) mods.push(def.bonus4);
+  }
+  return mods;
+}
 
 /** 宿主注入的存档 IO;未注入时 save() 为空操作、load() 返回 null(新档) */
 export interface SaveHooks {
@@ -122,6 +146,15 @@ export class Game {
   weekly: Record<string, number> = {};
   /** 已领周宝箱(chest3/chest6) */
   weeklyClaimed: string[] = [];
+  /** 世界BOSS·周轮合力(2.6):last_round=最近同步的服务端轮次(ISO 周键;变化时
+   *  attempts/my_best 清零,claimed 保留);my_best=本轮最好伤害(只升不降);
+   *  attempts=本轮已消耗挑战次数(上限 BAL.world_boss_attempts,纯本地记账);
+   *  claimed=已领奖轮次 id(幂等记录,滚动裁剪至最近 claim_keep 轮) */
+  boss: { last_round: string; my_best: number; attempts: number; claimed: string[] } =
+    { last_round: "", my_best: 0, attempts: 0, claimed: [] };
+  /** 异步切磋(2.7)本地战绩:wins/losses 终身累计;奖励仅称号(arenaResult),
+   *  胜负本地结算可伪造 → 与 power 榜同信任级,刻意休闲化 */
+  arena: { wins: number; losses: number } = { wins: 0, losses: 0 };
   /** 已获称号(id 列表,见 TITLES) */
   titles: string[] = [];
   /** 佩戴中称号 id;""=无 */
@@ -153,7 +186,7 @@ export class Game {
   relics: (Relic | null)[] = [null, null, null, null];   // 4 槽
   relicBag: Relic[] = [];    // 遗物背包(4 槽满时收纳,可扩容)
   relicBagLv = 1;            // 背包容量等级(容量翻倍,封顶 BAL.relic_bag_cap)
-  tower: TowerState = { keys: 3, max_floor: 0, last_refresh: null };
+  tower: TowerState = { keys: 3, max_floor: 0, last_refresh: null, in_tower: false, floor_sel: 1 };
   towerFloorSel = 1;         // 爬塔中当前挑战的层(进塔固定为 max_floor+1)
   inTower = false;           // 当前在塔战斗中
   monster: Monster | null = null;
@@ -468,6 +501,7 @@ export class Game {
       ...systems.codexMods(this.monKills),
       ...systems.altarMods(this.altarLv),
       ...systems.talentMods(this.talents),
+      ...suitMods(this.equip),          // 深渊套装(2.5):2/4 件效果(先 add 后 pct,无顺序耦合)
       ...(this.classId ? S.passiveMods(this) : []),
       ...RL.relicMods(this.relics),
       ...this.statMods,
@@ -536,6 +570,14 @@ export class Game {
         const tier = (BAL.speed_unlock as readonly number[]).indexOf(this.level) + 1;
         this.log(`★ 解锁 ×${tier} 倍速!按 B 切换`, "bright_cyan");
       }
+      // 终局一击(手动大招):随 ULTS 表的 unlock 门槛提示,不写死等级
+      for (const u of ULTS) {
+        if (u.cls === this.classId && u.unlock === this.level) {
+          this.log(`★ 终局一击解锁:「${u.name}」——手动大招,${u.cd}s 冷却、不自动施放、不吃离线;` +
+            `战斗页大招槽或按 Q 释放`, "bright_magenta");
+          this.toast(`终局一击解锁:${u.name}(按 Q)`);
+        }
+      }
       if (this.level >= BAL.rebirth_min_level && !this.rebirthHinted) {
         this.rebirthHinted = true;
         this.log("★ 转生已解锁(角色页)——卡墙时转生收益最大;转生可更换职业", "bright_magenta");
@@ -544,10 +586,46 @@ export class Game {
   }
 
   // ================================================================ 背包
+  /** 同套装全身总件数(装备中 + 背包中) */
+  suitTotal(suitId: string): number {
+    let n = 0;
+    for (const it of Object.values(this.equip)) if (it?.suitId === suitId) n++;
+    for (const it of this.bag) if (it.suitId === suitId) n++;
+    return n;
+  }
+
+  /** 套装收集保护:背包/装备内已有件(it 已计入 suitTotal)—— 同套总数 ≤4 时
+   *  卖掉任一件都会散套,豁免自动出售/一键清理;凑齐 4 件后多出的件回归普通件
+   *  (10% 掉率下不再无限囤积)。与玩家手动 🔒 完全解耦 */
+  protectedSuit(it: Item): boolean {
+    return !!it.suitId && this.suitTotal(it.suitId) <= 4;
+  }
+
+  /** 新掉落件(尚未入库,须 +1 计入自身)是否受套装收集保护 */
+  protectedNewSuit(item: Item): boolean {
+    return !!item.suitId && this.suitTotal(item.suitId) + 1 <= 4;
+  }
+
+  /** 各套装可清理配额 = max(0, 全身总件数-4):批量出售/分解用它逐件放行,
+   *  保证清完每套至少剩 4 件 —— 逐件判 protectedSuit 会把"5 件套"整套装卖光
+   *  (每件判定时 total 都 >4),配额制才是"清多余、保成套"的正确语义 */
+  suitQuota(): Record<string, number> {
+    const ids = new Set<string>();
+    for (const it of [...Object.values(this.equip), ...this.bag]) {
+      if (it?.suitId) ids.add(it.suitId);
+    }
+    const q: Record<string, number> = {};
+    for (const sid of ids) q[sid] = Math.max(0, this.suitTotal(sid) - 4);
+    return q;
+  }
+
   addItem(item: Item, noAutoSell = false): void {
     const rid = RARITY_IDX[item.rarity];
     const autoSell = this.settings.auto_sell_idx ?? -1;
-    if (!noAutoSell && autoSell >= 0 && rid <= autoSell) {
+    // 自动出售档位:玩家锁定件与未凑齐的套装件跳过(凑齐 4 件后多出的件正常出售,
+    // 否则 10% 掉率的套装件无限囤积,玩家感知"自动出售失效")
+    if (!noAutoSell && !item.locked && !this.protectedNewSuit(item)
+        && autoSell >= 0 && rid <= autoSell) {
       const price = item.sellPrice();
       this.gold += price;
       this.stats.gold_earned += price;
@@ -556,16 +634,51 @@ export class Game {
       return;
     }
     if (this.bag.length >= this.bagCap()) {
-      // 背包满仍允许自动换装:长挂机背包必然满,若不换装装备将永久冻结、深度停滞
-      if (systems.autoEquipCheck(this, item)) return;
-      const price = item.sellPrice();
-      this.gold += price;
-      this.stats.gold_earned += price;
-      this.stats.sold_total = (this.stats.sold_total ?? 0) + 1;
-      this.log(`背包已满,${item.display()} 自动出售 (+${fmt(price)})`, "bright_black");
-      return;
+      if (item.locked || this.protectedNewSuit(item)) {
+        // 背包满 + 保护件(手动锁定/未凑齐套装):不折现新件 —— 出售背包中一件
+        // 可让位(未锁且非保护)且 score 最低的装备腾位;
+        // 无可让位兜底:该保护件被迫折现(不静默丢,折成金币并明说)
+        let worstIdx = -1, worstScore = Infinity;
+        for (let i = 0; i < this.bag.length; i++) {
+          const it = this.bag[i];
+          if (!it.locked && !this.protectedSuit(it) && it.score() < worstScore) {
+            worstScore = it.score(); worstIdx = i;
+          }
+        }
+        if (worstIdx >= 0) {
+          const junk = this.bag.splice(worstIdx, 1)[0];
+          const price = junk.sellPrice();
+          this.gold += price;
+          this.stats.gold_earned += price;
+          this.stats.sold_total = (this.stats.sold_total ?? 0) + 1;
+          this.log(`背包已满,${junk.display()} 自动出售腾位 (+${fmt(price)})`, "bright_black");
+        } else {
+          const price = item.sellPrice();
+          this.gold += price;
+          this.stats.gold_earned += price;
+          this.stats.sold_total = (this.stats.sold_total ?? 0) + 1;
+          this.log(`背包无可让位(全锁定/全保护),${item.display()} 被迫折现 (+${fmt(price)})`, "bright_red");
+          return;
+        }
+      } else {
+        // 背包满仍允许自动换装:长挂机背包必然满,若不换装装备将永久冻结、深度停滞
+        if (systems.autoEquipCheck(this, item)) return;
+        const price = item.sellPrice();
+        this.gold += price;
+        this.stats.gold_earned += price;
+        this.stats.sold_total = (this.stats.sold_total ?? 0) + 1;
+        this.log(`背包已满,${item.display()} 自动出售 (+${fmt(price)})`, "bright_black");
+        return;
+      }
     }
-    if (this.settings.auto_equip) {
+    if (item.suitId) {
+      // 套装件:不走 autoEquipCheck 单件评分(Item.score 纯数值不动,套装价值在 suitMods 层);
+      // 手动模式强制弹对比(绕过 score 门槛),沿 !pendingSwap 守卫 —— 占用期间静默入包,
+      // 不顶掉已有待确认项;自动模式一律静默入包
+      if (!this.settings.auto_equip && !this.pendingSwap) {
+        this.pendingSwap = { kind: "item", slot: item.slot, item };
+      }
+    } else if (this.settings.auto_equip) {
       systems.autoEquipCheck(this, item);
     } else if (!this.pendingSwap) {
       // 手动模式:更强掉落弹新旧对比(已有待确认时不重复弹)
@@ -630,21 +743,30 @@ export class Game {
 
   /** 一键出售背包中品质 ≤ maxRid 的装备(默认 1=普通+精良;CLI 键位沿用默认) */
   sellJunk(maxRid = 1): void {
-    let n = 0, gold = 0;
+    let n = 0, gold = 0, suitKept = 0;
     const keep: Item[] = [];
+    const quota = this.suitQuota();   // 每套最多清到剩 4 件,防整套装被一键卖光
     for (const it of this.bag) {
-      if (!it.locked && RARITY_IDX[it.rarity] <= maxRid) { gold += it.sellPrice(); n++; }
-      else keep.push(it);
+      if (!it.locked && RARITY_IDX[it.rarity] <= maxRid
+          && (!it.suitId || (quota[it.suitId] ?? 0) > 0)) {
+        if (it.suitId) quota[it.suitId]!--;
+        gold += it.sellPrice(); n++;
+      } else {
+        // 被套装保护拦下(锁定件不算):说清留下了什么,别让玩家以为是没生效
+        if (!it.locked && it.suitId && RARITY_IDX[it.rarity] <= maxRid) suitKept++;
+        keep.push(it);
+      }
     }
     if (n) {
       this.bag = keep;
       this.gold += gold;
       this.stats.gold_earned += gold;
       this.stats.sold_total = (this.stats.sold_total ?? 0) + n;
-      this.log(`一键出售 ${n} 件 ≤${RARITIES[maxRid].name} (+${fmt(gold)} 金币)`, "bright_black");
-      this.toast(`出售 ${n} 件 +${fmt(gold)}`);
+      this.log(`一键出售 ${n} 件 ≤${RARITIES[maxRid].name} (+${fmt(gold)} 金币)` +
+        (suitKept ? `(套装保护 ${suitKept} 件)` : ""), "bright_black");
+      this.toast(`出售 ${n} 件 +${fmt(gold)}` + (suitKept ? `(套装保护${suitKept})` : ""));
     } else {
-      this.toast("没有可出售的装备");
+      this.toast(suitKept ? `无可出售(套装保护 ${suitKept} 件)` : "没有可出售的装备");
     }
   }
 
@@ -656,15 +778,21 @@ export class Game {
     this.toast(it.locked ? `🔒 已锁定 ${it.name}(不出售/不分解)` : `🔓 已解锁 ${it.name}`);
   }
 
-  /** 一键分解 ≤ 所选品质(跳过锁定件):金币略高于出售价,史诗+附重铸石 */
+  /** 一键分解 ≤ 所选品质(跳过锁定件与未凑齐的套装件):金币略高于出售价,史诗+附重铸石 */
   dismantleJunk(maxRid = 3): void {
-    let n = 0, gold = 0, stones = 0;
+    let n = 0, gold = 0, stones = 0, suitKept = 0;
     const keep: Item[] = [];
+    const quota = this.suitQuota();   // 与一键出售同款:每套最多清到剩 4 件
     for (const it of this.bag) {
-      if (!it.locked && RARITY_IDX[it.rarity] <= maxRid) {
+      if (!it.locked && RARITY_IDX[it.rarity] <= maxRid
+          && (!it.suitId || (quota[it.suitId] ?? 0) > 0)) {
+        if (it.suitId) quota[it.suitId]!--;
         const [g, s] = it.dismantle();
         gold += g; stones += s; n++;
-      } else keep.push(it);
+      } else {
+        if (!it.locked && it.suitId && RARITY_IDX[it.rarity] <= maxRid) suitKept++;
+        keep.push(it);
+      }
     }
     if (n) {
       this.bag = keep;
@@ -673,10 +801,13 @@ export class Game {
       this.stats.gold_earned += gold;
       this.stats.dismantled = (this.stats.dismantled ?? 0) + n;
       this.log(`一键分解 ${n} 件 ≤${RARITIES[maxRid].name} (+${fmt(gold)} 金币` +
-        `${stones ? `, +${stones} 重铸石` : ""})`, "bright_magenta");
-      this.toast(`分解 ${n} 件 +${fmt(gold)}金${stones ? `/${stones}石` : ""}`);
+        `${stones ? `, +${stones} 重铸石` : ""})` +
+        (suitKept ? `(套装保护 ${suitKept} 件)` : ""), "bright_magenta");
+      this.toast(`分解 ${n} 件 +${fmt(gold)}金${stones ? `/${stones}石` : ""}` +
+        (suitKept ? `(套装保护${suitKept})` : ""));
     } else {
-      this.toast("没有可分解的装备(锁定件跳过)");
+      this.toast(suitKept ? `无可分解(套装保护 ${suitKept} 件)`
+        : "没有可分解的装备(锁定件跳过)");
     }
   }
 
@@ -813,6 +944,41 @@ export class Game {
     }
   }
 
+  // ================================================================ 终局一击(职业手动大招)
+  /** 当前职业的终局一击定义;未选职业/未知职业返回 null(ULTS 不在 ACTIVE_SKILLS) */
+  ultOf(): ActiveSkill | null {
+    if (!this.classId) return null;
+    return ULTS.find(u => u.cls === this.classId) ?? null;
+  }
+
+  /** 手动大招:长 CD 高倍率,由玩家在关键时刻点按(战斗页大招槽 / 键盘 Q)。
+   *  刻意不进自动轮放队列(castSkills 只扫 loadout.active,ULTS 不可装配)与
+   *  离线折算(resolveOffline 走普攻口径 heroDps)—— 手动是它唯一的资格。
+   *  CD 门槛用 ?? 0 兜底:ULTS 不进 skillCd 重建循环(constructor/fromDict/rebirth
+   *  只铺 ACTIVE_SKILLS 键),未释放过时 ult 键不存在,undefined 视为就绪;
+   *  skillCd 不序列化,重载清 CD 与所有技能同口径。结算复用 castActive(零新代码)。
+   *  拒绝路径(Lv 不足/无目标/引导中/冷却中)只 toast,无任何伤害与 CD 副作用。 */
+  castUlt(): void {
+    const ult = this.ultOf();
+    if (!ult) { this.toast("先选择职业"); return; }
+    if (this.level < ult.unlock) {
+      this.toast(`终局一击 Lv.${ult.unlock} 解锁`);
+      return;
+    }
+    if (!this.monster) { this.toast("没有目标"); return; }
+    if (this.burst) { this.toast("引导中,无法施放终局一击"); return; }
+    if ((this.skillCd[ult.id] ?? 0) > 0) {
+      this.toast(`${ult.name} 冷却中(${Math.ceil(this.skillCd[ult.id] ?? 0)}s)`);
+      return;
+    }
+    S.castActive(this, ult, this.monster);
+    // CD 受冷却缩减(与 castSkills 同式:cd_reduce 封顶 40% 生效率)
+    const cdCut = 1 - Math.min((this.hero.cd_reduce ?? 0) / 100, 0.4);
+    this.skillCd[ult.id] = ult.cd * cdCut;
+    this.stats.ult_casts = (this.stats.ult_casts ?? 0) + 1;
+    this.log(`⚡ 终局一击「${ult.name}」!`, ult.color);
+  }
+
   // ================================================================ 推进
   spawn(): void {
     let eqT = 0;
@@ -937,24 +1103,34 @@ export class Game {
   }
 
   // ================================================================ 塔 & 遗物
-  /** 爬塔:从最高层+1 开始爬,连胜连爬(每层 1 把钥匙),钥匙耗尽/战败/撤退时离塔 */
-  towerEnter(): void {
+  /** 爬塔:默认从最高层+1 开始(连胜连爬,每层 1 把钥匙),钥匙耗尽/战败/撤退时离塔;
+   *  floor 显式传入 = 选层重打已通层(1..max_floor+1):卡墙时用钥匙换稳定收益,
+   *  低层遗物可复刷 —— 重打层通关不涨 max_floor、不发新高石(towerExit 的
+   *  floor>max_floor 判定天然兼容),其余收益照旧 */
+  towerEnter(floor?: number): void {
     if (this.inTower) {
       this.toast("正在塔中");
+      return;
+    }
+    if (floor === undefined) {
+      floor = this.tower.max_floor + 1;
+    } else if (!Number.isInteger(floor) || floor < 1 || floor > this.tower.max_floor + 1) {
+      this.toast(`层数需为 1~${this.tower.max_floor + 1} 的整数`);
       return;
     }
     if (this.tower.keys < 1) {
       this.toast("钥匙不足(每天送3把)");
       return;
     }
-    const floor = this.tower.max_floor + 1;
     this.tower.keys -= 1;
     this.inTower = true;
     this.towerFloorSel = floor;
     const mon = TW.towerMonster(floor, this.rng);
     this.monster = mon;
     this.lastSpawnTime = this.time;
-    this.log(`🔑 进入深渊塔·第${floor}层${mon.boss ? "(头目!)" : ""},胜利后连爬`, "bright_cyan");
+    const replay = floor <= this.tower.max_floor ? "(重打)" : "";
+    this.log(`🔑 进入深渊塔·第${floor}层${mon.boss ? "(头目!)" : ""}${replay}${floor > this.tower.max_floor ? ",胜利后连爬" : ""}`,
+      "bright_cyan");
   }
 
   /** 离开塔(胜利结算/战败退出/手动撤退);胜利且还有钥匙时继续爬下一层 */
@@ -971,9 +1147,19 @@ export class Game {
       this.addRelic(relic);
       // 新高奖励
       if (floor > this.tower.max_floor) {
+        const prev = this.tower.max_floor;
         this.tower.max_floor = floor;
         this.stones += TOWER.new_height_stones;
         this.log(`★ 新高度!第${floor}层 +${TOWER.new_height_stones}重铸石`, "bright_yellow");
+        // 里程碑宝箱:首次到达每 milestone_every 层整数位(10/20/30…)额外发一份。
+        // max_floor 单调 ⇒ floor(前/every) < floor(后/every) 只在跨档那层成立一次:
+        // 重打不进本分支、转生不清 max_floor,天然一次性,无需新增存档字段
+        if (Math.floor(prev / TOWER.milestone_every) < Math.floor(floor / TOWER.milestone_every)) {
+          this.stones += TOWER.milestone_stones;
+          const ms = Math.floor(floor / TOWER.milestone_every) * TOWER.milestone_every;
+          this.log(`🏆 里程碑!首达第${ms}层 +${TOWER.milestone_stones}重铸石`, "bright_yellow");
+          this.toast(`里程碑 第${ms}层 +${TOWER.milestone_stones}✦`);
+        }
       }
       this.log(`✔ 塔第${floor}层通关!获得 ${relic.display()}`, "bright_cyan");
       if (this.tower.keys >= 1) {
@@ -1410,6 +1596,11 @@ export class Game {
       this.questRerollCount = 0;
       this.towerKeysBought = 0;
     }
+    // 每日免费钥匙与加购额度同拍发放:rollDaily 是跨日打点的统一入口
+    // (tick/击杀/悬赏/周常/签到都过这里),页面跨天不重开也能领;
+    // refreshKeys 同日幂等(days<=0 返回 0),每次打点都调只有首次实际发放。
+    // 登录路径(cli/web 启动)的显式调用保留,兜住"昨天的档今天首次打开"。
+    this.towerRefreshKeys();
     // ISO 周(周一为一周之始)变化 → 周常清零
     const wk = isoWeekKey(t);
     if (wk !== this.weekKey) {
@@ -1475,6 +1666,123 @@ export class Game {
   setTitle(id: string): void {
     if (id && !this.titles.includes(id)) return;
     this.title = this.titles.includes(id) ? id : "";
+  }
+
+  // ================================================================ 世界BOSS·周轮合力(2.6)
+  /** 折算一次挑战伤害:heroDps(固定假人 def,boss 口径)× cast_sec × uniform(0.9,1.1)。
+   *  吃一次 RNG(对拍敏感);拒绝路径(未开局/次数用完)只 toast,无任何状态副作用。
+   *  返回折算伤害,null=拒绝。次数消耗不在本方法:上传由 UI 层 POST /boss/hit,
+   *  仅 200 才调 bossHitAccept 记账 —— 失败时次数未消耗。 */
+  bossChallenge(): number | null {
+    if (this.classId === null) { this.toast("先选择职业"); return null; }
+    if (this.boss.attempts >= BAL.world_boss_attempts) {
+      this.toast(`本轮挑战次数已用完(${BAL.world_boss_attempts}/${BAL.world_boss_attempts}),下轮刷新`);
+      return null;
+    }
+    const [dps] = systems.heroDps(this, BAL.world_boss_def, 1e12, true);
+    return Math.max(1, Math.round(
+      dps * BAL.world_boss_cast_sec * this.rng.uniform(BAL.world_boss_var_lo, BAL.world_boss_var_hi)));
+  }
+
+  /** 挑战上传成功(POST /boss/hit 200)后的本地记账:次数 +1(封顶)、本轮最好只升不降。
+   *  上传失败不调用 —— 次数未消耗(信任模型:本地记账可被改,量级与兑换码同档,
+   *  防君子不防小人;服务端只管记账与展示,靠包络 + 限流兜底)。 */
+  bossHitAccept(dmg: number): void {
+    this.boss.attempts = Math.min(BAL.world_boss_attempts, this.boss.attempts + 1);
+    this.boss.my_best = Math.max(this.boss.my_best, Math.max(0, Math.trunc(dmg)));
+  }
+
+  /** 服务端轮次同步(GET /boss 响应 round):round≠last_round 时本轮计数与最好成绩
+   *  清零、last_round 更新;claimed 保留(历史幂等记录)并滚动裁剪防膨胀。
+   *  返回是否发生了跨轮切换(首同步不算切换)。 */
+  getBossSync(round: string): boolean {
+    if (typeof round !== "string" || round === "" || round === this.boss.last_round) return false;
+    const switched = this.boss.last_round !== "";
+    this.boss.last_round = round;
+    this.boss.attempts = 0;
+    this.boss.my_best = 0;
+    this.bossTrimClaimed();
+    return switched;
+  }
+
+  /** claimed 滚动裁剪:轮号形如 '2026-W43'(周数未补零,字典序≠时间序,按年/周数值排) */
+  private bossTrimClaimed(): void {
+    if (this.boss.claimed.length <= BAL.world_boss_claim_keep) return;
+    const key = (r: string): [number, number] => {
+      const m = /^(\d+)-W(\d+)$/.exec(r);
+      return m ? [Number(m[1]), Number(m[2])] : [0, 0];
+    };
+    this.boss.claimed = [...this.boss.claimed]
+      .sort((a, b) => { const [ay, aw] = key(a), [by, bw] = key(b); return ay !== by ? ay - by : aw - bw; })
+      .slice(-BAL.world_boss_claim_keep);
+  }
+
+  /** 上轮是否有未领奖励(纯本地判定,排行榜 tab 红点):last_round 停在上轮
+   *  (≠当前周键)且参与过(my_best>0)且未领取。同步进当前轮后红点即消,
+   *  领取入口仍在页内(服务端 prev 口径)。 */
+  bossPendingClaim(): string | null {
+    const r = this.boss.last_round;
+    return r !== "" && r !== currentWeekKey() && this.boss.my_best > 0
+      && !this.boss.claimed.includes(r) ? r : null;
+  }
+
+  /** 上轮奖励档位预览(纯函数,bossClaim 同口径):
+   *  参与>0 → 金币=当前区击杀金×world_boss_gold_k;≥1% → +重铸石;≥5% → +1 塔钥匙;
+   *  上轮 killed → 再 +重铸石(可与贡献档叠加)。未参与时全 0。 */
+  bossClaimTiers(prev: { total_hp: number; my_dmg: number; killed: boolean }):
+      { gold: number; stones: number; keys: number } {
+    const joined = prev.my_dmg > 0 && prev.total_hp > 0;
+    const share = joined ? prev.my_dmg / prev.total_hp : 0;
+    let stones = 0, keys = 0;
+    if (share >= 0.01) stones += BAL.world_boss_stones_pct;
+    if (share >= 0.05) keys += 1;
+    if (joined && prev.killed) stones += BAL.world_boss_stones_kill;
+    return {
+      gold: joined ? Math.round(mobGold(tierOf(this.zone, this.stage)) * BAL.world_boss_gold_k) : 0,
+      stones, keys,
+    };
+  }
+
+  /** 领取上轮世界BOSS奖励(纯本地发奖,幂等:同轮重复领取被拒)。
+   *  prev 形如 GET /boss 的 prev:{round,total_hp,my_dmg,killed}。 */
+  bossClaim(prev: { round: string; total_hp: number; my_dmg: number; killed: boolean }): void {
+    if (this.boss.claimed.includes(prev.round)) { this.toast("该轮奖励已领取"); return; }
+    if (!(prev.my_dmg > 0) || !(prev.total_hp > 0)) {
+      this.toast("上轮未参与,没有可领的奖励");
+      return;
+    }
+    const tiers = this.bossClaimTiers(prev);
+    this.gold += tiers.gold;
+    this.stats.gold_earned += tiers.gold;
+    this.stones += tiers.stones;
+    this.tower.keys += tiers.keys;
+    this.boss.claimed.push(prev.round);
+    this.bossTrimClaimed();
+    const parts: string[] = [];
+    if (tiers.gold) parts.push(`◈${fmt(tiers.gold)}`);
+    if (tiers.stones) parts.push(`✦${tiers.stones}`);
+    if (tiers.keys) parts.push(`🔑${tiers.keys}`);
+    this.log(`🎁 世界BOSS·${prev.round} 轮奖励:${parts.join(" + ")}${prev.killed ? "(全服击杀!)" : ""}`,
+      "bright_green");
+    this.toast(`世界BOSS奖励 ${parts.join(" + ")}`);
+  }
+
+  // ================================================================ 异步切磋(2.7)
+  /** 挑战结算:本地战绩计数 + 称号阈值发放(仿 claimWeeklyChest 的 push+log+toast;
+   *  无属性/资源奖励 —— 胜负本地结算可伪造,奖励刻意休闲化)。称号只发一次。 */
+  arenaResult(win: boolean): void {
+    if (!win) {
+      this.arena.losses += 1;
+      return;
+    }
+    this.arena.wins += 1;
+    for (const t of ARENA_TITLES) {
+      if (this.arena.wins === t.wins && !this.titles.includes(t.id)) {
+        this.titles.push(t.id);
+        this.log(`⚔ 切磋 ${t.wins} 胜达成,获得称号「${titleName(t.id)}」`, "bright_green");
+        this.toast(`获得称号「${titleName(t.id)}」`);
+      }
+    }
   }
 
   /** 兑换码:FNV-1a 哈希比对;重复兑换拒绝 */
@@ -1596,6 +1904,13 @@ export class Game {
       week_key: this.weekKey,
       weekly: this.weekly,
       weekly_claimed: this.weeklyClaimed,
+      boss: {
+        last_round: this.boss.last_round,
+        my_best: this.boss.my_best,
+        attempts: this.boss.attempts,
+        claimed: [...this.boss.claimed],
+      },
+      arena: { wins: this.arena.wins, losses: this.arena.losses },
       titles: this.titles,
       title: this.title,
       lineage: this.lineage,
@@ -1622,7 +1937,15 @@ export class Game {
         return list.map(r => r.toDict());
       })(),
       relic_bag_lv: this.relicBagLv,
-      tower: this.tower,
+      // 塔会话显式构造:in_tower/floor_sel 取 Game 字段(而非整对象引用),
+      // TowerState 的会话位与进度位来源不同步时以 Game 为准
+      tower: {
+        keys: this.tower.keys,
+        max_floor: this.tower.max_floor,
+        last_refresh: this.tower.last_refresh,
+        in_tower: this.inTower,
+        floor_sel: this.towerFloorSel,
+      },
       hero_hp: this.hero.hp,
       ema_kill: this.emaKill,
       last_saved: Date.now() / 1000,
@@ -1678,6 +2001,22 @@ export class Game {
     g.weekKey = d.week_key ?? "";
     g.weekly = d.weekly ?? {};
     g.weeklyClaimed = d.weekly_claimed ?? [];
+    // 世界BOSS(2.6):防御式读取 —— 坏形状回默认零状态,claimed 坏条目过滤(参照 talents 兜底)
+    const bo = (d.boss && typeof d.boss === "object" && !Array.isArray(d.boss)) ? d.boss : {};
+    g.boss = {
+      last_round: typeof bo.last_round === "string" ? bo.last_round : "",
+      my_best: Number.isFinite(bo.my_best) ? Math.max(0, Math.trunc(bo.my_best)) : 0,
+      attempts: Number.isFinite(bo.attempts)
+        ? Math.min(BAL.world_boss_attempts, Math.max(0, Math.trunc(bo.attempts))) : 0,
+      claimed: Array.isArray(bo.claimed)
+        ? bo.claimed.filter((x: unknown): x is string => typeof x === "string") : [],
+    };
+    // 异步切磋(2.7):防御式读取 —— 坏形状回默认零战绩,负数钳 0
+    const ar = (d.arena && typeof d.arena === "object" && !Array.isArray(d.arena)) ? d.arena : {};
+    g.arena = {
+      wins: Number.isFinite(ar.wins) ? Math.max(0, Math.trunc(ar.wins)) : 0,
+      losses: Number.isFinite(ar.losses) ? Math.max(0, Math.trunc(ar.losses)) : 0,
+    };
     g.titles = d.titles ?? [];
     g.title = d.title ?? "";
     g.lineage = d.lineage ?? [];
@@ -1701,8 +2040,18 @@ export class Game {
     const tw = d.tower;
     g.tower = (tw && typeof tw === "object" && typeof tw.keys === "number"
       && typeof tw.max_floor === "number")
-      ? { keys: tw.keys, max_floor: tw.max_floor, last_refresh: tw.last_refresh ?? null }
-      : { keys: 3, max_floor: 0, last_refresh: null };
+      ? {
+        keys: tw.keys, max_floor: tw.max_floor, last_refresh: tw.last_refresh ?? null,
+        // 会话位防御(2.4.3):in_tower 仅显式 true 才真(旧档缺省=塔外);
+        // floor_sel 坏值(非 1..max_floor+1 内整数,含 5.5/1e9 这类有限离谱值)回 max_floor+1
+        in_tower: tw.in_tower === true,
+        floor_sel: Number.isInteger(tw.floor_sel) && tw.floor_sel >= 1
+          && tw.floor_sel <= tw.max_floor + 1
+          ? tw.floor_sel : tw.max_floor + 1,
+      }
+      : { keys: 3, max_floor: 0, last_refresh: null, in_tower: false, floor_sel: 1 };
+    g.inTower = g.tower.in_tower;         // 会话位同步到 Game(战斗/离线判定都看这里)
+    g.towerFloorSel = g.tower.floor_sel;
     g.quests = d.quests ?? g.quests;
     g.questDailyCount = d.quest_daily_count ?? 0;
     g.questDailyDate = d.quest_daily_date ?? "";
@@ -1716,7 +2065,12 @@ export class Game {
     g.hero.hp = Math.min(d.hero_hp ?? g.hero.max_hp, g.hero.max_hp);
     g.events.length = 0;
     g.log(`存档已读取: Lv.${g.level} · 第${g.zone}区·${g.stage}层`, "bright_cyan");
-    if (g.classId) g.spawn();
+    if (g.classId && g.inTower) {
+      // 塔会话续战:刷新/关页回来新刷一只该层怪继续打,已扣钥匙的那层不再作废;
+      // 战斗位(tick 的补 spawn)只在 monster 为空时触发,这里先占位就不会落回主线怪
+      g.monster = TW.towerMonster(g.towerFloorSel, g.rng);
+      g.lastSpawnTime = g.time;
+    } else if (g.classId) g.spawn();
     return g;
   }
 
@@ -1796,6 +2150,34 @@ export function migrateSave(d: Record<string, any>): Record<string, any> {
     d.lifetime_essence = d.lifetime_essence ?? 0;
     d.talents = d.talents ?? {};
     d.version = 9;
+  }
+  if (v < 10) {
+    // v9 → v10:世界BOSS·周轮合力(last_round=最近同步轮次;旧档默认零状态,
+    // 无破坏性变更)。async-arena 的 d.arena 追加行归本段(不重复 bump 版本号)。
+    d.boss = d.boss ?? { last_round: "", my_best: 0, attempts: 0, claimed: [] };
+    d.arena = d.arena ?? { wins: 0, losses: 0 };   // 旧档默认 0 胜 0 负
+    d.version = 10;
+  }
+  if (v < 11) {
+    // v10 → v11:套装保护与玩家锁定解耦的善后 —— "掉落即锁"开发期存档里的套装件
+    // 带着系统锁,不清则单件分解永远被「已锁定」挡死(套装系统未发版,套装件上的
+    // locked 只可能来自系统而非玩家手动,一次性全清安全)。此后 🔒 只由玩家手动产生
+    for (const it of [...(d.bag ?? []), ...Object.values(d.equip ?? {})]) {
+      if (it && typeof it === "object" && it.suit_id) delete it.locked;
+    }
+    d.version = 11;
+  }
+  // 悬赏目标封顶钳制(幂等,不挂版本号):修复前的指数曲线在深区滚出 10^10+ 的天文目标
+  // 持久化在旧档里,新公式只管新任务——这里加载时把旧任务一并收敛到封顶值,
+  // 玩家不用等次日重置/手动刷新。min(旧值,封顶) 重复应用结果不变。
+  if (Array.isArray(d.quests)) {
+    for (const q of d.quests) {
+      const qt = QUEST_TYPES.find(t => t.type === q?.type);
+      if (qt && typeof q.target === "number") {
+        q.target = Math.min(q.target, systems.questTarget(qt, 31));
+        q.progress = Math.min(q.progress ?? 0, q.target);
+      }
+    }
   }
   // 装备规则 2.1(主属性候选表+词条数缩减):按标志位一次性清除旧装备,不保留。
   // 不用版本号判断——HMR 热更的旧页面会以新版本号续存旧装备,标志位幂等兜底。

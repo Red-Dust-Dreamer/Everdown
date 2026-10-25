@@ -147,14 +147,19 @@ export function handleKey(g: Game, key: string): KeyResult {
     else if (key === "n") ui.confirm_reset = false;
     else if (key === "y" && ui.confirm_reset) return "reset";
   } else if (tab === 7) {
-    // 塔:Enter 爬塔 / ↑↓ 选遗物槽或背包 / E 卸下·装备 / D 分解背包遗物 / U 扩容背包
+    // 塔:←→ 选层 / Enter 进所选层 / ↑↓ 选遗物槽或背包 / E 卸下·装备 / D 分解背包遗物 / U 扩容背包
     const selTotal = 4 + Math.min(g.relicBag.length, 4);   // 可选:4 槽 + 背包前 4 件(与渲染一致)
     if (key === "up") {
       ui.tower_sel = ((ui.tower_sel ?? 0) - 1 + selTotal) % selTotal;
     } else if (key === "down") {
       ui.tower_sel = ((ui.tower_sel ?? 0) + 1) % selTotal;
+    } else if (key === "left" || key === "right") {
+      // 选层重打(会话级选择,不进存档):默认 max_floor+1,夹取 1..max_floor+1
+      const max = g.tower.max_floor + 1;
+      const cur = ui.tower_floor_pick ?? max;
+      ui.tower_floor_pick = Math.min(Math.max(1, cur + (key === "right" ? 1 : -1)), max);
     } else if (key === "enter") {
-      g.towerEnter();
+      g.towerEnter(ui.tower_floor_pick ?? undefined);
       if (g.inTower) ui.tab = 0;   // 进塔成功:切回战斗页看战斗
     } else if (key === "e") {
       const sel = ui.tower_sel ?? 0;
