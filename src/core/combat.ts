@@ -80,7 +80,9 @@ export function spawnMonster(zone: number, stage: number, rng: PyRandom,
   const boss = stage >= 10;
   const key = rng.choice(pool);
   const mob = MONSTERS[key];
-  let hp = (BAL.mob_hp0 + BAL.mob_hp_k * Math.pow(tier, BAL.mob_hp_p)) * mob.power;
+  // 前期缓曲线:zone≤mob_hp_early_max_zone 用低指数削 1 区墙(依据见 data.ts 注释)
+  const hpP = zone <= BAL.mob_hp_early_max_zone ? BAL.mob_hp_p_early : BAL.mob_hp_p;
+  let hp = (BAL.mob_hp0 + BAL.mob_hp_k * Math.pow(tier, hpP)) * mob.power;
   let atk = (BAL.mob_atk0 + BAL.mob_atk_k * Math.pow(tier, BAL.mob_atk_p)) * mob.power;
   // 等级压制:怪物tier超过装备最高tier 100+,每差100 → 全属性×2(叠乘)
   if (heroGearTier !== undefined && tier - heroGearTier > BAL.gear_gap_base) {
@@ -429,7 +431,10 @@ function onMonsterKilled(g: Game, mon: Monster): void {
   if (g.rng.random() < dropChance) {
     const minIdx = mon.boss ? 2 : 0;
     const boost = mon.boss ? 0.6 : mon.elite ? 0.25 : 0;
-    const item = rollItem(mon.tier, g.rng, h.luck ?? 0, minIdx, boost, g.classId, g.zone);
+    // 挂机掉落保底(留存诊断建议5):挂机层位锚死低 tier 时,tier 下限随等级抬升,
+    // 保证长挂玩家攒得出过关装备;推图模式不参与(保持推图 RNG 体验)
+    const tierFloor = g.mode === "farm" ? Math.floor(g.level / BAL.farm_drop_tier_div) : 0;
+    const item = rollItem(Math.max(mon.tier, tierFloor), g.rng, h.luck ?? 0, minIdx, boost, g.classId, g.zone);
     g.addItem(item);
     if (RARITY_IDX[item.rarity] >= 2) g.questProgress("loot", 1);
     // 紫色(epic)或更好:发掉落光柱事件(宿主表现层用,纯视觉)

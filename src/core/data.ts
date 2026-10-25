@@ -120,7 +120,9 @@ export const CLASSES: Record<string, ClassDef> = {
   ranger: {
     name: "射手", icon: "➤", color: "bright_green",
     desc: "风与箭雨:攻速快、暴击高,连击风筝",
-    base: { hp: 0.95, atk: 0.95, def: 0.9 }, interval: 0.8, crit0: 5.0,
+    // hp 0.95→1.05(留存诊断建议4):ranger 真实流失 83%、模拟零操作死亡最多——
+    // 削 1 区墙(建议1)主要救 warrior 形态,这里救 ranger 的高频死亡形态
+    base: { hp: 1.05, atk: 0.95, def: 0.9 }, interval: 0.8, crit0: 5.0,
   },
 };
 
@@ -615,6 +617,8 @@ export const QUEST_TYPES: QuestTypeDef[] = [
   { type: "boss", tpl: "击败 {n} 个头目", base: 2, growth: 1.1, goldK: 40, stones: 1 },
   { type: "loot", tpl: "获取 {n} 件稀有+装备", base: 3, growth: 1.12, goldK: 30, stones: 1 },
   { type: "enhance", tpl: "强化装备 {n} 次", base: 3, growth: 1.15, goldK: 35, stones: 1 },
+  // 达到型任务(留存诊断建议2):progress 语义为「已达到」,不做累计
+  { type: "level", tpl: "升到 Lv.{n}", base: 3, growth: 1.12, goldK: 20, stones: 0 },
 ];
 
 // ---------------------------------------------------------------- 平衡常数
@@ -655,6 +659,11 @@ export const BAL = {
 
   // 怪物属性(2026-10-01 提升):装备等级落后 20~30 级将明显打不过
   mob_hp0: 50.0, mob_hp_k: 32.0, mob_hp_p: 1.28,
+  // 前期缓曲线(2026-10-25 留存诊断建议1,实验依据 out/retention-report.md):
+  // zone≤mob_hp_early_max_zone 的怪血指数 1.28→1.14,真实内核对照实验零操作 15min
+  // 站稳 2 区 4/9→9/9、warrior 0/3→3/3、med 576s 过首个 boss;zone4+ 不变,深层
+  // 长线零影响。主线与离线推演共用 spawnMonster 自动一致;塔不走此曲线。
+  mob_hp_p_early: 1.14, mob_hp_early_max_zone: 3,
   mob_atk0: 6.8, mob_atk_k: 2.8, mob_atk_p: 1.05,
   mob_def0: 3.0, mob_def_k: 1.5, mob_def_p: 1.0,
   mob_interval: 1.6,
@@ -710,9 +719,15 @@ export const BAL = {
   offline_item_cap: 15,
 
   respawn_sec: 4.0,
-  // 游戏倍速档位(等级门槛):1x 始终可用,Lv10 解锁 2x,Lv30 解锁 3x
-  speed_unlock: [1, 10, 30],
+  // 游戏倍速档位(等级门槛):1x 始终可用,Lv5 解锁 2x,Lv30 解锁 3x
+  // (留存诊断建议3:2x 从 Lv10 提前到 Lv5——Lv5 实测 8-11 分钟可达,Lv10 要 40min+;
+  //  留存 4/4 行为签名是 speed 2-3x,把自动化体验提前到首个会话内)
+  speed_unlock: [1, 5, 30],
   death_row_to_farm: 2,
+  // 挂机掉落保底(留存诊断建议5):挂机模式下掉落 tier 下限 = floor(等级/除数)。
+  // 结构性卡点:掉落按怪物 tier 生成,锚在 1 区只掉 T0,40min/1600 杀也攒不出过关
+  // 装备;保底让长挂玩家至少攒出 T3-T4,推图模式不参与(保持 RNG 体验)
+  farm_drop_tier_div: 3,
   farm_stuck_row: 5,   // 挂机层位连续战败 N 次:视为层位过高,退 3 层止损
 
   // ---- 转生(2.2):重置本局成长,换永久倍率;成就/祭坛/遗物/塔记录终身保留 ----

@@ -50,6 +50,7 @@ const BAL_LABELS: Record<string, string> = {
   xp_req0: "升级经验基数", xp_req_p: "升级经验指数",
   kills_per_stage: "每层击杀数",
   mob_hp0: "怪物生命基数", mob_hp_k: "怪物生命系数", mob_hp_p: "怪物生命指数",
+  mob_hp_p_early: "前期怪血指数(≤上限区)", mob_hp_early_max_zone: "前期缓曲线上限区",
   mob_atk0: "怪物攻击基数", mob_atk_k: "怪物攻击系数", mob_atk_p: "怪物攻击指数",
   mob_def0: "怪物防御基数", mob_def_k: "怪物防御系数", mob_def_p: "怪物防御指数",
   mob_interval: "怪物攻击间隔",
@@ -103,6 +104,7 @@ const BAL_LABELS: Record<string, string> = {
 /** 数组型 BAL 键 → 单元素标签(下标自动拼上) */
 const BAL_ARR_LABELS: Record<string, string> = {
   loadout_unlock: "装配槽解锁等级", speed_unlock: "倍速解锁等级",
+  farm_drop_tier_div: "挂机掉落保底除数",
   reforge_slots: "各稀有度重铸条数",
 };
 
@@ -185,7 +187,7 @@ const CAT_BY_BAL: [RegExp, string][] = [
   [/^quest_/, "quest"],
   [/^rebirth_/, "rebirth"],
   [/^codex_per/, "quest"],
-  [/^loadout_unlock|^speed_unlock|^undying_cd|^offline_|^respawn_sec|^death_row|^farm_stuck_row|^auto_/, "misc"],
+  [/^loadout_unlock|^speed_unlock|^undying_cd|^offline_|^respawn_sec|^death_row|^farm_stuck_row|^farm_drop|^auto_/, "misc"],
 ];
 
 export function categoryOf(path: string): string {

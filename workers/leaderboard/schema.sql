@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS entries (
   level      INTEGER NOT NULL DEFAULT 1,
   max_zone   INTEGER NOT NULL DEFAULT 1,
   max_tower  INTEGER NOT NULL DEFAULT 0,
+  rebirths   REAL,                       -- 转生世数(加权浮点,申报值;NULL=旧客户端未申报)。线上库走 ALTER 补列
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (board, uuid)
 );
@@ -28,6 +29,7 @@ CREATE TABLE IF NOT EXISTS entries_weekly (
   level      INTEGER NOT NULL DEFAULT 1,
   max_zone   INTEGER NOT NULL DEFAULT 1,
   max_tower  INTEGER NOT NULL DEFAULT 0,
+  rebirths   REAL,                       -- 同 entries(线上库走 ALTER 补列)
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (board, uuid)
 );
@@ -56,6 +58,7 @@ CREATE TABLE IF NOT EXISTS save_sync (
   kills      INTEGER NOT NULL DEFAULT 0,
   max_zone   INTEGER NOT NULL DEFAULT 1,
   max_tower  INTEGER NOT NULL DEFAULT 0,
+  rebirths   REAL,                       -- 同 entries(线上库走 ALTER 补列)
   bytes      INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
 );

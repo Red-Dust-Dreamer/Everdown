@@ -14,6 +14,8 @@
  *     双端三表(含 arena_snaps)与端点逻辑静态断言、world_boss_dmg_cap_k 字样门禁
  *   H 异步切磋(S28-S30):快照上行合法/浅校验(4KB/形状)/power 包络/对手脱 uuid/
  *     scope=arena 独立限流;三处同步检查并入 S26(world-boss 同组断言)
+ *   I 2.8 批次(S31-S34):转生榜 score=floor(rebirths) 自洽、level-delta 反作弊
+ *     (降级必伴转生数增长;未申报豁免)、/admin/purge 管理(403/400/按名限榜/按 uuid 全清)
  */
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync, readFileSync, readdirSync } from "node:fs";
@@ -489,6 +491,119 @@ try {
       ok(r.status === 200, `第 ${i} 次应 200,实际 ${r.status} ${r.body.error ?? ""}`);
     }
     ok(false, "13 连发后仍未 429");
+  });
+
+  // ---- I. 2.8 批次:转生榜(S31)/ level-delta 反作弊(S32)/ 管理清理(S33-S34) ----
+  await check("S31 转生榜:score=floor(rebirths) 过/不匹配拒/未申报拒;双端 BOARDS 含 rebirth", async () => {
+    const good = await post(sub({ board: "rebirth", uuid: "rebA000001", score: 5,
+      rebirths: 5.25, level: 10, kills: 100, max_zone: 8 }));
+    ok(good.status === 200 && !good.error,
+      `score=5=floor(5.25) 应通过,实际 ${good.status} ${good.error ?? ""}`);
+    const frac = await post(sub({ board: "rebirth", uuid: "rebA000002", score: 5,
+      rebirths: 4.9, level: 10, kills: 100, max_zone: 8 }));
+    ok(frac.status === 400 && frac.error === "score mismatch",
+      `score=5≠floor(4.9)=4 应 400 score mismatch,实际 ${frac.status} ${frac.error}`);
+    const missing = await post(sub({ board: "rebirth", uuid: "rebA000003", score: 5,
+      level: 10, kills: 100, max_zone: 8 }));
+    ok(missing.status === 400 && missing.error === "score mismatch",
+      `未申报 rebirths 应 400 score mismatch,实际 ${missing.status} ${missing.error}`);
+    // 榜单可见且分数为 floor 值(整数)
+    const b = await getBoard("b=rebirth");
+    ok(b.status === 200, `GET /board?b=rebirth 应 200,实际 ${b.status}`);
+    ok((b.body.top ?? []).some(r => r.score === 5),
+      "rebirth 榜应含刚提交的 score=5 行");
+    // 静态:双端榜枚举同步含 rebirth(漂移守卫)
+    const srv = readFileSync(join(ROOT, "server/leaderboard-ecs/server.cjs"), "utf8");
+    const wkr = readFileSync(join(ROOT, "workers/leaderboard/worker.js"), "utf8");
+    ok(srv.includes('"power", "rebirth"'), "server.cjs BOARDS 应含 rebirth");
+    ok(wkr.includes('"power", "rebirth"'), "worker.js BOARDS 应含 rebirth");
+  });
+
+  await check("S32 level-delta:等级降且转生数不增被拒;转生数增长放行;旧档未申报豁免", async () => {
+    // 种子行:zone 榜 Lv50、申报 rebirths=2(全字段在 playtime=3600 包络内)
+    const seed = await post(sub({ board: "zone", uuid: "rebB000001", name: "降级者",
+      score: 50, level: 50, max_zone: 50, kills: 3000, playtime: 3600, rebirths: 2 }));
+    ok(seed.status === 200 && !seed.error, `种子行应 200,实际 ${seed.status} ${seed.error ?? ""}`);
+    // 等级 50→45 且 rebirths 原地(2≤2):物理不可能 → 400
+    const drop = await post(sub({ board: "zone", uuid: "rebB000001", name: "降级者",
+      score: 50, level: 45, max_zone: 50, kills: 3000, playtime: 3600, rebirths: 2 }));
+    ok(drop.status === 400 && drop.error === "implausible level-delta",
+      `降级不增转生应 400 implausible level-delta,实际 ${drop.status} ${drop.error}`);
+    // 等级 45 且 rebirths 2→3(转生所致):放行
+    const reborn = await post(sub({ board: "zone", uuid: "rebB000001", name: "降级者",
+      score: 50, level: 45, max_zone: 50, kills: 3000, playtime: 3600, rebirths: 3 }));
+    ok(reborn.status === 200 && !reborn.error,
+      `降级但转生数增长应放行,实际 ${reborn.status} ${reborn.error ?? ""}`);
+    // 存量兼容:首次未申报(prev.rebirths=NULL),降级不触发规则
+    const seed2 = await post(sub({ board: "level", uuid: "rebB000002", name: "旧档君",
+      score: 50, level: 50, max_zone: 50, kills: 3000, playtime: 3600 }));
+    ok(seed2.status === 200 && !seed2.error, `旧档种子行应 200,实际 ${seed2.status} ${seed2.error ?? ""}`);
+    const drop2 = await post(sub({ board: "level", uuid: "rebB000002", name: "旧档君",
+      score: 45, level: 45, max_zone: 50, kills: 3000, playtime: 3600, rebirths: 1 }));
+    ok(drop2.status === 200 && !drop2.error,
+      `prev 未申报 rebirths 应豁免 level-delta,实际 ${drop2.status} ${drop2.error ?? ""}`);
+  });
+
+  const purgePost = async (over: Record<string, unknown>, token = SYNC_TOKEN):
+      Promise<{ status: number; body: { ok?: boolean; error?: string; deleted?: Record<string, number> } }> => {
+    const r = await fetch(`${BASE}/admin/purge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-admin-token": token },
+      body: JSON.stringify(over),
+    });
+    return { status: r.status, body: await r.json() as { ok?: boolean; error?: string; deleted?: Record<string, number> } };
+  };
+
+  await check("S33 /admin/purge:错 token 403/坏 board 400/按名限榜清行,他榜保留", async () => {
+    // 种子:同名玩家上 zone+level 两榜
+    for (const b of ["zone", "level"]) {
+      const r = await post(sub({ board: b, uuid: "purgeA0001", name: "清账君",
+        score: b === "zone" ? 9 : 9, level: 9, max_zone: 9, kills: 200 }));
+      ok(r.status === 200 && !r.error, `种子 ${b} 榜应 200,实际 ${r.status} ${r.error ?? ""}`);
+    }
+    const zoneBefore = await getBoard("b=zone");
+    ok((zoneBefore.body.top ?? []).some(r => r.name === "清账君"), "清账君先在 zone 榜");
+    const badTok = await purgePost({ name: "清账君" }, "wrong-token");
+    ok(badTok.status === 403, `错 token 应 403,实际 ${badTok.status}`);
+    const noTok = await purgePost({ name: "清账君" }, "");
+    ok(noTok.status === 403, `空 token 应 403,实际 ${noTok.status}`);
+    const badBoard = await purgePost({ name: "清账君", board: "nonsense" });
+    ok(badBoard.status === 400 && badBoard.body.error === "bad board",
+      `坏 board 应 400,实际 ${badBoard.status} ${badBoard.body.error}`);
+    // 按名 + 限 zone 榜:只清 zone 行,level 行保留(终身+周榜同表同 board 过滤)
+    const p = await purgePost({ name: "清账君", board: "zone" });
+    ok(p.status === 200 && p.body.ok === true, `按名限榜清行应 200,实际 ${p.status} ${p.body.error ?? ""}`);
+    ok((p.body.deleted?.entries ?? 0) === 1, `应恰删 1 行 entries(zone),实际 ${JSON.stringify(p.body.deleted)}`);
+    const zoneAfter = await getBoard("b=zone");
+    ok(!(zoneAfter.body.top ?? []).some(r => r.name === "清账君"), "zone 榜清账君已清");
+    const levelAfter = await getBoard("b=level");
+    ok((levelAfter.body.top ?? []).some(r => r.name === "清账君"), "level 榜清账君保留(未限该榜)");
+  });
+
+  await check("S34 /admin/purge:按 uuid 全清(四表)+ rate/first_seen;boss/arena 一并清", async () => {
+    // 种子:上 level 榜 + boss 一击 + 切磋快照(清账君已在 level 榜,直接补 uuid 维度)
+    await bossHit({ uuid: "purgeA0001", name: "清账君", dmg: 1000 });
+    await snapPost({ uuid: "purgeA0001", name: "清账君", power: 900 });
+    const bossBefore = await fetch(`${BASE}/boss?uuid=purgeA0001`).then(r => r.json() as Promise<{ my_dmg?: number }>);
+    ok((bossBefore.my_dmg ?? 0) === 1000, `清账君 boss 伤害 1000 先在,实际 ${bossBefore.my_dmg}`);
+    const p = await purgePost({ uuid: "purgeA0001" });
+    ok(p.status === 200 && p.body.ok === true, `按 uuid 全清应 200,实际 ${p.status} ${p.body.error ?? ""}`);
+    for (const t of ["entries", "entries_weekly", "boss_damage", "arena_snaps", "save_sync", "first_seen"]) {
+      ok((p.body.deleted?.[t] ?? 0) >= 0, `deleted 缺 ${t} 计数字段`);
+    }
+    ok((p.body.deleted?.entries ?? 0) === 1, `应删 1 行 entries(level 残留),实际 ${p.body.deleted?.entries}`);
+    const levelAfter = await getBoard("b=level");
+    ok(!(levelAfter.body.top ?? []).some(r => r.name === "清账君"), "level 榜清账君已清");
+    const bossAfter = await fetch(`${BASE}/boss?uuid=purgeA0001`).then(r => r.json() as Promise<{ my_dmg?: number }>);
+    ok((bossAfter.my_dmg ?? 0) === 0, `boss 伤害已清,实际 ${bossAfter.my_dmg}`);
+    // rate 已清:同 uuid 立刻重新提交不被 429(此前两次 submit 远未到限流,此处只证不误伤)
+    const re = await post(sub({ board: "level", uuid: "purgeA0001", name: "清账君",
+      score: 9, level: 9, max_zone: 9, kills: 200 }));
+    ok(re.status === 200 && !re.error, `purge 后重提交应 200,实际 ${re.status} ${re.error ?? ""}`);
+    // 参数缺失:既无 uuid 也无 name → 400
+    const none = await purgePost({});
+    ok(none.status === 400 && none.body.error === "need uuid or name",
+      `无 uuid/name 应 400,实际 ${none.status} ${none.body.error}`);
   });
 } catch (err) {
   fail++;

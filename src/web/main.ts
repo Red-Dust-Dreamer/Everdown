@@ -72,6 +72,8 @@ function fmt(n: number): string {  // 中文计数:万/亿/兆/京(与核心 ans
   }
   return (neg ? "-" : "") + (Number.isInteger(n) ? String(n) : n.toFixed(1));
 }
+/** 数值显示:整数原样,小数留 1 位(转生加权世数等) */
+const r1 = (v: number): string => v === Math.trunc(v) ? String(v) : v.toFixed(1);
 function fmtTime(sec: number): string {
   sec = Math.floor(sec);
   const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
@@ -1848,6 +1850,13 @@ function cloudHintMaybe(st: State): void {
 
 function renderNow(): void {
   const st = buildState(g);
+  // 背包将满一次性提示(留存诊断建议3):背包满后新掉落直接折现金币(0872 式断裂),
+  // 提前引导开自动出售;localStorage 一次性标志,已开自动出售不再打扰
+  if (g.classId !== null && g.bag.length >= 30 && (g.settings.auto_sell_idx ?? -1) < 0 &&
+      !localStorage.getItem("abyss_bagsell_hint")) {
+    localStorage.setItem("abyss_bagsell_hint", "1");
+    toast("背包快满了:满后新掉落会折现金币 — 背包页可开「自动出售」");
+  }
   renderTop(st);
   renderBattle(st);
   renderHeroPage(st);
@@ -2110,8 +2119,9 @@ function renderHeroPage(st: State): void {
     `<div class="bar xp lg" style="margin-bottom:12px"><div class="fill" style="width:${xpPct}%"></div>` +
       `<div class="num">经验 ${fmt(st.xp)} / ${fmt(st.xp_req)}</div></div>` +
     `<div class="stat-grid wide" style="margin-bottom:6px">` +
-      kv("⚔ 战力", pw ? fmt(pw.total) : "—") +
-      kv("生命", fmt(h.max_hp)) + kv("攻击", fmt(h.atk)) + kv("防御", fmt(h.def)) +
+    kv("⚔ 战力", pw ? fmt(pw.total) : "—") +
+    kv("♻ 转生", st.rebirths >= 0.05 ? `×${r1(st.rebirths)} 世` : "未转生") +
+    kv("生命", fmt(h.max_hp)) + kv("攻击", fmt(h.atk)) + kv("防御", fmt(h.def)) +
       kv("攻速", "+" + pctTxt(h.haste)) + kv("暴击率", pctTxt(h.crit)) +
       kv("暴击伤害", "+" + pctTxt(h.crit_dmg)) + kv("吸血", pctTxt(h.lifesteal)) +
       kv("金币加成", pctTxt(h.goldfind)) + kv("闪避", pctTxt(h.dodge ?? 0)) +
@@ -2192,7 +2202,6 @@ function renderTitlesModal(st: State): void {
 function rebirthEntryHtml(st: State): string {
   const statPct = Math.round(D.BAL.rebirth_stat_pct * st.rebirths * 10) / 10;
   const gainPct = Math.round(D.BAL.rebirth_gain_pct * st.rebirths * 10) / 10;
-  const r1 = (v: number): string => v === Math.trunc(v) ? String(v) : v.toFixed(1);
   const dot = (st.can_rebirth && st.stuck) || st.essence > 0;
   const desc = `转生 ${r1(st.rebirths)} 世 · 三围 +${r1(statPct)}% · 金币经验 +${r1(gainPct)}% · 魂晶 ✧${fmt(st.essence)}` +
     (st.can_rebirth && st.stuck ? " · ⛔ 受阻,推荐转生" : "");
@@ -2215,7 +2224,6 @@ function rebirthBlockHtml(st: State): string {
   const kStat = Math.round(D.BAL.rebirth_stat_pct * k * 10) / 10;
   const kGain = Math.round(D.BAL.rebirth_gain_pct * k * 10) / 10;
   const kEss = Math.max(1, Math.round(k * D.BAL.rebirth_essence_base));
-  const r1 = (v: number): string => v === Math.trunc(v) ? String(v) : v.toFixed(1);
   const action = st.can_rebirth && st.stuck
     ? `<button class="btn big sell-on" data-cmd="rebirth">♻ 转生(推荐,×${k.toFixed(2)} 档)</button>`
     : st.can_rebirth
@@ -2858,9 +2866,9 @@ function renderOverlays(st: State): void {
   const wantCls = !st.class_id || rebirthPick;   // 新档选职业 / 转生择业共用
   if (wantCls && !cs.classList.contains("show")) {
     const cl: [string, string, string, string, string][] = [
-      ["warrior", "⚔", "战士", "钢铁与怒火:生存极强,越战越勇,斩杀收头", "生命×1.30 · 攻击×1.05 · 防御×1.35"],
+      ["warrior", "⚔", "战士", "钢铁与怒火:生存极强,越战越勇,斩杀收头", "生命×1.30 · 攻击×1.05 · 防御×1.35 · ⭐推荐新手"],
       ["mage", "✦", "法师", "元素与毁灭:普攻平庸,技能伤害爆炸", "生命×1.05 · 攻击×1.10 · 防御×1.00"],
-      ["ranger", "➤", "射手", "风与箭雨:攻速快、暴击高,连击风筝", "生命×0.95 · 攻击×0.95 · 防御×0.90 · 初始暴击5%"],
+      ["ranger", "➤", "射手", "风与箭雨:攻速快、暴击高,连击风筝", "生命×1.05 · 攻击×0.95 · 防御×0.90 · 初始暴击5% · ⚠上手难度:高"],
     ];
     $("cls-grid").innerHTML = cl.map(c =>
       `<div class="cls-card" data-cmd="choose_class" data-a="${c[0]}">` +
@@ -3469,17 +3477,18 @@ const LEADERBOARD_API: string = (import.meta as unknown as {
  *  数值覆盖键仅 dev 读取(boot),线上/TapTap 构建不认——防排行榜作弊面。
  *  用裸 import.meta.env.DEV(非类型断言形式)保证 vite define 精确替换。 */
 const IS_DEV: boolean = import.meta.env.DEV;
-const LB_BOARDS: Array<"zone" | "level" | "tower" | "power"> = ["zone", "level", "tower", "power"];
-const LB_BOARD_NAMES: Record<"zone" | "level" | "tower" | "power", string> =
+type LbBoard = "zone" | "level" | "tower" | "power" | "rebirth";
+const LB_BOARDS: LbBoard[] = ["zone", "level", "tower", "power", "rebirth"];
+const LB_BOARD_NAMES: Record<LbBoard, string> =
   { zone: "主线榜 · 最远区域", level: "等级榜", tower: "爬塔榜 · 深渊塔",
-    power: "战力榜 · 综合强度" };
+    power: "战力榜 · 综合强度", rebirth: "转生榜 · 世系深度" };
 
 interface LbRow { name: string; score: number; kills: number; playtime: number;
                   level: number; max_zone: number; updated_at: number; is_me?: boolean }
 interface LbData { board: string; period?: string; top: LbRow[]; you: { rank: number; inTop: boolean;
                   score: number; kills: number } | null }
 
-let lbBoard: "zone" | "level" | "tower" | "power" = "zone";
+let lbBoard: LbBoard = "zone";
 type LbPeriod = "all" | "week";
 let lbPeriod: LbPeriod = "all";
 /** 排行榜页顶部分段:board=四榜 / boss=世界BOSS / arena=异步切磋 */
@@ -3528,6 +3537,14 @@ function lbUuid(): string {
 }
 function lbMyName(): string {
   return localStorage.getItem("abyss_lbname") ?? `深渊行者#${lbUuid().slice(0, 4).toUpperCase()}`;
+}
+/** 测试模式:本端停用一切上云(四榜/世界BOSS/切磋快照/存档同步),榜单拉取照常。
+ *  dev 会话本就不传(saveSyncPush IS_DEV 拦截),这里补正式构建的自测端(部署页/APK):
+ *  置位入口 = URL ?lbtest=1(持久写 localStorage,?lbtest=0 清除)或昵称卡内开关。
+ *  只影响本端是否上传,不涉及数值,玩家误开仅自身不上榜,无作弊面。 */
+const LB_TEST_KEY = "abyss_lb_test";
+function lbTestOff(): boolean {
+  return localStorage.getItem(LB_TEST_KEY) === "1";
 }
 
 // ================================================================ 深渊祭坛(金币→永久属性)+ 药剂
@@ -3602,7 +3619,7 @@ function ensureLeaderboardDom(): void {
   pageTower?.after(page);
 }
 
-async function lbFetch(board: "zone" | "level" | "tower" | "power",
+async function lbFetch(board: LbBoard,
                        period: LbPeriod = lbPeriod): Promise<string | null> {
   const key = lbKey(board, period);
   try {
@@ -3624,18 +3641,24 @@ async function lbFetch(board: "zone" | "level" | "tower" | "power",
 /** 提交各榜(匿名 UUID,四榜并行);成功后刷新数据。返回错误文本或 null。 */
 async function lbSubmit(): Promise<string | null> {
   if (!LEADERBOARD_API) return "未配置";
+  if (lbTestOff()) return null;   // 测试模式:不提交也不写节流(调用点另有提示)
   if (lbBusy) return null;
   lbBusy = true;
   try {
     const meta = { kills: g.stats.kills, playtime: Math.trunc(g.playtime),
                    level: g.level, max_zone: g.stats.max_zone,
-                   max_tower: g.tower.max_floor };
+                   max_tower: g.tower.max_floor,
+                   rebirths: g.rebirths };   // 加权世数原样浮点:服务端 level-delta 校验
+                   // (等级只随转生下降,转生必致 rebirths 增长;floor 会吞掉 0.25 步进误触)
     const basePower = heroPower(g, false).total;   // 排行榜口径:不含临时 buff
     // 四榜并行提交:最坏耗时 = 单榜超时 8s(串行曾是 4×8s)
     const errs = await Promise.all(LB_BOARDS.map(async b => {
       if (b === "tower" && meta.max_tower < 1) return null;   // 未通塔层不上塔榜
+      // 未转生(floor<1,如 0.25 档首转)不上转生榜——score 最低 1
+      if (b === "rebirth" && Math.floor(g.rebirths) < 1) return null;
       const score = b === "zone" ? meta.max_zone
                   : b === "tower" ? meta.max_tower
+                  : b === "rebirth" ? Math.floor(g.rebirths)   // 与称号/天赋门槛同口径(深度加权)
                   : b === "power" ? basePower : meta.level;
       const body = JSON.stringify({
         board: b, uuid: lbUuid(), name: lbMyName(), score, ...meta,
@@ -3685,6 +3708,7 @@ async function bossFetch(): Promise<string | null> {
  *  失败 toast『上传失败,次数未消耗』—— 次数纯本地记账,不因网络问题被烧掉。 */
 async function bossChallengePost(): Promise<void> {
   if (bossBusy || !LEADERBOARD_API) return;
+  if (lbTestOff()) { toast("测试模式:上传已停用(?lbtest=0 恢复)"); return; }   // 次数不消耗
   const dmg = g.bossChallenge();
   if (dmg === null) { renderNow(); return; }   // 核心已 toast 拒绝原因(次数用完/未开局)
   bossBusy = true;
@@ -3808,7 +3832,8 @@ function renderArena(st: State, mine: HTMLElement, list: HTMLElement): void {
 let lastSyncPush = 0;
 const SAVE_SYNC_MS = 10 * 60_000;
 function saveSyncPush(beacon = false): void {
-  if (IS_DEV || !LEADERBOARD_API || g.classId === null) return;   // dev/未开局不传
+  // dev 会话与测试模式端不上传(避免自测档污染远端;测试模式含存档同步+切磋快照)
+  if (IS_DEV || lbTestOff() || !LEADERBOARD_API || g.classId === null) return;
   const payload = JSON.stringify({ uuid: lbUuid(), name: lbMyName(), save: g.toDict() });
   lastSyncPush = Date.now();
   if (beacon && navigator.sendBeacon) {
@@ -3938,10 +3963,12 @@ function renderLeaderboard(st: State): void {
   const myScore = lbBoard === "zone" ? st.stats.max_zone
                 : lbBoard === "tower" ? st.tower.max_floor
                 : lbBoard === "power" ? (st.power ? heroPower(g, false).total : 0)
+                : lbBoard === "rebirth" ? Math.floor(st.rebirths)
                 : st.level;
   const myLabel = lbBoard === "zone" ? "当前最远区域"
                 : lbBoard === "tower" ? (st.tower.max_floor > 0 ? "塔层" : "塔层(未挑战)")
                 : lbBoard === "power" ? "当前战力(不含增益)"
+                : lbBoard === "rebirth" ? "转生世数(深度加权)"
                 : "等级";
   const youLine = you
     ? (you.inTop
@@ -3985,12 +4012,15 @@ function renderLeaderboard(st: State): void {
         ? `${r.max_zone} 区 · Lv.${r.level}`
         : lbBoard === "power"
         ? `Lv.${r.level} · ${r.max_zone} 区 · 击杀 ${fmt(r.kills)}`
+        : lbBoard === "rebirth"
+        ? `Lv.${r.level} · ${r.max_zone} 区 · 击杀 ${fmt(r.kills)}`
         : `${r.max_zone} 区 · 击杀 ${fmt(r.kills)}`;
       return `<div class="lb-row${r.is_me ? " me" : ""}">
         <span class="lb-no">${medal}</span>
         <span class="lb-name">${esc(r.name)}</span>
         <span class="lb-sub">${sub}</span>
-        <b class="lb-score">${lbBoard === "power" ? fmt(r.score) : r.score}</b></div>`;
+        <b class="lb-score">${lbBoard === "rebirth" ? `×${r.score} 世`
+          : lbBoard === "power" ? fmt(r.score) : r.score}</b></div>`;
     }).join("");
     if (!rows) rows = `<div style="color:var(--dim);padding:26px;text-align:center">虚位以待——成为第一个上榜的深渊行者</div>`;
   } else if (lbErr[lbKey(lbBoard, lbPeriod)]) {
@@ -4014,7 +4044,7 @@ async function lbEnter(): Promise<void> {
   if (!LEADERBOARD_API) return;
   await Promise.all([lbFetch(lbBoard), bossFetch(), arenaFetch()]);
   const lastSub = Number(localStorage.getItem("abyss_lblast") ?? 0);
-  if (Date.now() - lastSub > 10 * 60_000) {
+  if (Date.now() - lastSub > 10 * 60_000 && !lbTestOff()) {   // 测试模式:静默跳过自动提交
     const err = await lbSubmit();
     lbSubmitErr = err && err !== "未配置" ? err : null;
     if (err && err !== "未配置" && err !== "rate limited") toast("排行榜提交失败:" + err);
@@ -4045,7 +4075,7 @@ document.addEventListener("click", (e: MouseEvent) => {
     }
   } else if (act === "board") {
     lbBoard = (el.dataset.a === "level" ? "level" : el.dataset.a === "tower" ? "tower"
-      : el.dataset.a === "power" ? "power" : "zone");
+        : el.dataset.a === "power" ? "power" : el.dataset.a === "rebirth" ? "rebirth" : "zone");
     void lbFetch(lbBoard).then(() => renderNow());
     renderNow();
   } else if (act === "period") {
@@ -4058,6 +4088,7 @@ document.addEventListener("click", (e: MouseEvent) => {
       : lbSection === "arena" ? arenaFetch() : lbFetch(lbBoard)).then(() => renderNow());
     renderNow();
   } else if (act === "submit") {
+    if (lbTestOff()) { toast("测试模式:上传已停用(?lbtest=0 恢复)"); renderNow(); return; }
     void lbSubmit().then(err => {
       lbSubmitErr = err && err !== "未配置" ? err : null;
       if (err) toast(err === "rate limited" ? "提交太频繁,稍后再试" : "提交失败:" + err);
@@ -4075,7 +4106,11 @@ document.addEventListener("click", (e: MouseEvent) => {
         <button class="btn mini" data-lb="rename-save">保存</button>
         <button class="btn mini" data-lb="rename-cancel">取消</button>
       </div>
-      <p style="color:var(--dim);font-size:11.5px;margin-top:8px">留空则使用默认名;敏感词会被替换。</p>`;
+      <p style="color:var(--dim);font-size:11.5px;margin-top:8px">留空则使用默认名;敏感词会被替换。</p>
+      <div class="lb-me-row" style="margin-top:10px">
+        <span style="color:var(--dim);font-size:11.5px">测试模式:本端不上传榜单/存档/快照</span>
+        <button class="btn mini" data-lb="lbtest-toggle">${lbTestOff() ? "已开启 · 点击关闭" : "已关闭 · 点击开启"}</button>
+      </div>`;
     const input = document.getElementById("lb-name-input") as HTMLInputElement | null;
     input?.focus();
   } else if (act === "rename-save") {
@@ -4086,12 +4121,28 @@ document.addEventListener("click", (e: MouseEvent) => {
   } else if (act === "rename-cancel") {
     lbEditing = false;
     renderNow();
+  } else if (act === "lbtest-toggle") {
+    // 测试模式开关(与 URL ?lbtest=1/0 同键):切换后立即生效,五处上传点全部停/恢复
+    localStorage.setItem(LB_TEST_KEY, lbTestOff() ? "0" : "1");
+    toast(lbTestOff() ? "测试模式已开启:本端不再上传排行榜/存档"
+                      : "测试模式已关闭:恢复上传");
+    renderNow();
   }
 });
 // 切到排行榜页时触发拉取(委托里 nav 分支之后仍会冒泡到这里?不会——nav 分支 return 了)
 // 改在 switchTab 钩子:见下方对 switchTab 的包装。
 
 function boot(): void {
+  // 测试模式开关:URL ?lbtest=1/0 持久化到 localStorage(任何构建生效,含 APK WebView
+  // 之外的本机浏览器/部署页);昵称卡内也有开关。只做一次读+写,刷新不带参不重复触发。
+  {
+    const m = /[?&]lbtest=(1|0)/.exec(location.search);
+    if (m) {
+      localStorage.setItem(LB_TEST_KEY, m[1]);
+      toast(m[1] === "1" ? "测试模式已开启:本端不再上传排行榜/存档"
+                         : "测试模式已关闭:恢复上传");
+    }
+  }
   // 数值覆盖(管理面板写、游戏页只读,docs/admin-panel.md §4.4/§7.E):读 localStorage
   // 覆盖键,值 = serializeOverrideFile 输出原文(完整文件 JSON),用 parseOverrideFile
   // 解析后在一切游戏状态构造之前应用;失败仅 console.warn,按默认数值运行。

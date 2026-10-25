@@ -58,8 +58,10 @@ export function validateItemDict(item: any, where: string): SaveIssue[] {
     out.push(issue(`${where}.rarity`, "error",
       `rarity 必须是 6 档稀有度 key 之一(当前 ${fmtVal(item.rarity)}),否则 RARITY_IDX 查不到即崩`));
   }
-  if (!isInt(item.tier) || item.tier < 1) {
-    out.push(issue(`${where}.tier`, "error", `tier 必须为 ≥1 的整数(当前 ${fmtVal(item.tier)})`));
+  if (!isInt(item.tier) || item.tier < 0) {
+    // tier0 合法:tierOf(1,1)=0,1 区 1 层的掉落就是 T0(真实存档存在;
+    // 旧规则 ≥1 对 T0 装备误报 error,2026-10-25 由 RNG 错位暴露)
+    out.push(issue(`${where}.tier`, "error", `tier 必须为 ≥0 的整数(当前 ${fmtVal(item.tier)})`));
   }
   if (!isInt(item.plus) || item.plus < 0) {
     out.push(issue(`${where}.plus`, "error", `plus 必须为 ≥0 的整数(当前 ${fmtVal(item.plus)})`));

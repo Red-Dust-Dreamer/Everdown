@@ -16,13 +16,29 @@ export function questTarget(qt: QuestTypeDef, zone: number): number {
     Math.pow(qt.growth, Math.min(30, Math.max(0, zone - 1)))));
 }
 
-export function rollQuest(zone: number, rng: PyRandom): Quest {
-  const qt = rng.choice(QUEST_TYPES);
+export function rollQuest(zone: number, rng: PyRandom, ctx?: { stage?: number; bossKills?: number }): Quest {
+  // boss 任务可达性过滤(留存诊断建议2):13/16 流失者挂着进度永 0% 的 boss 任务——
+  // boss 在每区第 10 层,推不到就永远 0%。只在「已杀过 boss 或已推进至第 7 层」后进池
+  const pool = QUEST_TYPES.filter(qt =>
+    qt.type !== "boss" || (ctx?.bossKills ?? 0) > 0 || (ctx?.stage ?? 10) >= 7);
+  const qt = rng.choice(pool);
   const target = questTarget(qt, zone);
   const t = (zone - 1) * 10;
   const goldBase = BAL.gold0 + BAL.gold_k * Math.pow(t, BAL.gold_p);
   const gold = Math.trunc(goldBase * qt.goldK * (1 + rng.uniform(0, 0.3)));
   return { type: qt.type, target, progress: 0, gold, stones: qt.stones };
+}
+
+/** 新手固定任务链(留存诊断建议2):开局三条 = 击杀 10 → 强化 1 次 → 升到 Lv3,
+ *  均可在开局 2 分钟内完成,建立「目标→奖励」循环;奖励口径与 rollQuest(zone=1) 同 */
+export function starterQuests(rng: PyRandom): Quest[] {
+  const goldBase = BAL.gold0 + BAL.gold_k * Math.pow(0, BAL.gold_p);
+  const mk = (type: string, target: number): Quest => {
+    const qt = QUEST_TYPES.find(t2 => t2.type === type)!;
+    return { type, target, progress: 0,
+      gold: Math.trunc(goldBase * qt.goldK * (1 + rng.uniform(0, 0.3))), stones: qt.stones };
+  };
+  return [mk("kill", 10), mk("enhance", 1), mk("level", 3)];
 }
 
 export function questDesc(q: Quest): string {

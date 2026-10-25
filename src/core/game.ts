@@ -208,8 +208,7 @@ export class Game {
     this.recalcHero();
     this.hero.hp = this.hero.max_hp;
     this.log("欢迎来到深渊。先选择你的职业。", "bright_cyan");
-    this.quests = [systems.rollQuest(1, this.rng), systems.rollQuest(1, this.rng),
-      systems.rollQuest(1, this.rng)];
+    this.quests = systems.starterQuests(this.rng);   // 新手固定可达链(留存诊断建议2)
   }
 
   // ================================================================ 事件
@@ -335,8 +334,9 @@ export class Game {
       if (s.cls === cid && s.unlock <= 1) { this.loadout.passive.push(s.id); break; }
     }
     // 悬赏按新局重掷(目标随区域缩放,旧深区目标在新局无从完成)
-    this.quests = [systems.rollQuest(startZone, this.rng), systems.rollQuest(startZone, this.rng),
-      systems.rollQuest(startZone, this.rng)];
+    this.quests = [systems.rollQuest(startZone, this.rng, this.questCtx()),
+      systems.rollQuest(startZone, this.rng, this.questCtx()),
+      systems.rollQuest(startZone, this.rng, this.questCtx())];
     this.recalcHero();
     this.hero.hp = this.hero.max_hp;
     const cls = CLASSES[cid];
@@ -555,6 +555,7 @@ export class Game {
       this.log(`⇧ 升级!Lv.${this.level}  (+${Math.trunc(this.hero.max_hp - before)} 生命)`,
         "bright_yellow");
       this.toast(`升级 → Lv.${this.level}`);
+      this.questProgress("level", this.level);   // level 型任务:达到语义,progress 取 max
       for (const which of ["active", "passive"] as const) {
         const pool = which === "active" ? ACTIVE_SKILLS : PASSIVE_SKILLS;
         for (const s of pool) {
@@ -1567,7 +1568,7 @@ export class Game {
     if (this.gold < cost) { this.toast(`金币不足(需要 ${fmt(cost)})`); return; }
     this.gold -= cost;
     this.questRerollCount += 1;
-    for (const q of this.quests) Object.assign(q, systems.rollQuest(this.zone, this.rng));
+    for (const q of this.quests) Object.assign(q, systems.rollQuest(this.zone, this.rng, this.questCtx()));
     this.log(`🔄 悬赏已刷新(${this.questRerollCount}/${BAL.quest_reroll_max})`, "bright_cyan");
     this.toast("悬赏已刷新");
   }
@@ -1810,7 +1811,8 @@ export class Game {
     for (const q of this.quests) {
       if (this.questDailyCount >= BAL.quest_daily_limit) break;  // 今日已达上限:后续槽位冻结
       if (q.type === qtype && q.progress < q.target) {
-        q.progress += n;
+        // level 型是「达到」语义:取 max 而非累计(升到 Lv3 不会因反复升级重复计数)
+        q.progress = q.type === "level" ? Math.max(q.progress, n) : q.progress + n;
         if (q.progress >= q.target) {
           this.gold += q.gold;
           this.stones += q.stones;
@@ -1822,10 +1824,15 @@ export class Game {
           this.questDailyCount += 1;
           if (this.questDailyCount === BAL.quest_daily_limit)
             this.log(`今日悬赏已达上限(${BAL.quest_daily_limit}个),明日刷新。`, "bright_black");
-          Object.assign(q, systems.rollQuest(this.zone, this.rng));
+          Object.assign(q, systems.rollQuest(this.zone, this.rng, this.questCtx()));
         }
       }
     }
+  }
+
+  /** 悬赏生成的可达性上下文:boss 任务只发给杀过 boss 或已推到第 7 层的人 */
+  questCtx(): { stage: number; bossKills: number } {
+    return { stage: this.stage, bossKills: this.stats.boss_kills };
   }
 
   // ================================================================ 杂项

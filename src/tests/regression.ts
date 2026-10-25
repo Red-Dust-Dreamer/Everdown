@@ -3282,6 +3282,84 @@ function testExtendedMonsters(): void {
   }
 }
 
+// ================================================================ 56. 留存优化批次(新手任务链/倍速/ranger补偿/挂机保底)
+function testRetentionBatch(): void {
+  // —— 建议2:新档开局三条固定可达链(击杀10→强化1→Lv3),不再随机出 boss ——
+  const g = newGame(430001);
+  g.chooseClass("warrior");
+  eq(g.quests.map(q => q.type).join(","), "kill,enhance,level", "开局三条固定链(kill/enhance/level)");
+  eq(g.quests[0].target, 10, "链1:击杀 10");
+  eq(g.quests[1].target, 1, "链2:强化 1 次");
+  eq(g.quests[2].target, 3, "链3:升到 Lv3");
+  ok(g.quests.every(q => q.gold > 0), "链奖励金币为正");
+
+  // level 型「达到」语义:报升级后的等级,取 max 不累计(重复升级不会叠计数)
+  g.gainXp(Math.trunc(BAL.xp_req0));                        // → Lv2
+  eq(g.quests[2].progress, 2, "Lv2 时 level 进度=2(达到语义,非累计)");
+  g.gainXp(500);                                             // → Lv3+(Lv2 需求 223)
+  // gainXp 只可能触发 level 链完成(kill/enhance 均未做),done≥1 即 level 达标;
+  // 完成后槽位被补位任务替换(不再是 level 型)
+  ok(g.stats.quest_done >= 1, "Lv3 达成即完成 level 任务");
+  ok(g.quests.every(q => q.type !== "level"), "完成后槽位补位(不再挂 level 任务)");
+  const doneBefore = g.stats.quest_done;
+  g.gainXp(100000);                                          // 连升多级
+  eq(g.stats.quest_done, doneBefore, "level 任务完成后不重复计(补位任务不受影响)");
+
+  // boss 可达过滤:未见过 boss 时补位/刷新不出 boss;见过后恢复
+  const g2 = newGame(430002);
+  g2.chooseClass("mage");
+  g2.stage = 1; g2.stats.boss_kills = 0;
+  g2.questProgress("kill", 10);   // 完成开局 kill 链 → 触发补位 rollQuest(带 ctx)
+  ok(g2.quests.every(q => q.type !== "boss"), "补位任务不分配 boss(未见过 boss)");
+  const r3 = new PyRandom(7);
+  let bossLeak = 0;
+  for (let i = 0; i < 200; i++)
+    if (rollQuest(1, r3, { stage: 1, bossKills: 0 }).type === "boss") bossLeak++;
+  eq(bossLeak, 0, "未见过 boss 时 200 连 roll 不出 boss 任务");
+  const r4 = new PyRandom(7);
+  const withCtx = new Set<string>();
+  for (let i = 0; i < 200; i++) withCtx.add(rollQuest(1, r4, { stage: 1, bossKills: 3 }).type);
+  ok(withCtx.has("boss"), "杀过 boss 后 boss 任务恢复进池");
+  const r5 = new PyRandom(7);
+  const byStage = new Set<string>();
+  for (let i = 0; i < 200; i++) byStage.add(rollQuest(1, r5, { stage: 7, bossKills: 0 }).type);
+  ok(byStage.has("boss"), "推到第 7 层后 boss 任务恢复进池");
+
+  // —— 建议3:2x 倍速 Lv5 解锁 ——
+  eq(BAL.speed_unlock[1], 5, "2x 倍速解锁等级 = Lv5");
+  eq(BAL.speed_unlock[2], 30, "3x 倍速解锁等级保持 Lv30");
+
+  // —— 建议4:ranger hp 乘数补偿 0.95→1.05 ——
+  eq(CLASSES.ranger.base.hp, 1.05, "ranger hp 乘数 1.05");
+
+  // —— 建议5:挂机掉落保底 tier ≥ floor(lv/div) ——
+  eq(BAL.farm_drop_tier_div, 3, "保底除数常量");
+  const g5 = newGame(430005);
+  g5.chooseClass("ranger");
+  g5.level = 30;
+  g5.recalcHero();
+  g5.mode = "farm";              // 挂 1 区(tier 0 怪),Lv30 → 保底 tier 10
+  let gotFloor = false;
+  for (let i = 0; i < 30000 && !gotFloor; i++) {
+    g5.tick(0.1);
+    g5.events.length = 0;
+    gotFloor = g5.bag.some(it => it.tier >= 10);
+  }
+  ok(gotFloor, "farm 模式 Lv30 掉落出现 tier≥10(保底生效,怪本身 tier0)");
+  const g6 = newGame(430005);
+  g6.chooseClass("ranger");
+  g6.level = 30;
+  g6.recalcHero();
+  g6.mode = "push";
+  let anyDrop = false;
+  for (let i = 0; i < 30000; i++) {
+    g6.tick(0.1);
+    g6.events.length = 0;
+    if (g6.bag.length > 0) anyDrop = true;
+  }
+  ok(anyDrop, "push 模式正常掉落(保底三元仅 farm 分支,push 路径不变)");
+}
+
 const TESTS: [string, () => void][] = [
   ["1.RNG(MT19937 与 CPython 对拍)", testRng],
   ["2.职业选择(handleKey/chooseClass/recalc)", testClassChoose],
@@ -3339,6 +3417,7 @@ const TESTS: [string, () => void][] = [
   ["53.异步切磋(对战:固定seed三次逐位eq/平局判攻方/镜像自己胜/面板差驱动)", testArenaSim],
   ["54.异步切磋(战绩计数/称号阈值10胜50胜/不重复发/无资源奖励)", testArenaRecord],
   ["55.异步切磋(存档:旧档v9补默认0胜0负/往返保真/fromDict防御/validateSaveDict规则)", testArenaSave],
+  ["56.留存优化(新手任务链/boss可达过滤/level达到语义/倍速Lv5/ranger补偿/挂机掉落保底)", testRetentionBatch],
 ];
 
 let failed = 0;
