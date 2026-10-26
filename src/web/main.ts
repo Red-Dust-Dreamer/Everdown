@@ -47,7 +47,11 @@ const SAVE_KEY = "abyss_save_v2";
 /** 数值覆盖 localStorage 键(契约 §7.E:面板写、本页只读;与 admin-dom.ts OVR_KEY 同名) */
 const OVR_KEY = "abyss_admin_overrides_v1";
 const TICK = 0.1;
-const MAX_STEPS = 10;
+/** 单次回调在线补 tick 上限(秒):超出部分整段离线折算,避免一次性上千 tick 卡死 UI。
+ *  与 RESOLVE_MIN_SEC 对齐——主循环兜底(容器切后台不触发 visibilitychange、只剩被
+ *  OS 节流的定时器)与回切懒结算走同一条降级线。 */
+const CATCHUP_MAX_SEC = 30;
+const MAX_STEPS = CATCHUP_MAX_SEC / TICK;
 const AUTOSAVE_MS = 10_000;
 const RESOLVE_MIN_SEC = 30;
 const RENDER_MS = 200;
@@ -935,7 +939,7 @@ function sfxDebug(): string {
   const plays = [...sfxPlays.entries()].map(([k, n]) => `${k.split("-").pop()}:${n}`).join(" ") || "0";
   return `on=${sfxOn} ready=${ready}/${SFX_FILES.length} ctx=${sfxCtx?.state ?? "none"} ` +
     `bgm=${bgmOn ? (bgmSrc ? "playing" : bgmBuf ? "ready" : "missing") : "off"} ` +
-    `vol=${Math.round(masterVol * 100)} [${plays}]`;
+    `vol=${Math.round(masterVol * 100)} fx=${fxLiveCount}/${FX_BUDGET}${fxPerf.lowFx ? "(低特效)" : ""} [${plays}]`;
 }
 
 initSfx();
@@ -990,8 +994,11 @@ function drainEvents(): void {
         // 怪物普攻:冲撞动作 + 英雄侧爪痕 + 撞击音(受击红晕在 heroHurt)
         monLunge();
         const hp = heroSidePx();
+        // 爪痕随怪物属性色(毒绿/炎红/冰蓝…):取怪物名行 c-<color> 类映射色系
+        const mc = document.querySelector(".mon-name")?.className.match(/c-([a-z_]+)/)?.[1];
+        const monCol = mc && FX_COLORS[mc] ? FX_COLORS[mc][0] : "#ff5a5a";
         if (hp) fxSpawn("fx-slash", hp.x, hp.y + mobRnd(-16, 16),
-          { "--r": `${mobRnd(25, 65)}deg`, "--c1": "#ffb0b0", "--c2": "#ff5a5a", "--s": "0.85" });
+          { "--r": `${mobRnd(25, 65)}deg`, "--c1": "#ffffff", "--c2": monCol, "--s": "0.85" });
         heroHurt();
         playSfx("mob-hit");
       } else if (text === "skill_hit") {
@@ -1016,7 +1023,7 @@ function drainEvents(): void {
       } else if (text.startsWith("dot:")) {
         // 挂上持续伤害的一瞬:怪物位置一小撮同色粒子上浮(状态徽章/泛光由渲染层常驻)
         const def = SKILL_DEF.get(text.slice(4));
-        if (def) fxBoom({ colors: FX_COLORS[def.color] ?? FX_COLORS.white,
+        if (def && !fxPerf.lowFx) fxBoom({ colors: FX_COLORS[def.color] ?? FX_COLORS.white,
           particleCount: 14, origin: stageOrigin(), angle: 90, spread: 46,
           startVelocity: 24, gravity: 0.25, drift: 0, ticks: 280, scalar: 0.8 });
       }
@@ -1128,6 +1135,7 @@ function playMonDie(): void {
   const p = monCenterPx();
   if (!stage || !p) return;
   fxSpawn("fx-die", p.x, p.y);
+  if (fxPerf.lowFx) { playSfx("mon-die"); return; }   // 低特效:只留 CSS 白环+音
   fxBoom({ colors: ["#c8c8d8", "#9a9ab2", "#f2f2f7"], particleCount: 18,
     origin: { x: p.x / stage.clientWidth, y: p.y / stage.clientHeight },
     angle: 90, spread: 360, startVelocity: 34, gravity: 0.9, ticks: 190, scalar: 0.95 });
@@ -1229,8 +1237,55 @@ function nextEvtIsCrit(evs: [string, string, string][], from: number): boolean {
 // cast:<技能id> → 技能 icon 做粒子形状 + 技能色系 + SKILL_FX 模式表差异化发射。
 // (技能伤害命中在核心侧发 skill_hit 而非 hero_attack,天然不与普攻特效重叠)
 
-const fxBoom = confetti.create($("fx-canvas") as HTMLCanvasElement,
+const fxBoomRaw = confetti.create($("fx-canvas") as HTMLCanvasElement,
   { resize: true, useWorker: false, disableForReducedMotion: true });
+
+// ---------------------------------------------------------------- 粒子性能自适应
+// 两道闸:①在世粒子预算(按寿命衰减,超预算按比例裁、池满丢弃新爆发);
+// ②rAF 帧率监控 —— 帧均 >22ms(≈45fps↓)进低特效档(粒子×0.45),
+// >34ms(≈30fps↓)清池救急,回稳 <17.5ms 自动恢复满特效(带滞后防抖)。
+const FX_BUDGET = 240;             // 在世粒子预算(约 240 同屏可稳)
+const fxLive: { n: number; until: number }[] = [];
+let fxLiveCount = 0;
+const fxPerf = { lowFx: false, times: [] as number[], last: 0 };
+
+function fxBoom(opts: confetti.Options): void {
+  const now = performance.now();
+  for (let i = fxLive.length - 1; i >= 0; i--) {
+    if (fxLive[i].until < now) { fxLiveCount -= fxLive[i].n; fxLive.splice(i, 1); }
+  }
+  let n = opts.particleCount ?? 0;
+  if (fxPerf.lowFx) n = Math.round(n * 0.45);
+  if (fxLiveCount + n > FX_BUDGET) {
+    n = FX_BUDGET - fxLiveCount;
+    if (n < 4) return;             // 池满:丢弃本次爆发(比挤爆帧率更重要)
+    opts = { ...opts, particleCount: n };
+  } else if (n !== (opts.particleCount ?? 0)) {
+    opts = { ...opts, particleCount: n };
+  }
+  fxLive.push({ n, until: now + (opts.ticks ?? 200) * 16.7 + 400 });
+  fxLiveCount += n;
+  fxBoomRaw(opts);
+}
+
+function fxPerfFrame(t: number): void {
+  if (fxPerf.last && t - fxPerf.last < 500) fxPerf.times.push(t - fxPerf.last);
+  fxPerf.last = t;
+  if (fxPerf.times.length >= 40) {
+    const avg = fxPerf.times.reduce((a, b) => a + b, 0) / fxPerf.times.length;
+    fxPerf.times.length = 0;
+    if (avg > 34) {
+      if (!fxPerf.lowFx) fxBoomRaw.reset();   // 急救:清空粒子池
+      fxPerf.lowFx = true;
+    } else if (avg > 22) {
+      fxPerf.lowFx = true;
+    } else if (avg < 17.5 && fxPerf.lowFx) {
+      fxPerf.lowFx = false;                    // 回稳恢复满特效
+    }
+  }
+  requestAnimationFrame(fxPerfFrame);
+}
+requestAnimationFrame(fxPerfFrame);
 
 const FX_COLORS: Record<string, string[]> = {
   bright_red: ["#ff6b6b", "#ff9c54", "#ffd9b0"],
@@ -1364,12 +1419,12 @@ function heroSkillDom(sid: string): void {
         { "--r": `${mobRnd(-60, -25)}deg`, "--c1": "#fff3c4", "--c2": "#ffb347", "--s": "1.5" });
       stageShake(200);
       break;
-    case "w_whirl": {  // 旋风斩:刀刃风暴贴着怪物模型高速旋切,转满整个 2 秒引导
-      // 尺寸罩住怪物立绘(留边),头目更大环也更大
+    case "w_whirl": {  // 旋风斩:CC0 像素龙卷风(Pixor tornado 橙金染色)罩住怪物,转满整个 2 秒引导
+      // 尺寸罩住怪物立绘(留边),头目龙卷也更大;略下移让漏斗根部贴怪物脚下
       const art = stage.querySelector<HTMLElement>(".mon-art");
       const monW = art ? art.getBoundingClientRect().width : 120;
       const size = Math.round(Math.max(130, Math.min(200, monW + 46)));
-      fxSpawn("fx-vortex", mx, my, { "--sz": `${size}px` });
+      fxSpawn("fx-vortex", mx, my + size * 0.08, { "--sz": `${size}px` });
       break;
     }
     case "w_warcry":   // 战吼:以英雄为心的三重冲击环
@@ -1580,7 +1635,7 @@ function playSkillFx(sid: string): void {
       }
       break;
   }
-  if (fx.big) stageShake();
+  if (fx.big) ultPunch();
   if (fx.frost) stageFrost();
 }
 
@@ -1591,6 +1646,15 @@ function stageShake(ms = 350): void {
   void st.offsetWidth;   // 重新触发动画
   st.classList.add("shake");
   setTimeout(() => st.classList.remove("shake"), ms);
+}
+/** 大招打击感:镜头急推+重震(合成一条动画,避免与 shake 的 transform 冲突)。
+ *  全屏白闪已按用户反馈移除——酷炫靠位移/缩放/粒子,不靠频闪。 */
+function ultPunch(): void {
+  const st = $("stage");
+  st.classList.remove("ultshake");
+  void st.offsetWidth;   // 重新触发动画
+  st.classList.add("ultshake");
+  setTimeout(() => st.classList.remove("ultshake"), 430);
 }
 /** 全屏结霜覆盖(冰系技能) */
 function stageFrost(ms = 1250): void {
@@ -1971,7 +2035,14 @@ function renderBattle(st: State): void {
   }
   $("equip-mini").innerHTML = `<h3><span class="dot"></span>装备</h3>` + eq;
 
-  if (st.in_tower) {
+  if (bossCast) {
+    // 世界BOSS 挑战演出:层进度 → 倒计时+跳过(BOSS 画面在下方 inner 段渲染)
+    const left = Math.max(0, (bossCast.endAt - Date.now()) / 1000);
+    $("stage-track").innerHTML =
+      `<div class="stage-lbl"><span>🌍 挑战深渊巨兽 · ${left.toFixed(1)}s` +
+      `<span style="color:var(--dim)"> · 主线已暂停</span></span>` +
+      `<span class="act"><button class="btn mini" data-lb="boss_cast_skip">跳过 »</button></span></div>`;
+  } else if (st.in_tower) {
     // 塔副本模式:进度条改为 5 层一段(段末头目),信息与操作全换塔口径
     const floor = st.tower_floor_sel;
     const pos = ((floor - 1) % D.TOWER.boss_every) + 1;
@@ -2009,7 +2080,23 @@ function renderBattle(st: State): void {
 
   const mon = st.monster;
   let inner = "";
-  if (st.respawn > 0) {
+  if (bossCast) {
+    // 世界BOSS 挑战演出:BOSS 立绘 + 全服血条随演出进度推进(伤害开演时已折算定值)
+    const left = Math.max(0, (bossCast.endAt - Date.now()) / 1000);
+    const prog = Math.min(1, 1 - left / bossCast.castSec);
+    const dealt = bossCast.dealt0 + bossCast.dmg * prog;
+    const total = bossData?.total_hp ?? 0;
+    const pct = total > 0 ? Math.min(100, dealt / total * 100) : 0;
+    inner =
+      `<div class="mon-name bright_yellow">深渊巨兽·其之${esc(bossRoundNo(bossData?.round ?? ""))}` +
+        `<span class="tag boss">世界BOSS</span>` +
+        `<span class="tier">本轮伤害 ${fmt(bossCast.dmg)}</span></div>` +
+      `<div class="mon-art spr boss"><img src="${BASE_URL}mon/shard-boss.png" alt="深渊巨兽" draggable="false"` +
+        ` onerror="this.closest('.mon-art').classList.add('imgfail')">` +
+        `<pre class="ascii">     /\\      \n    /  \\     \n   | o* |    \n   |    |    \n  _/____\\_   </pre></div>` +
+      `<div class="boss-hpbar mystery" style="margin-top:10px"><div class="boss-hpfill" style="width:100%"></div>` +
+        `<span class="boss-hptext">血量 ??? · 全服已造成 ${fmt(dealt)} 伤害 · 本轮 ${fmt(bossCast.dmg)}</span></div>`;
+  } else if (st.respawn > 0) {
     inner = `<div class="respawn">☠ 你被击败了…${st.respawn.toFixed(1)} 秒后复活</div>`;
   } else if (mon) {
     const tag = mon.boss
@@ -3480,8 +3567,7 @@ const IS_DEV: boolean = import.meta.env.DEV;
 type LbBoard = "zone" | "level" | "tower" | "power" | "rebirth";
 const LB_BOARDS: LbBoard[] = ["zone", "level", "tower", "power", "rebirth"];
 const LB_BOARD_NAMES: Record<LbBoard, string> =
-  { zone: "主线榜 · 最远区域", level: "等级榜", tower: "爬塔榜 · 深渊塔",
-    power: "战力榜 · 综合强度", rebirth: "转生榜 · 世系深度" };
+  { zone: "主线榜", level: "等级榜", tower: "爬塔榜", power: "战力榜", rebirth: "转生榜" };
 
 interface LbRow { name: string; score: number; kills: number; playtime: number;
                   level: number; max_zone: number; updated_at: number; is_me?: boolean }
@@ -3500,6 +3586,24 @@ const lbErr: Partial<Record<string, string>> = {};
 const lbKey = (b: string, p: LbPeriod): string => `${p}:${b}`;
 let lbSubmitErr: string | null = null;  // 最近一次提交错误:常驻显示,不靠一闪而过的 toast
 let lbBusy = false;
+/** 榜单容器(#lb-list)按内容键重建:renderNow 每 200ms 全量渲染,若无守卫会不断
+ *  重写 innerHTML —— 宽屏下 #lb-list 自身是 overflow:auto 的滚动容器,scrollTop
+ *  每拍归零,表现为「榜单滑不动」(2026-10-25 修复)。mine 卡短小无滚动,照常每帧。 */
+let lbListKey: string | null = null;
+function renderLbList(list: HTMLElement, key: string, html: string): void {
+  if (key === lbListKey && list.innerHTML !== "") return;
+  lbListKey = key;
+  list.innerHTML = html;
+}
+/** 「我的」卡同款键守卫:内容(显示值级)未变不重建 —— 消除 APP 触摸滚动中
+ *  每 200ms 重写 mine 卡造成的闪烁与触摸链断裂。键用最终显示字符串而非原始值
+ *  (如 fmt 缩写后的击杀数),显示不变即不重建。 */
+let lbMineKey: string | null = null;
+function renderLbMine(mine: HTMLElement, key: string, html: string): void {
+  if (key === lbMineKey && mine.innerHTML !== "") return;
+  lbMineKey = key;
+  mine.innerHTML = html;
+}
 let lbEditing = false;        // 昵称编辑中:暂停本页重建,避免输入被打断
 
 // —— 世界BOSS(周轮合力):GET /boss 单端点单缓存(轮次+总血池+贡献榜+上轮 prev) ——
@@ -3512,6 +3616,19 @@ interface BossData {
 let bossData: BossData | null = null;
 let bossErr: string | null = null;
 let bossBusy = false;         // 挑战上传中:防连点并发(次数纯本地记账,单飞即可)
+// —— 世界BOSS 挑战演出(2.8):点击挑战 → 战斗舞台切换为 BOSS 画面,主线冻结
+//    cast_sec 秒(可跳过)。伤害口径不变:核心折算(heroDps×cast_sec×浮动)在开演
+//    时已定值,演出只是把它「演出来」(英雄特效打 BOSS+伤害飘字按节拍撒+全服血条
+//    推进)。会话态不进存档:演出中断(关页/刷新)= 不上传,次数未消耗。 ——
+interface BossCastState {
+  endAt: number;        // 演出结束时刻(ms)
+  dmg: number;          // 开演时折算好的总伤害(结算即上传此值)
+  castSec: number;      // 折算时长(=演出时长)
+  dealt0: number;       // 开演时全服已造成的伤害(血条起点)
+  nextHitAt: number;    // 下一拍特效/飘字时刻
+  done: boolean;        // 已进入结算(防重复)
+}
+let bossCast: BossCastState | null = null;
 /** 轮号 '2026-W43' → 头目序号(BOSS 名『深渊巨兽·其之N』用周序号) */
 function bossRoundNo(round: string): string {
   const m = /^(\d+)-W(\d+)$/.exec(round);
@@ -3704,33 +3821,47 @@ async function bossFetch(): Promise<string | null> {
   } catch { bossErr = "网络错误"; return bossErr; }
 }
 
-/** 世界BOSS挑战:核心折算(吃一次 RNG)→ POST /boss/hit;仅 200 才记次数与最好成绩。
- *  失败 toast『上传失败,次数未消耗』—— 次数纯本地记账,不因网络问题被烧掉。 */
+/** 世界BOSS挑战:核心折算(吃一次 RNG)→ 开启 cast_sec 演出(舞台切 BOSS,主线冻结)
+ *  → 演出结束/跳过才上传 POST /boss/hit;仅 200 才记次数与最好成绩。
+ *  失败 toast 带服务端原因(改档触发包络/墙钟校验时能看清为什么被拒)—— 次数不消耗。 */
 async function bossChallengePost(): Promise<void> {
   if (bossBusy || !LEADERBOARD_API) return;
+  if (bossCast) return;   // 演出进行中
   if (lbTestOff()) { toast("测试模式:上传已停用(?lbtest=0 恢复)"); return; }   // 次数不消耗
   const dmg = g.bossChallenge();
   if (dmg === null) { renderNow(); return; }   // 核心已 toast 拒绝原因(次数用完/未开局)
   bossBusy = true;
-  renderNow();
+  bossCast = { endAt: Date.now() + D.BAL.world_boss_cast_sec * 1000, dmg,
+    castSec: D.BAL.world_boss_cast_sec, dealt0: bossData?.dealt ?? 0,
+    nextHitAt: Date.now() + 600, done: false };
+  renderNow();   // 舞台立即切换为 BOSS 画面
+}
+
+/** 演出结算(自然到点或跳过):上传折算伤害。bossCast 清理与 bossBusy 复位都在此。 */
+async function bossCastFinish(): Promise<void> {
+  const bc = bossCast;
+  if (!bc || bc.done) return;
+  bc.done = true;
   try {
     const ctl = new AbortController();
     const t = setTimeout(() => ctl.abort(), 8000);
     const r = await fetch(`${LEADERBOARD_API}/boss/hit`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ uuid: lbUuid(), name: lbMyName(), dmg,
+      body: JSON.stringify({ uuid: lbUuid(), name: lbMyName(), dmg: bc.dmg,
         kills: g.stats.kills, playtime: Math.trunc(g.playtime), level: g.level }),
       signal: ctl.signal });
     clearTimeout(t);
     const d = await r.json() as { ok?: boolean; error?: string };
     if (r.ok && !d.error) {
-      g.bossHitAccept(dmg);
-      toast(`⚔ 世界BOSS 受到 ${fmt(dmg)} 点伤害!`);
+      g.bossHitAccept(bc.dmg);
+      toast(`⚔ 世界BOSS 受到 ${fmt(bc.dmg)} 点伤害!`);
       await bossFetch();
     } else {
-      toast("上传失败,次数未消耗");
+      // 服务端拒绝原因明示:implausible playtime=超墙钟(改档常见),dmg=超伤害包络
+      toast(`挑战上传被拒:${d.error ?? `HTTP ${r.status}`}(次数未消耗)`);
     }
-  } catch { toast("上传失败,次数未消耗"); }
+  } catch { toast("挑战上传失败:网络错误(次数未消耗)"); }
+  bossCast = null;
   bossBusy = false;
   renderNow();
 }
@@ -3787,12 +3918,12 @@ function sectionSegs(): string {
 /** 切磋分段渲染:上卡 = 战绩;下卡 = 镜像自我(恒在)+ 最多 3 名邻域对手 +
  *  挑战按钮 → 行内播报。紧凑列表,不开弹窗、不遮挡战斗画面。 */
 function renderArena(st: State, mine: HTMLElement, list: HTMLElement): void {
-  mine.innerHTML =
+  renderLbMine(mine, `amine|${st.arena.wins}|${st.arena.losses}`,
     `<h3><span class="dot"></span>⚔ 异步切磋 · 打别人的 build</h3>
      <div class="lb-me-row">
        <div><span class="k">战绩</span><b>${st.arena.wins} 胜 ${st.arena.losses} 负</b></div>
        <span class="lb-rank-badge off">奖励仅称号(10 胜「切磋者」/ 50 胜「角斗士」)</span>
-     </div>`;
+     </div>`);
   const clsName = (c: unknown): string => D.CLASSES[String(c ?? "")]?.name ?? "未知";
   const rows =
     `<div class="lb-row me">
@@ -3812,7 +3943,9 @@ function renderArena(st: State, mine: HTMLElement, list: HTMLElement): void {
     ? `<h3 style="margin-top:14px"><span class="dot"></span>最近战报</h3>` +
       arenaReport.map(l => `<div class="boss-tier"><span class="lbl">${esc(l)}</span></div>`).join("")
     : "";
-  list.innerHTML =
+  renderLbList(list,
+    `arena|${arenaOpps ? `d:${arenaOpps.length}:${arenaOpps[0]?.power ?? 0}` : `e:${arenaErr ?? "load"}`}` +
+    `|${arenaReport ? arenaReport.length + ":" + arenaReport[0] : ""}`,
     `<h3><span class="dot"></span>对手 · 战力邻域采样</h3>
      <div class="lb-segbar">${sectionSegs()}</div>` +
     (arenaErr
@@ -3822,7 +3955,7 @@ function renderArena(st: State, mine: HTMLElement, list: HTMLElement): void {
       ? `<div style="color:var(--dim);padding:14px;text-align:center">暂无其他玩家快照 —— 先与镜像自我过招</div>`
       : "") + report +
     `<p style="color:var(--dim);font-size:11.5px;margin-top:10px">
-     对手快照来自其他玩家周期上传的裁剪阵容,挑战全程在本地模拟;胜负只计战绩与称号,不影响任何资源。</p>`;
+     对手快照来自其他玩家周期上传的裁剪阵容,挑战全程在本地模拟;胜负只计战绩与称号,不影响任何资源。</p>`);
 }
 
 // ================================================================ 存档周期上云(匿名 save-sync)
@@ -3860,33 +3993,38 @@ function renderBoss(st: State, mine: HTMLElement, list: HTMLElement): void {
   const d = bossData;
   const myBest = Math.max(st.boss.my_best, d?.my_dmg ?? 0);
   if (!d) {
-    mine.innerHTML = `<h3><span class="dot"></span>🌍 世界BOSS · 周轮合力</h3>`;
-    list.innerHTML = `<h3><span class="dot"></span>世界BOSS</h3>
-      <div class="lb-segbar">${sectionSegs()}</div>` +
+    renderLbMine(mine, "bmine|load", `<h3><span class="dot"></span>🌍 世界BOSS · 周轮合力</h3>`);
+    renderLbList(list, `boss|load|${bossErr ?? ""}`,
+      `<h3><span class="dot"></span>世界BOSS</h3>
+       <div class="lb-segbar">${sectionSegs()}</div>` +
       (bossErr
         ? `<div class="lb-fail">⚠ 世界BOSS加载失败:${esc(bossErr)}<br>
            <button class="btn mini" data-lb="retry">重试</button></div>`
-        : `<div style="color:var(--dim);padding:26px;text-align:center">加载中…</div>`);
+        : `<div style="color:var(--dim);padding:26px;text-align:center">加载中…</div>`));
     return;
   }
   const pct = d.total_hp > 0 ? Math.min(100, d.dealt / d.total_hp * 100) : 0;
   const attempts = st.boss.attempts;
-  mine.innerHTML =
+  renderLbMine(mine,
+    `bmine|${d.round}|${d.killed ? 1 : 0}|${d.dealt}|${fmt(myBest)}|${attempts}|` +
+    `${bossBusy ? 1 : 0}|${bossCast ? "cast" : ""}|${bossErr ?? ""}`,
     `<h3><span class="dot"></span>🌍 深渊巨兽·其之${esc(bossRoundNo(d.round))}
       ${d.killed ? `<span class="lb-rank-badge in">已击杀!</span>` : ""}</h3>
-    <div class="boss-hpbar">
-      <div class="boss-hpfill${d.killed ? " dead" : ""}" style="width:${pct.toFixed(1)}%"></div>
-      <span class="boss-hptext">全服合力 ${fmt(d.dealt)} / ${fmt(d.total_hp)}(${pct.toFixed(1)}%)</span>
+    <div class="boss-hpbar${d.killed ? "" : " mystery"}">
+      <div class="boss-hpfill${d.killed ? " dead" : ""}" style="width:${d.killed ? 0 : 100}%"></div>
+      <span class="boss-hptext">${d.killed ? "☠ 已被全服击杀!" :
+        `深渊巨兽·血量 ??? · 全服已造成 ${fmt(d.dealt)} 伤害`}</span>
     </div>
     <div class="lb-me-row">
       <div><span class="k">我的最高伤害</span><b>${fmt(myBest)}</b>
         <span class="k" style="margin-left:12px">挑战</span>
         <b>${attempts}/${D.BAL.world_boss_attempts}</b></div>
-      <button class="btn mini" data-lb="boss_challenge">
-        ${bossBusy ? "挑战中…" : attempts >= D.BAL.world_boss_attempts
-          ? "次数已用完" : `⚔ 挑战(${D.BAL.world_boss_cast_sec}s 折算)`}</button>
+      <button class="btn mini" data-lb="boss_challenge"${d.killed || attempts >= D.BAL.world_boss_attempts ? " disabled" : ""}>
+        ${bossCast ? "演出中…" : bossBusy ? "结算中…" : attempts >= D.BAL.world_boss_attempts
+          ? "次数已用完" : d.killed ? "已击杀 · 下周一轮换"
+          : `⚔ 挑战(${D.BAL.world_boss_cast_sec}s)`}</button>
     </div>` +
-    (bossErr ? `<div class="lb-err">⚠ 上次拉取失败:${esc(bossErr)}</div>` : "");
+    (bossErr ? `<div class="lb-err">⚠ 上次拉取失败:${esc(bossErr)}</div>` : ""));
 
   let rows = d.top.map((r, i) => {
     const medal = i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : `${i + 1}`;
@@ -3915,7 +4053,9 @@ function renderBoss(st: State, mine: HTMLElement, list: HTMLElement): void {
       .filter(Boolean).join(" + ");
     return `<div class="boss-tier"><span class="lbl">${label}</span><b class="lb-score">${parts || "—"}</b></div>`;
   };
-  list.innerHTML =
+  renderLbList(list,
+    `boss|${d.round}|${d.dealt}|${d.my_dmg}|${d.top.length}|${d.killed ? 1 : 0}|` +
+    `${prev?.round ?? ""}|${st.boss.claimed.join(",")}`,
     `<h3><span class="dot"></span>贡献榜 · 本轮(伤害只升不降)</h3>
     <div class="lb-segbar">${sectionSegs()}</div>${rows}
     ${claimRow}
@@ -3926,7 +4066,7 @@ function renderBoss(st: State, mine: HTMLElement, list: HTMLElement): void {
     ${tierRow("上轮全服击杀(与左侧叠加)", g.bossClaimTiers({ total_hp: 1000, my_dmg: 50, killed: true }))}
     <p style="color:var(--dim);font-size:11.5px;margin-top:10px">
       每轮 ${D.BAL.world_boss_attempts} 次挑战,伤害按 ${D.BAL.world_boss_cast_sec} 秒输出折算;
-      全服打穿总血池 → 下周头目更强(×1.6),未打穿 → 稍弱(×0.8);周一 0 点轮换(与周榜同口径)。</p>`;
+      巨兽血量深不可测(???):只统计伤害,周一 0 点结算揭晓 —— 全服击杀则下周头目更强,未杀则稍弱。</p>`);
 }
 
 function renderLeaderboard(st: State): void {
@@ -3935,20 +4075,20 @@ function renderLeaderboard(st: State): void {
   if (!st.class_id) {
     // 无职业档:给出明确引导而不是静默空白(排行榜所有内容都依赖职业)
     mine.innerHTML = "";
-    list.innerHTML =
+    renderLbList(list, "noclass",
       `<div style="color:var(--dim);padding:34px 10px;text-align:center;line-height:2">
        ⚔ 还没有选择职业<br>
-       <span style="font-size:12px">选择职业后即可查看排行榜与提交上榜</span></div>`;
+       <span style="font-size:12px">选择职业后即可查看排行榜与提交上榜</span></div>`);
     return;
   }
   if (lbEditing) return;                     // 昵称编辑中不重建(防输入被打断)
 
   if (!LEADERBOARD_API) {
     mine.innerHTML = `<h3><span class="dot"></span>🏆 排行榜</h3>`;
-    list.innerHTML = `<div style="color:var(--dim);padding:34px 10px;text-align:center;line-height:2">
+    renderLbList(list, "noapi", `<div style="color:var(--dim);padding:34px 10px;text-align:center;line-height:2">
       排行榜服务未配置<br>
       <span style="font-size:12px">部署 workers/leaderboard 后,将其地址填入<br>
-      main.ts 的 LEADERBOARD_API 即可启用(匿名上榜,无需登录)</span></div>`;
+      main.ts 的 LEADERBOARD_API 即可启用(匿名上榜,无需登录)</span></div>`);
     return;
   }
   if (lbSection === "boss") { renderBoss(st, mine, list); return; }
@@ -3975,7 +4115,11 @@ function renderLeaderboard(st: State): void {
         ? `<span class="lb-rank-badge in">🏆 第 ${you.rank} 名</span>`
         : `<span class="lb-rank-badge">我的排名:约 #${you.rank}</span>`)
     : `<span class="lb-rank-badge off">未上榜 · 提交后显示估算名次</span>`;
-  mine.innerHTML =
+  const myScoreTxt = lbBoard === "power" ? fmt(myScore) : String(myScore);
+  const killTxt = fmt(st.stats.kills);
+  renderLbMine(mine,
+    `mine|${lbBoard}|${lbMyName()}|${lbBusy ? 1 : 0}|${Math.ceil(cooldown / 60_000)}|` +
+    `${myScoreTxt}|${killTxt}|${you?.rank ?? -1}|${lbSubmitErr ?? ""}`,
     `<h3><span class="dot"></span>🏆 排行榜 · ${lbMyName()}
       <span class="rt">
         <button class="btn mini" data-lb="rename">改名</button>
@@ -3984,13 +4128,15 @@ function renderLeaderboard(st: State): void {
       </span></h3>
     <div class="lb-me-row">
       <div><span class="k">${myLabel}</span>
-        <b>${lbBoard === "power" ? fmt(myScore) : myScore}</b>
-        <span class="k" style="margin-left:12px">击杀</span><b>${fmt(st.stats.kills)}</b></div>
+        <b>${myScoreTxt}</b>
+        <span class="k" style="margin-left:12px">击杀</span><b>${killTxt}</b></div>
       ${youLine}
     </div>` +
     (lbSubmitErr
       ? `<div class="lb-err">⚠ 上次提交失败:${esc(lbSubmitErr)} — 点「${cooldown > 0 ? "刷新" : "提交上榜"}」重试</div>`
-      : "");
+      : ""));
+
+  // —— 榜单
 
   // —— 榜单
   const segs = LB_BOARDS.map(b =>
@@ -4030,12 +4176,15 @@ function renderLeaderboard(st: State): void {
   } else {
     rows = `<div style="color:var(--dim);padding:26px;text-align:center">加载中…</div>`;
   }
-  list.innerHTML =
+  renderLbList(list,
+    `lb|${lbBoard}|${lbPeriod}|` + (d
+      ? `d:${d.top.length}:${d.top[0]?.score ?? 0}:${you?.rank ?? -1}`
+      : `e:${lbErr[lbKey(lbBoard, lbPeriod)] ?? "load"}`),
     `<h3><span class="dot"></span>${LB_BOARD_NAMES[lbBoard]}${lbPeriod === "week" ? "(本周)" : ""}</h3>
     <div class="lb-segbar">${sectionSegs()}</div>
     <div class="lb-segbar">${segs}<span class="lb-seg-split"></span>${periodSegs}</div>${rows}
     <p style="color:var(--dim);font-size:11.5px;margin-top:10px">
-      匿名提交(设备标识,无需登录);仅保留每榜前 50 名,落榜数据不保留;周榜每周一 0 点重置。</p>`;
+      匿名提交(设备标识,无需登录);仅保留每榜前 50 名,落榜数据不保留;周榜每周一 0 点重置。</p>`);
 }
 
 /** 进入排行榜页时自动拉取/按需提交(10 分钟节流);世界BOSS 与切磋对手一并拉取
@@ -4066,6 +4215,8 @@ document.addEventListener("click", (e: MouseEvent) => {
     renderNow();
   } else if (act === "boss_challenge") {
     void bossChallengePost();
+  } else if (act === "boss_cast_skip") {
+    if (bossCast) bossCast.endAt = Date.now();   // 跳过:演出立即结算(伤害/上传不受影响)
   } else if (act === "arena_challenge") {
     arenaChallenge(Number(el.dataset.a ?? "0") || 0);
   } else if (act === "boss_claim") {
@@ -4284,22 +4435,49 @@ function boot(): void {
     void ensureCloud().then(m => { if (m) void m.initCloud(syncOnLogin); });
 
   // 主循环:setInterval 驱动 0.1s 固定步进(与 CLI 一致)。
-  // 页面隐藏时不步进(定时器被节流),回切时用 resolve() 懒结算补算。
+  // 时间供给以 performance.now() 为锚恒定追赶:回调被容器节流/主线程卡顿拉长到多久,
+  // 都按真实流逝追平 tick,保证 1x 下游戏时钟严格 1:1 真实时间(不再"3 秒技能播 8 秒")。
+  // 页面隐藏时不步进也不刷新锚点——acc 静默累积,回切后由 visibilitychange 抢先结算
+  // (并刷新锚点防双算);容器不发 visibility 事件时,累积的 acc 在这里降级结算兜底。
   let last = performance.now();
+  let carry = 0;   // 不足一个 TICK 的余量累积到下次回调——webview 的 setInterval 实际
+                   // 间隔普遍 >100ms(实测 ~137ms),若每次丢弃 acc%TICK 余数,长期流速
+                   // 只有 ~0.73×(1x 下"3 秒技能播 8 秒"的第二来源)
   let hiddenAt = 0;
   setInterval(() => {
-    if (document.hidden) { last = performance.now(); return; }
+    if (document.hidden) return;
     const now = performance.now();
-    let acc = (now - last) / 1000;
+    let acc = carry + (now - last) / 1000;
+    carry = 0;
     last = now;
-    if (acc > 1) acc = 1;
-    let steps = 0;
-    while (acc >= TICK && steps < MAX_STEPS) {
-      g.tick(TICK);
-      acc -= TICK;
-      steps += 1;
+    if (acc > CATCHUP_MAX_SEC) {
+      // 长节流兜底:上限内在线补,超出的整段离线折算。清 hiddenAt 声明"本循环已结算",
+      // 防回切瞬间 timer 抢在 visibilitychange 之前时双重补算(反向顺序由锚点刷新闭环)
+      hiddenAt = 0;
+      if (g.classId !== null) {
+        const rep = systems.resolve(g, acc - CATCHUP_MAX_SEC);
+        g.toast(`补算 ${rep.kills} 击杀 +${rep.gold} 金币`);
+      }
+      acc = CATCHUP_MAX_SEC;
     }
-    drainEvents();
+    let steps = 0;
+    if (bossCast) {
+      // 世界BOSS 演出:主线冻结(不推图),按节拍撒攻击特效与伤害飘字;到点结算
+      if (Date.now() >= bossCast.endAt) void bossCastFinish();
+      else if (Date.now() >= bossCast.nextHitAt) {
+        bossCast.nextHitAt = Date.now() + 450 + Math.random() * 550;
+        playAttackFx(undefined, Math.random() < (g.hero?.crit ?? 5) / 100);
+        spawnFloater(`-${fmt(Math.max(1, Math.round(bossCast.dmg / bossCast.castSec * 0.7)))}`, "#ffd76a");
+      }
+    } else {
+      while (acc >= TICK && steps < MAX_STEPS) {
+        g.tick(TICK);
+        acc -= TICK;
+        steps += 1;
+      }
+      carry = acc;   // <TICK 的余量滚存,长期流速收敛到精确 1:1
+      drainEvents();
+    }
   }, 100);
   setInterval(() => { if (!document.hidden) renderNow(); }, RENDER_MS);
   setInterval(() => { if (!document.hidden) { g.save(); cloudPushDebounced();
@@ -4317,6 +4495,12 @@ function boot(): void {
       if (away >= RESOLVE_MIN_SEC && g.classId !== null) {
         const rep = systems.resolve(g, away);
         g.toast(`页面离开 ${Math.trunc(away / 60)} 分:补算 ${rep.kills} 击杀 +${rep.gold} 金币`);
+      } else if (g.classId !== null && away > TICK) {
+        // 短暂离开(<30s):按真实时间补在线 tick(战斗/buff/CD 全状态连续),
+        // 不再白丢——与主循环恒定追赶同一语义。上限天然 ≤ RESOLVE_MIN_SEC,无降级分支
+        const steps = Math.min(Math.floor(away / TICK), MAX_STEPS);
+        for (let i = 0; i < steps; i++) g.tick(TICK);
+        drainEvents();
       }
       g.save();
       renderNow();

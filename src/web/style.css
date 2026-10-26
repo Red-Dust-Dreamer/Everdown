@@ -22,6 +22,7 @@ body{
   font-family:"Segoe UI","Microsoft YaHei",sans-serif;
   font-size:14px; overflow:hidden; display:flex; flex-direction:column;
   -webkit-tap-highlight-color:transparent;
+  overscroll-behavior:none;   /* 拦 WebView/浏览器下拉刷新:滚到顶再拉不触发整页 reload */
 }
 .mono{font-family:"AbyssMono",Consolas,monospace}
 
@@ -193,7 +194,7 @@ body{
 /* ---------------- 卡片 ---------------- */
 .card{background:linear-gradient(180deg,var(--panel2),var(--panel));
   border:1px solid var(--line);border-radius:12px;padding:13px 15px;min-width:0;flex:none}
-.card.grow{flex:1;min-height:0;overflow:auto}
+.card.grow{flex:1;min-height:0;overflow:auto;overscroll-behavior:contain}
 .card h3{font-size:13px;color:var(--dim);font-weight:600;letter-spacing:1px;
   margin-bottom:10px;display:flex;align-items:center;gap:8px;white-space:nowrap;
   flex-wrap:wrap}
@@ -347,7 +348,19 @@ body{
 /* 飘字 */
 .floater{position:absolute;font-weight:800;pointer-events:none;white-space:nowrap;
   animation:floatup 1.15s ease-out forwards;font-family:"AbyssMono",monospace;font-size:14px}
-.floater.crit{color:var(--gold);font-size:19px;text-shadow:0 0 12px rgba(255,217,74,.7)}
+.floater.crit{color:var(--gold);font-size:19px;
+  text-shadow:0 0 12px rgba(255,217,74,.7),0 2px 0 rgba(120,60,0,.55);
+  animation:floatup 1.15s ease-out forwards,critPop .3s cubic-bezier(.2,1.9,.35,1)}
+@keyframes critPop{0%{scale:1.75}55%{scale:.95}100%{scale:1}}
+/* 大招打击感:镜头急推+重震一体(translate 与 scale 同步衰减) */
+#stage.ultshake{animation:stageUlt .42s cubic-bezier(.2,.8,.3,1)}
+@keyframes stageUlt{
+  0%{transform:translate(0,0) scale(1.055)}
+  15%{transform:translate(-7px,3px) scale(1.048)}
+  35%{transform:translate(6px,-3px) scale(1.032)}
+  55%{transform:translate(-4px,2px) scale(1.016)}
+  75%{transform:translate(3px,-1px) scale(1.005)}
+  100%{transform:translate(0,0) scale(1)}}
 .floater.heal{color:#6bff8f}
 @keyframes floatup{0%{opacity:0;transform:translateY(6px) scale(.85)}
   12%{opacity:1;transform:translateY(0) scale(1)}
@@ -822,7 +835,7 @@ select.sel{background:#1b1b2a;color:var(--txt);border:1px solid var(--line2);
   .nav-item .kbd{display:none}
   .nav-item.on{box-shadow:inset 0 3px 0 var(--red)}   /* 高亮条移到底部 */
   #content{order:1;flex:1;min-height:0;overflow-y:auto;
-    -webkit-overflow-scrolling:touch;padding:10px 10px 16px}
+    -webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding:10px 10px 16px}
   .page{min-height:0}
   .card.grow{overflow:visible;flex:none}   /* 整页滚动,卡片不再内滚 */
 
@@ -939,6 +952,13 @@ select.sel{background:#1b1b2a;color:var(--txt);border:1px solid var(--line2);
 .boss-hpfill{position:absolute;inset:0 auto 0 0;width:0;
   background:linear-gradient(90deg,#7a2438,#c23a55);transition:width .4s ease}
 .boss-hpfill.dead{background:linear-gradient(90deg,#4a3a1e,#8a6a1e)}   /* 已击杀:金色 */
+/* 血量未知(mystery):总血对玩家隐藏,条只表达「深不可测」不表达进度 ——
+   深紫微脉动,与红色的贡献进度条语义区分;main.ts 引用而样式缺定义会退化成满格红条 */
+.boss-hpbar.mystery .boss-hpfill{width:100%;
+  background:linear-gradient(90deg,#2c1f4a,#4a2f7e 55%,#2c1f4a);
+  animation:bossMystery 3.2s ease-in-out infinite}
+.boss-hpbar.mystery{border-color:#3a2a5e}
+@keyframes bossMystery{0%,100%{opacity:.65}50%{opacity:1}}
 .boss-hptext{position:relative;z-index:1;display:block;height:26px;line-height:26px;
   text-align:center;font-size:12px;color:#fff;text-shadow:0 1px 2px #000c;
   font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -1162,35 +1182,33 @@ select.sel{background:#1b1b2a;color:var(--txt);border:1px solid var(--line2);
   box-shadow:0 0 16px var(--c,#7ff0ff);animation:fxDome .7s ease-out forwards}
 @keyframes fxDome{0%{transform:scale(.5);opacity:0}25%{transform:scale(1.05);opacity:.95}
   65%{opacity:.8}100%{transform:scale(1.1);opacity:0}}
-/* 旋风斩:贴着怪物模型高速旋切的刀刃风暴,持续整个 2 秒引导(与引导同长,~2 转/秒)。
-   --sz 由 JS 按怪物立绘宽度定(罩住怪物),默认 170px;内层 ::after 反向再旋一层,
-   双层交错刀刃让"同心+高速"在任意瞬间都读得出来 */
+/* 旋风斩:CC0 像素龙卷风(Pixor tornado,正面视角 6 帧横条,橙金染色,80ms/帧)。
+   帧步进与生命周期两条动画同容器并行(一个动 background-position,一个动
+   transform/opacity,互不冲突);steps(6,end) + 终点 -6×--sz 恰好逐帧对齐。
+   子层只准无限动画(infinite 只有 animationiteration,不冒泡 animationend),
+   移除由容器 fxVortex 一条有限动画的 end 触发(fxSpawn 挂的) */
 .fx-vortex{position:absolute;width:var(--sz,170px);height:var(--sz,170px);
-  margin:calc(var(--sz,170px)/-2) 0 0 calc(var(--sz,170px)/-2);border-radius:50%;
-  background:conic-gradient(from 0deg,
-    transparent 0 20deg,#ffe3bc 30deg,#ff5a3c 52deg,transparent 64deg,
-    transparent 110deg,#ffe3bc 120deg,#ff5a3c 142deg,transparent 154deg,
-    transparent 200deg,#ffe3bc 210deg,#ff5a3c 232deg,transparent 244deg,
-    transparent 290deg,#ffe3bc 300deg,#ff5a3c 322deg,transparent 334deg);
-  -webkit-mask:radial-gradient(circle,transparent 40%,#000 50%,#000 88%,transparent 96%);
-  mask:radial-gradient(circle,transparent 40%,#000 50%,#000 88%,transparent 96%);
-  filter:drop-shadow(0 0 12px rgba(255,120,60,.55));
-  animation:fxVortex 2.05s linear forwards}
-.fx-vortex::after{content:"";position:absolute;inset:14%;border-radius:50%;
-  background:conic-gradient(from 40deg,
-    transparent 0 30deg,#ffd9b0 44deg,#ff9c54 70deg,transparent 84deg,
-    transparent 130deg,#ffd9b0 146deg,#ff9c54 172deg,transparent 186deg,
-    transparent 240deg,#ffd9b0 256deg,#ff9c54 282deg,transparent 296deg);
-  -webkit-mask:radial-gradient(circle,transparent 46%,#000 56%,#000 90%,transparent 96%);
-  mask:radial-gradient(circle,transparent 46%,#000 56%,#000 90%,transparent 96%);
-  opacity:.75;
-  animation:fxVortexInner 2.05s linear forwards}
-@keyframes fxVortex{0%{transform:scale(.35) rotate(0);opacity:0}
-  7%{transform:scale(1) rotate(150deg);opacity:.95}
-  90%{transform:scale(1) rotate(1300deg);opacity:.92}
-  100%{transform:scale(1.1) rotate(1450deg);opacity:0}}
-@keyframes fxVortexInner{0%{transform:rotate(0)}
-  100%{transform:rotate(-1050deg)}}
+  margin:calc(var(--sz,170px)*-.5) 0 0 calc(var(--sz,170px)*-.5);
+  background:url("/fx/whirlwind-orange.png") 0 0/600% 100% no-repeat;
+  image-rendering:pixelated;
+  pointer-events:none;
+  animation:fxVortex 2.05s ease-in-out forwards,
+    fxWhirlLoop .48s steps(6,end) infinite}
+/* 地面尘雾:贴地宽椭圆,横向鼓动翻涌,衔接像素龙卷根部 */
+.fx-vortex::before{content:"";position:absolute;left:-6%;right:-6%;bottom:-6%;height:24%;
+  border-radius:50%;
+  background:radial-gradient(ellipse,#ffd9a8 0%,rgba(255,120,40,.5) 40%,transparent 72%);
+  filter:blur(4px);
+  animation:fxDustPulse .48s ease-in-out infinite alternate}
+@keyframes fxVortex{
+  0%{transform:scale(.45);opacity:0}
+  9%{transform:scale(1);opacity:1}
+  50%{transform:scale(1.03)}
+  88%{transform:scale(1);opacity:.95}
+  100%{transform:scale(1.18);opacity:0}}
+@keyframes fxWhirlLoop{from{background-position:0 0}
+  to{background-position:calc(var(--sz,170px)*-6) 0}}
+@keyframes fxDustPulse{from{transform:scaleX(.86);opacity:.55}to{transform:scaleX(1.14);opacity:.9}}
 /* 闪电链:JS 按起终点生成锯齿 clip-path 的电弧(双闪后消散) */
 .fx-chain{position:absolute;
   background:linear-gradient(180deg,#ffffff,#ffe98a 40%,#5adfff);

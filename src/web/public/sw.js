@@ -4,7 +4,7 @@
  * 或自定义域名根路径),SHELL 相对路径按 SW 脚本所在 URL 解析。
  * 改动任何资源后 sw.js 字节变化即触发更新(bump VERSION 强制全刷)。
  */
-const VERSION = "v30";
+const VERSION = "v31";
 const CACHE = `abyss-idle-${VERSION}`;
 const SHELL = [
   "./",
@@ -47,6 +47,7 @@ const SHELL = [
   "./mon/imp.png", "./mon/imp-boss.png",
   "./mon/hound.png", "./mon/hound-boss.png",
   "./mon/elemental.png", "./mon/elemental-boss.png",
+  "./fx/whirlwind-orange.png",
 ];
 
 self.addEventListener("install", (e) => {
