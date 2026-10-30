@@ -1,5 +1,5 @@
 /** 外围系统:悬赏 / 成就 / resolve 懒结算(与 abyss/systems.py 一致) */
-import { BAL, QUEST_TYPES, RARITY_IDX, ACHIEVEMENTS, ACTIVE_DEF, ALTAR_LINES, TALENTS } from "./data.ts";
+import { BAL, QUEST_TYPES, RARITY_IDX, ACHIEVEMENTS, ACTIVE_DEF, ALTAR_LINES, CLASS_CHAINS, CLASS_CHAIN_SPECIALS, SPARKS, TALENTS } from "./data.ts";
 import type { QuestTypeDef } from "./data.ts";
 import { pyRound, rollItem } from "./items.ts";
 import { mobGold, mobXp, spawnMonster, tierOf } from "./combat.ts";
@@ -67,6 +67,44 @@ export function talentMods(talents: Record<string, number>): StatMod[] {
     const lv = talents[t.id] ?? 0;
     if (lv <= 0) continue;
     mods.push({ stat: t.stat, op: t.op, v: (t.per ?? 0) * lv });
+  }
+  return mods;
+}
+
+/** 星火等级 → 统一修饰器(局内升级点数消费端;与 talentMods 同管道叠加、独立记账,
+ *  CAPS 末端统一截断 —— 在线/离线/战力/切磋四路走 g.hero 自动生效) */
+export function sparkMods(sparkTalents: Record<string, number>): StatMod[] {
+  const mods: StatMod[] = [];
+  for (const s of SPARKS) {
+    const lv = sparkTalents[s.id] ?? 0;
+    if (lv <= 0) continue;
+    mods.push({ stat: s.stat, op: s.op, v: s.per * lv });
+  }
+  return mods;
+}
+
+/** 职业天赋链(2.10)等级 → 统一修饰器:只导出当前职业的链(异职业节点休眠,
+ *  换回即复燃);与 sparkMods 同管道叠加、独立记账,CAPS 末端统一截断 */
+export function classChainMods(g: Game): StatMod[] {
+  const mods: StatMod[] = [];
+  if (!g.classId) return mods;
+  for (const n of CLASS_CHAINS) {
+    if (n.cls !== g.classId) continue;
+    const lv = g.chainTalents[n.id] ?? 0;
+    if (lv <= 0) continue;
+    mods.push({ stat: n.stat, op: n.op, v: n.per * lv });
+  }
+  return mods;
+}
+
+/** 链特别天赋:✵天赋点点亮态(chainPicked[当前职业],一次定型终身有效、转生不清);
+ *  仅导出已点亮条目,每条 flatMap effects 产多属性 StatMod */
+export function chainSpecialMods(g: Game): StatMod[] {
+  const mods: StatMod[] = [];
+  if (!g.classId) return mods;
+  for (const id of g.chainPicked[g.classId] ?? []) {
+    const sp = CLASS_CHAIN_SPECIALS.find(s => s.id === id && s.cls === g.classId);
+    for (const e of sp?.effects ?? []) mods.push({ stat: e.stat, op: e.op, v: e.v });
   }
   return mods;
 }
@@ -302,7 +340,7 @@ export function resolve(g: Game, elapsed: number): ResolveReport {
     if (mon.boss) chance = BAL.boss_drop;
     if (g.rng.random() < chance) {
       const item = rollItem(mon.tier, g.rng, g.hero.luck ?? 0,
-        mon.boss ? 2 : 0, mon.boss ? 0.6 : mon.elite ? 0.25 : 0, g.classId, g.zone);
+        mon.boss ? 2 : 0, mon.boss ? 0.6 : mon.elite ? 0.25 : 0, g.classId);
       if (rep.items.length < BAL.offline_item_cap) rep.items.push(item);
       g.addItem(item);
       if (RARITY_IDX[item.rarity] >= 2) g.questProgress("loot", 1);

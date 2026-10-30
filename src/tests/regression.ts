@@ -15,9 +15,9 @@ import { PyRandom } from "../core/rng.ts";
 import { Game, installSaveHooks, migrateSave, SAVE_VERSION, suitMods, currentWeekKey } from "../core/game.ts";
 import type { SaveHooks } from "../core/game.ts";
 import { View } from "../core/view.ts";
-import { handleKey } from "../core/host.ts";
+import { handleKey, autopilot } from "../core/host.ts";
 import { renderFrame } from "../core/render.ts";
-import { BAL, CLASSES, ACHIEVEMENTS, MONSTERS, ART, ACTIVE_DEF, ACTIVE_SKILLS, RARITY_IDX, TOWER, SUITS, SUIT_DEF, THEMES, ULTS, ULT_DEF, STAT_NAMES, VIRTUAL_STATS, TITLES } from "../core/data.ts";
+import { BAL, CLASSES, ACHIEVEMENTS, MONSTERS, ART, ACTIVE_DEF, ACTIVE_SKILLS, RARITY_IDX, TOWER, SUITS, SUIT_DEF, THEMES, ULTS, ULT_DEF, STAT_NAMES, VIRTUAL_STATS, TITLES, SPARK_DEF, CHAIN_DEF, CLASS_CHAINS, CLASS_CHAIN_SPECIALS } from "../core/data.ts";
 import type { ActiveSkill } from "../core/data.ts";
 import { Monster, battleTick, tierOf, mobGold, _dmg, spawnMonster } from "../core/combat.ts";
 import { towerMonster, refreshKeys, towerGold } from "../core/tower.ts";
@@ -29,7 +29,7 @@ import { fmt, dwidth } from "../core/ansi.ts";
 import { buffPct, atkNow, skillVal, effLv, dmgMultipliers } from "../core/skills.ts";
 import { heroPower, powerWithEquip, powerWithRelic } from "../core/power.ts";
 import type { ResolveReport } from "../core/systems.ts";
-import { resolve, resolveOffline, rollQuest, heroDps } from "../core/systems.ts";
+import { resolve, resolveOffline, rollQuest, heroDps, classChainMods, chainSpecialMods } from "../core/systems.ts";
 import { validateSaveDict } from "../core/savefile.ts";
 import { makeSquad, parseSquad, arenaSimulate } from "../core/arena.ts";
 
@@ -2155,7 +2155,7 @@ function testGearSuitsCore(): void {
     eq(s.bonus4.v, v4, `${id} bonus4.v`);
     eq(SUIT_DEF[id], s, `SUIT_DEF 索引指向同一定义`);
   }
-  eq(BAL.suit_drop_chance, 0.10, "BAL.suit_drop_chance = 0.10");
+  eq("suit_drop_chance" in (BAL as Record<string, unknown>), false, "BAL.suit_drop_chance 已删(2.9 渠道收拢进塔,必掉+定向补缺)");
   // 效果键必须都有中文名:套装文案(suitEffText)直查 STAT_NAMES,缺键=裸键名(crit_extra
   // 这类)漏给玩家 —— 2026-10 实测焚天/食腐 4 件曾裸键漏出,此处表驱动兜死
   for (const s of SUITS) {
@@ -2166,41 +2166,20 @@ function testGearSuitsCore(): void {
     ok(STAT_NAMES[k] !== undefined, `虚拟属性「${k}」有中文名`);
   }
 
-  // ---- ② 固定种子下 suitId 判定确定(zone=2 → 掉落判定走表全 s1)
-  const rollSuits = (zone: number, seed: number): string[] => {
-    const rng = new PyRandom(seed);
-    const out: string[] = [];
-    for (let i = 0; i < 500; i++) {
-      const it = rollItem(10, rng, 0, 0, 0, "warrior", zone);
-      if (it.suitId) out.push(it.suitId);
-    }
-    return out;
-  };
-  const s1a = rollSuits(2, 426300), s1b = rollSuits(2, 426300);
-  eqStrArr(s1a, s1b, "同种子同参两次 roll 的套装命中序列一致(判定确定)");
-  ok(s1a.length > 10, `500 次 roll 应命中多件套装(实际 ${s1a.length},掉率 10%)`);
-  ok(s1a.every(x => x === "s1"), `zone=2(废弃矿坑)套装件全为 s1(实际 ${s1a.join(",")})`);
-  const zone1 = rollSuits(1, 426300);
-  ok(zone1.length > 0 && zone1.every(x => x === "s0"), "zone=1(幽暗森林)全为 s0");
-  const zone9 = rollSuits(9, 426300);
-  ok(zone9.length > 0 && zone9.every(x => x === "s0"), "zone=9(幽暗森林·深度2,≡1 mod 8)轮换回 s0");
-  // zone 缺省(admin-save 5 参造件路径)→ 永不产出套装,普通件不锁定
-  const rngNoZone = new PyRandom(426300);
-  let suitCnt = 0;
+  // ---- ② 野外/无 opts 路径零套装产出(2.9 渠道收拢进塔);opts 两参数定向
+  const rng0 = new PyRandom(426300);
+  let plainCnt = 0;
   for (let i = 0; i < 500; i++) {
-    const it = rollItem(10, rngNoZone, 0, 0, 0, "warrior");
-    if (it.suitId) suitCnt++;
-    else eq(it.locked, false, "无套装标记的件不锁定");
+    const it = rollItem(10, rng0, 0, 0, 0, "warrior");
+    if (it.suitId) plainCnt++;
+    else eq(it.locked, false, "普通件不锁定");
   }
-  eq(suitCnt, 0, "zone 缺省不产出套装件");
-  // 命中套装不掉锁:🔒 只属玩家手动;套装保护由 protectedSuit 独立判定(见 41 组)
-  const rngL = new PyRandom(426300);
-  let first: Item | null = null;
-  for (let i = 0; i < 500 && !first; i++) {
-    const it = rollItem(10, rngL, 0, 0, 0, "warrior", 2);
-    if (it.suitId) first = it;
-  }
-  ok(first !== null && !first.locked, "套装件掉落不锁定(保护与玩家锁定解耦)");
+  eq(plainCnt, 0, "野外 rollItem(无 opts)500 次零套装产出(2.9 渠道收拢进塔)");
+  const suitIt = rollItem(10, new PyRandom(426301), 0, 0, 0, "warrior", { suitId: "s2" });
+  eq(suitIt.suitId, "s2", "opts.suitId 定向标记生效(塔掉落路径)");
+  ok(!suitIt.locked, "套装件不掉锁(🔒 只属玩家手动,保护由 protectedSuit 独立判定)");
+  const slotIt = rollItem(10, new PyRandom(426302), 0, 0, 0, "warrior", { suitId: "s1", slot: "ring" });
+  eq(slotIt.slot, "ring", "opts.slot 定向槽位生效(塔补缺路径)");
 
   // ---- ③ 凑 2/4 件 hero 属性变化与 SUITS 表逐项 eq(全 8 套表驱动;未选职业=纯净基线)
   // 槽位用 weapon/helmet/armor/amulet:common+主值0 → 零自身属性(boots/ring 有固有,避开)
@@ -2283,7 +2262,7 @@ function testGearSuitsCore(): void {
   eq(Item.fromDict({ ...d, suit_id: undefined }).suitId, null, "旧档无 suit_id 字段 → null 兜底");
 }
 
-// ================================================================ 41. 深渊套装(折现防护:腾位/无可让位兜底/档位豁免/配额清理)
+// ================================================================ 41. 深渊套装(折现防护:腾位/无可让位兜底/档位豁免;一键清理不受保护)
 function testGearSuitsSalvageGuard(): void {
   // ---- ① 背包满 + auto_equip 开 + auto_sell_idx=2:未凑齐套装件不被折现,腾位卖可让位最低 score 件
   const g = newGame(426310);
@@ -2354,14 +2333,25 @@ function testGearSuitsSalvageGuard(): void {
   eq(g4.gold - gold4, fifth.sellPrice(), "④第 5 件折现金正确");
   eq(g4.bag.filter(it => it.suitId === "s2").length, 4, "④前 4 件原封不动");
 
-  // ---- ⑤ 一键出售配额:同套 6 件全品质在档,一键出售只清 2 件(每套保底剩 4)
+  // ---- ⑤ 一键出售/批量分解:手动批量路径不受套装保护(玩家显式意图,保留手段是 🔒)
   const g5 = newGame(426314);
   g5.chooseClass("warrior");
   for (let i = 0; i < 6; i++) {
     g5.bag.push(new Item("ring", "common", 5, 5, [], 0, `六件套${i}`, undefined, "atk", null, "s4"));
   }
+  g5.toggleLock(0);                       // 锁住第 1 件:验证 🔒 仍是有效保留手段
   g5.sellJunk(5);
-  eq(g5.bag.filter(it => it.suitId === "s4").length, 4, "⑤六件套一键出售后剩 4 件(配额=6-4)");
+  eq(g5.bag.filter(it => it.suitId === "s4").length, 1, "⑤六件套一键出售后仅锁定件保留(其余全清,不再配额保底)");
+  ok(g5.bag[0]!.locked, "⑤留下的正是手动锁定件");
+  // 未凑齐(<4)的套装件同样放行:换区过时半成品套必须能一键清掉,否则背包被占死
+  const g6 = newGame(426315);
+  g6.chooseClass("warrior");
+  for (let i = 0; i < 2; i++) {
+    g6.bag.push(new Item("ring", "common", 5, 5, [], 0, `半成品${i}`, undefined, "atk", null, "s5"));
+  }
+  ok(g6.protectedSuit(g6.bag[0]!), "⑤前提:未凑齐件在自动路径仍受保护(protectedSuit)");
+  g6.dismantleJunk(5);
+  eq(g6.bag.filter(it => it.suitId === "s5").length, 0, "⑤未凑齐套装件一键分解全放行(手动路径)");
 }
 
 // ================================================================ 42. 深渊套装(换装守卫:手动必弹/自动静默/不顶待确认)
@@ -2441,7 +2431,7 @@ function testGearSuitsSwapGuard(): void {
   eq(g4.equip.weapon, strongerNorm, "普通件之间自动换装照常");
 }
 
-// ================================================================ 43. 深渊套装(分区特产/塔中口径/旧档v9/管理校验)
+// ================================================================ 43. 深渊套装(野外零产出/塔中口径/旧档v9/管理校验)
 function testGearSuitsZoneTowerMigrate(): void {
   const stubDrop = (g: Game): void => { (g.rng as any).random = () => 0.0; };
   const unstub = (g: Game): void => { delete (g.rng as any).random; };
@@ -2450,11 +2440,11 @@ function testGearSuitsZoneTowerMigrate(): void {
     return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, "0")}-${String(t.getDate()).padStart(2, "0")}`;
   })();
 
-  // ---- 分区特产:战斗链路真掉落(桩 0.0 → 掉落判定与套装判定必中),主题按区走表
+  // ---- 野外零产出(2.9):战斗链路真掉落(桩 0.0 → 掉落判定必中)也不出套装件
   const dropSuitIn = (zone: number): string => {
     const g = newGame(426330 + zone);
     g.chooseClass("warrior");               // zone=1 刷怪(非精英,drop_chance 口径稳定)
-    g.zone = zone;                          // 击杀前切区:rollItem 读 g.zone 定主题
+    g.zone = zone;                          // 击杀前切区:rollItem 已不读 zone(渠道收拢)
     g.stage = 3;
     g.monster!.hp = 0.001;
     stubDrop(g);
@@ -2463,14 +2453,13 @@ function testGearSuitsZoneTowerMigrate(): void {
     const suit = [...Object.values(g.equip), ...g.bag].find(it => it.suitId);
     return suit?.suitId ?? "";
   };
-  eq(dropSuitIn(1), "s0", "第1区(幽暗森林,≡1 mod 8)挂机掉落可观察到 s0 套装件");
-  eq(dropSuitIn(2), "s1", "第2区(废弃矿坑)掉 s1 套——不同区特产不同套装");
-  eq(dropSuitIn(9), "s0", "第9区(幽暗森林·深度2)主题轮换回 s0");
+  eq(dropSuitIn(1), "", "第1区挂机(掉落判定必中)零套装产出 —— 渠道已收拢进塔");
+  eq(dropSuitIn(2), "", "第2区零套装产出(区主题不再参与掉落判定)");
 
-  // ---- 塔中击杀:同样走 rollItem;套装主题按进塔前 g.zone、tier 按塔层(预期行为锁定)
+  // ---- 塔中击杀:必掉段套装件(与掉落判定无关);第5层属 1-10 层段 → s0/tier10
   const gt = newGame(426339);
   gt.chooseClass("warrior");
-  gt.zone = 2;                              // 进塔前在矿坑
+  gt.zone = 2;                              // 进塔前在矿坑(旧口径会掉 s1,新口径与 zone 无关)
   gt.tower.keys = 1;
   gt.tower.max_floor = 4;
   gt.tower.last_refresh = today;            // 击杀路径守卫:rollDaily 补钥 no-op
@@ -2481,9 +2470,9 @@ function testGearSuitsZoneTowerMigrate(): void {
   battleTick(gt, 0.05);
   unstub(gt);
   const tSuit = [...Object.values(gt.equip), ...gt.bag].find(it => it.suitId);
-  ok(tSuit !== undefined, "塔中击杀同样掉套装件");
-  eq(tSuit?.suitId ?? "", "s1", "塔中套装主题按进塔前 g.zone(矿坑→s1,非 bug 为预期)");
-  eq(tSuit?.tier ?? 0, 5, "塔中套装件 tier 按塔层(第5层)");
+  ok(tSuit !== undefined, "塔中击杀必掉段套装件(不依赖概率判定)");
+  eq(tSuit?.suitId ?? "", "s0", "第5层属 1-10 层段 → s0(层段映射,与进塔前 zone 无关)");
+  eq(tSuit?.tier ?? 0, 10, "套装件 tier 按层段档(1-10 层 → tier10)");
 
   // ---- 旧档 v9(条目无 suit_id、档无 boss/arena 字段)migrateSave+fromDict 开局正常
   const legacy = newGame(426340);
@@ -3024,7 +3013,7 @@ function testArenaSquad(): void {
   g.equipSkill("m_fire", "active");
   g.equipSkill("pm_affin", "passive");
   // 穿一件套装标记装备(直接打 suitId,确定;suits 字段依赖 gear-suits 的 SUIT_DEF 口径)
-  const it = rollItem(10, g.rng, 0, 0, 0, "mage", 1);
+  const it = rollItem(10, g.rng, 0, 0, 0, "mage");
   it.suitId = "s2";                    // 焚天
   g.equip[it.slot] = it;
   g.recalcHero();
@@ -3360,6 +3349,456 @@ function testRetentionBatch(): void {
   ok(anyDrop, "push 模式正常掉落(保底三元仅 farm 分支,push 路径不变)");
 }
 
+// ================================================================ 58. 星火(升级得点/消费三拦/修饰管道/转生熄灭/存档v12)
+function testSpark(): void {
+  const mem = memHooks();
+  const g = newGame(426406);
+  g.chooseClass("warrior");
+
+  // —— 得点:每级 BAL.spark_per_lv 点;一次 gainXp 多级按级差补发(离线批量同路径)——
+  g.xp = 0;
+  g.gainXp(g.xpReq());
+  g.gainXp(g.xpReq());
+  g.gainXp(g.xpReq());
+  eq(g.level, 4, "三次单级 gainXp → Lv4");
+  eq(g.spark, 3 * BAL.spark_per_lv, "每升 1 级得 1 点(表驱动)");
+  ok(g.sparkHinted, "首次得点置引导位(瞬态)");
+  ok(g.events.some(e => e[0] === "log" && e[1].includes("星火 +1")), "首次得点 core 侧引导 log");
+  const lv0 = g.level, sp0 = g.spark;
+  g.gainXp(g.xpReq() * 20);            // 单次连升多级
+  ok(g.level > lv0, "单次大额 gainXp 连升多级");
+  eq(g.spark, sp0 + (g.level - lv0) * BAL.spark_per_lv, "多级单次按级差累加(增量计数器)");
+
+  // —— 消费三拦:余额不足(双断言不扣不升)/精确扣费(首级 cost0、次级 cost0+step)/满级 null ——
+  const atkDef = SPARK_DEF["s_atk"];
+  eq(g.sparkCost("s_atk"), atkDef.cost0, "锋芒首级费用 = cost0");
+  g.spark = 0;
+  g.sparkUp("s_atk");
+  eq(g.sparkLevel("s_atk"), 0, "星火不足拒绝购买");
+  eq(g.spark, 0, "拒绝不扣点");
+  g.spark = atkDef.cost0;
+  g.sparkUp("s_atk");
+  eq(g.sparkLevel("s_atk"), 1, "锋芒 Lv1");
+  eq(g.spark, 0, "首级精确扣费(cost0)");
+  g.spark = 1000;
+  g.sparkUp("s_atk");
+  eq(g.spark, 1000 - (atkDef.cost0 + atkDef.costStep), "次级费用 = cost0 + costStep×1");
+  while (g.sparkCost("s_atk") !== null) { g.spark = 1000; g.sparkUp("s_atk"); }
+  eq(g.sparkLevel("s_atk"), atkDef.maxLv, "可升至满级");
+  eq(g.sparkCost("s_atk"), null, "满级后费用 null");
+
+  // —— 修饰管道:纯档(无装备)sparkMods → recalcHero 乘区/加区 ——
+  const gp = newGame(426407);
+  gp.chooseClass("warrior");
+  const atk0 = gp.hero.atk, hp0 = gp.hero.max_hp;
+  gp.spark = 1;
+  gp.sparkUp("s_atk");
+  close(gp.hero.atk, atk0 * (1 + SPARK_DEF["s_atk"].per / 100), "锋芒 Lv1:攻击 +4% 走 pct 乘区");
+  gp.spark = 1;
+  gp.sparkUp("s_hp");
+  close(gp.hero.max_hp, hp0 * (1 + SPARK_DEF["s_hp"].per / 100), "薪血 Lv1:生命 +5%");
+  gp.spark = 100;
+  gp.sparkUp("s_regen");
+  gp.sparkUp("s_regen");
+  close(gp.hero.kill_heal ?? 0, SPARK_DEF["s_regen"].per * 2, "烬暖 Lv2:kill_heal(VIRTUAL 预置 0)+1.2×2");
+
+  // —— 转生熄灭:spark/消费表/引导位清零;essence/talents 照旧;面板回无星火基线 ——
+  gp.essence = 7;
+  gp.talents = { t_atk: 2 };
+  gp.recalcHero();
+  gp.level = BAL.rebirth_min_level;
+  gp.zone = BAL.rebirth_depth_ref;
+  gp.runMaxZone = BAL.rebirth_depth_ref;
+  gp.rebirth();
+  eq(gp.spark, 0, "转生熄灭:持有点清零");
+  eq(Object.values(gp.sparkTalents).reduce((s, v) => s + v, 0), 0, "星火等级表全空(Σ级=0)");
+  eq(gp.sparkHinted, false, "引导位随新局重置");
+  ok(gp.essence > 7, "魂晶照常发放(星火零折算,不改深渊天赋经济)");
+  eq(gp.talents.t_atk, 2, "深渊天赋不受星火共存影响");
+  const twin = newGame(426408);
+  twin.chooseClass("warrior");
+  twin.rebirths = gp.rebirths;
+  twin.talents = { ...gp.talents };
+  twin.recalcHero();
+  close(gp.hero.atk, twin.hero.atk, "面板回无星火基线(加成随重置消失)");
+
+  // —— 离线共用入口冒烟:resolve 短时推进升级,spark 同步(证 gainXp 单点接线)——
+  const go = newGame(426409);
+  go.chooseClass("warrior");
+  const lvA = go.level, spA = go.spark;
+  resolve(go, 600);
+  ok(go.level > lvA, "离线短时推进升级");
+  eq(go.spark, spA + (go.level - lvA) * BAL.spark_per_lv, "离线击杀走 gainXp 同步发点");
+
+  // —— 存档 v12:往返保真 / 防御(未知剔除、超界钳制、负值钳0)/ v11 链式迁移 ——
+  const g4 = newGame(426410);
+  g4.chooseClass("mage");
+  g4.spark = 5;
+  g4.sparkTalents = { s_atk: 2, s_crit: 1 };
+  g4.save();
+  const d = JSON.parse(mem.raw);
+  eq(d.version, SAVE_VERSION, "toDict 写当前版本号");
+  eq(d.spark, 5, "spark 入档");
+  eq(d.spark_talents.s_atk, 2, "spark_talents 入档");
+  const g5 = Game.fromDict(d);
+  eq(g5.spark, 5, "往返 spark 保真");
+  eq(g5.sparkLevel("s_atk"), 2, "往返星火等级保真");
+  const bad = JSON.parse(JSON.stringify(d));
+  bad.spark = -3;
+  bad.spark_talents = { bad_spark: 9, s_atk: 99 };
+  const g6 = Game.fromDict(bad);
+  eq(g6.spark, 0, "负 spark 载入钳 0");
+  eq(g6.sparkLevel("bad_spark"), 0, "未知星火节点载入剔除");
+  eq(g6.sparkLevel("s_atk"), SPARK_DEF["s_atk"].maxLv, "值超 maxLv 钳到满级");
+  const v11 = JSON.parse(JSON.stringify(d));
+  v11.version = 11;
+  delete v11.spark;
+  delete v11.spark_talents;
+  const m12 = migrateSave(v11);
+  eq(m12.version, SAVE_VERSION, "v11 起步链式迁移至当前版本(v12 段)");
+  eq(m12.spark, 0, "v11 旧档星火默认 0");
+  ok(m12.spark_talents && Object.keys(m12.spark_talents).length === 0, "v11 旧档星火表默认空");
+
+  // —— validateSaveDict:合法无告警;负值/未知键/超界逐条 warn ——
+  eq(validateSaveDict(d).filter(i => i.field.startsWith("spark")).length, 0, "合法星火无告警");
+  const vi = validateSaveDict({ ...d, spark: -1, spark_talents: { bad_spark: 1 } });
+  ok(vi.some(i => i.field === "spark"), "负 spark 告警");
+  ok(vi.some(i => i.field === "spark_talents.bad_spark"), "未知星火节点键告警");
+  ok(validateSaveDict({ ...d, spark_talents: { s_atk: 99 } })
+    .some(i => i.field === "spark_talents.s_atk"), "星火级超 maxLv 告警");
+}
+
+// ================================================================ 59. 职业天赋链(前置解锁/消费三拦/✵天赋点一次定型/职业隔离/转生换职业/存档v14)
+function testClassChain(): void {
+  const mem = memHooks();
+  const g = newGame(426501);
+  g.chooseClass("warrior");
+
+  // —— A 前置解锁:入口未点亮 → 支首 gated(购买三不变);点亮 1 级解锁三支;支内逐级前置 ——
+  ok(g.chainGated("wa1"), "入口未点亮:支首 wa1 被前置拦截");
+  ok(!g.chainGated("w0"), "入口自身无前置");
+  eq(g.chainCost("w0"), CHAIN_DEF["w0"].cost0, "入口首级费用 = cost0");
+  g.spark = 100;
+  const sp0 = g.spark;
+  g.chainUp("wa1");
+  eq(g.chainLevel("wa1"), 0, "gated 购买不生效");
+  eq(g.spark, sp0, "gated 不扣星火");
+  eq(g.chainBoughtNow(), 0, "gated 不计终身累计");
+  ok(toastTexts(g).some(t => t.includes("战魂燃烧")), "gated toast 指路前置名");
+  g.chainUp("w0");
+  eq(g.chainLevel("w0"), 1, "入口 Lv1(点亮)");
+  ok(!g.chainGated("wa1"), "入口点亮 ≥1 级解锁三支");
+  ok(g.chainGated("wa2"), "支内逐级前置:wa1 未满 → wa2 gated");
+
+  // —— B 消费三拦:次级 cost0+costStep 精确扣同一 spark 池;满级 null;余额不足不扣不升 ——
+  const c1 = CHAIN_DEF["w0"].cost0 + CHAIN_DEF["w0"].costStep;
+  eq(g.chainCost("w0"), c1, "次级费用 = cost0 + costStep×1");
+  const s1 = g.spark;
+  g.chainUp("w0");
+  eq(g.chainLevel("w0"), 2, "入口 Lv2");
+  eq(g.spark, s1 - c1, "次级精确扣费(扣同一 spark 池)");
+  eq(g.chainBought["warrior"], 2, "每买 1 级终身累计 +1");
+  while (g.chainCost("w0") !== null) g.chainUp("w0");
+  eq(g.chainLevel("w0"), CHAIN_DEF["w0"].maxLv, "入口可升至满级");
+  eq(g.chainCost("w0"), null, "满级后费用 null");
+  eq(g.chainBought["warrior"], 3, "满级过程累计 3 级");
+  g.spark = 0;
+  g.chainUp("wa1");
+  eq(g.chainLevel("wa1"), 0, "余额不足不升");
+  eq(g.spark, 0, "余额不足不扣");
+  g.spark = CHAIN_DEF["wa1"].cost0;
+  const atk0 = g.hero.atk;
+  g.chainUp("wa1");
+  eq(g.chainLevel("wa1"), 1, "支首 Lv1");
+  close(g.hero.atk, atk0 * (1 + CHAIN_DEF["wa1"].per / 100), "蛮击 Lv1:atk pct 走 mods 乘区");
+
+  // —— C 里程碑三档 → ✵天赋点(有限):跨越只发天赋点不自动生效;点亮前零加成 ——
+  const c = newGame(426502);
+  c.chooseClass("warrior");
+  c.spark = 100;
+  c.chainUp("w0");                          // 点亮入口(累计 1)
+  c.chainBought["warrior"] = 49;            // 造态:再买 1 级即跨 50
+  c.recalcHero();
+  c.chainUp("wa1");
+  eq(c.chainBought["warrior"], 50, "跨 50 档:累计已购 +1");
+  eq(c.chainLevel("wa1"), 1, "跨档照常买成支首");
+  ok(toastTexts(c).some(t => t.includes("天赋点")), "跨 50:天赋点 toast");
+  ok(c.events.some(e => e[0] === "log" && e[1].includes("天赋殿堂")), "跨 50:天赋殿堂 log 指路");
+  // 达标 ≠ 生效:点亮前面板零特别加成(对照 twin)
+  const twin0 = newGame(426507);
+  twin0.chooseClass("warrior");
+  const b200 = newGame(426506);
+  b200.chooseClass("warrior");
+  b200.chainBought = { warrior: 200 };
+  b200.recalcHero();
+  close(b200.hero.atk, twin0.hero.atk, "200 级达标未点亮:零特别天赋加成(天赋点须手点)");
+  // 表推导:按已点亮 id 列表算期望(纯档对拍)
+  const expectStat = (ids: string[], stat: string): { pct: number; add: number } => {
+    let pct = 1, add = 0;
+    for (const sp of CLASS_CHAIN_SPECIALS) {
+      if (!ids.includes(sp.id)) continue;
+      for (const e of sp.effects) {
+        if (e.stat !== stat) continue;
+        if (e.op === "pct") pct *= 1 + e.v / 100;
+        else add += e.v;
+      }
+    }
+    return { pct, add };
+  };
+  const pickPanel = (seed: number, bought: number, ids: string[]) => {
+    const p = newGame(seed);
+    p.chooseClass("warrior");
+    p.chainBought = { warrior: bought };
+    for (const id of ids) p.chainSpecialPick(id);
+    p.recalcHero();
+    return p;
+  };
+  // 2 选 1:两条 T1 候选各自点亮均按表生效(不同构筑)
+  const p1 = pickPanel(426503, 50, ["sp_w1"]);
+  close(p1.hero.max_hp, twin0.hero.max_hp * expectStat(["sp_w1"], "hp").pct, "sp_w1:hp +6% pct 乘区");
+  eq(p1.hero.kill_heal, expectStat(["sp_w1"], "kill_heal").add, "sp_w1:kill_heal +2 点(VIRTUAL 预置 0)");
+  const p1b = pickPanel(426504, 50, ["sp_w1b"]);
+  ok(p1b.hero.haste > twin0.hero.haste, "sp_w1b(另一候选):haste 生效(不同构筑)");
+  close(p1b.hero.atk, twin0.hero.atk * expectStat(["sp_w1b"], "atk").pct, "sp_w1b:atk +4%");
+  // 一次定型:同档第二点被拦,面板不变
+  const c2 = pickPanel(426505, 50, ["sp_w1"]);
+  const atkBefore = c2.hero.atk;
+  c2.chainSpecialPick("sp_w1b");
+  eq(c2.chainPicked["warrior"]!.length, 1, "一次定型:同档第二点不写入");
+  close(c2.hero.atk, atkBefore, "一次定型:被拦后面板不变");
+  ok(toastTexts(c2).some(t => t.includes("一次定型")), "一次定型 toast");
+  // 未达里程碑拦截
+  const c3 = newGame(426506);
+  c3.chooseClass("warrior");
+  c3.chainBought = { warrior: 49 };
+  c3.chainSpecialPick("sp_w1");
+  eq((c3.chainPicked["warrior"] ?? []).length, 0, "未达里程碑:点亮被拦");
+  // 三档全点(T1+T2+T3):乘区连乘 + T3 终极唯一
+  const ids3 = ["sp_w1", "sp_w2", "sp_w3"];
+  const c4 = pickPanel(426508, 200, ids3);
+  close(c4.hero.atk, twin0.hero.atk * expectStat(ids3, "atk").pct, "T1+T2+T3:atk 乘区连乘(+8%×+10%)");
+  close(c4.hero.max_hp, twin0.hero.max_hp * expectStat(ids3, "hp").pct, "T1+T2+T3:hp 乘区连乘");
+  eq(c4.hero.goldfind, expectStat(ids3, "goldfind").add, "T3:goldfind +10 点");
+  eq(c4.hero.deathward, expectStat(ids3, "deathward").add, "T3:deathward +5 点");
+
+  // —— D 职业隔离:warrior 局买 mage 链被拒(spark 不减);mage 档不吃 warrior 特别天赋 ——
+  const w = newGame(426508);
+  w.chooseClass("warrior");
+  w.spark = 100;
+  const wsp = w.spark;
+  w.chainUp("ma1");
+  eq(w.chainLevel("ma1"), 0, "cls 拦截:异职业链不可买");
+  eq(w.spark, wsp, "cls 拦截不扣星火");
+  ok(toastTexts(w).some(t => t.includes("其它职业")), "cls 拦截 toast");
+  ok(w.chainGated("ma1"), "异职业节点 chainGated=true(mods 亦不导出)");
+  const m = newGame(426509);
+  m.chooseClass("mage");
+  m.chainBought = { warrior: 200, mage: 0 };
+  m.chainPicked = { warrior: ["sp_w1", "sp_w2", "sp_w3"] };
+  m.recalcHero();
+  const mTwin = newGame(426510);
+  mTwin.chooseClass("mage");
+  close(m.hero.atk, mTwin.hero.atk, "mage 档不吃 warrior 已点亮特别天赋(换职业休眠)");
+  eq(m.hero.goldfind, 0, "warrior sp_w3 goldfind 不泄漏到 mage 档");
+  eq(chainSpecialMods(m).length, 0, "chainSpecialMods 按 chainPicked[当前职业] 导出(mage 桶空)");
+
+  // —— E 转生/换职业:链级随转生清零;chainBought/chainPicked 终身保留,点亮不回退 ——
+  const e = newGame(426511);
+  e.chooseClass("warrior");
+  e.spark = 100;
+  e.chainUp("w0");
+  e.chainUp("w0");
+  e.chainUp("w0");
+  e.chainUp("wa1");
+  e.chainBought["warrior"] = 100;           // 造态:sp_w1+sp_w2 已点亮
+  for (const id of ["sp_w1", "sp_w2"]) e.chainSpecialPick(id);
+  e.recalcHero();
+  e.level = BAL.rebirth_min_level;
+  e.zone = BAL.rebirth_depth_ref;
+  e.runMaxZone = BAL.rebirth_depth_ref;
+  e.rebirth();
+  eq(Object.values(e.chainTalents).reduce((s, v) => s + v, 0), 0, "转生:链级全清(Σ级=0)");
+  eq(e.chainBought["warrior"], 100, "转生:终身累计不清");
+  eq((e.chainPicked["warrior"] ?? []).length, 2, "转生:天赋点点亮态保留(不回退)");
+  const eTwin = newGame(426512);
+  eTwin.chooseClass("warrior");
+  eTwin.rebirths = e.rebirths;
+  eTwin.level = e.level;
+  eTwin.recalcHero();
+  close(e.hero.atk, eTwin.hero.atk * expectStat(["sp_w1", "sp_w2"], "atk").pct,
+    "转生后已点亮特别天赋仍在(一次定型)");
+  e.level = BAL.rebirth_min_level;          // 攒够门槛二次转生并换职业
+  e.runMaxZone = BAL.rebirth_depth_ref;
+  e.rebirth("mage");
+  eq(e.classId, "mage", "转生换职业成功(职业锁唯一出口)");
+  eq(e.chainBought["warrior"], 100, "换职业:warrior 累计桶保留");
+  eq(e.chainBought["mage"] ?? 0, 0, "换职业:mage 链从零");
+  eq((e.chainPicked["mage"] ?? []).length, 0, "换职业:mage 天赋点从零");
+  ok(!e.chainGated("m0"), "mage 入口无前置可买(换职业后从零开链)");
+  const eTwin2 = newGame(426513);
+  eTwin2.chooseClass("mage");
+  eTwin2.rebirths = e.rebirths;
+  eTwin2.level = e.level;
+  eTwin2.recalcHero();
+  close(e.hero.atk, eTwin2.hero.atk, "warrior 已点亮特别天赋在 mage 局休眠(面板回 mage 基线)");
+
+  // —— F 存档 v14:往返保真 / fromDict 防御(未知 id、异职业、同档重复取首、非数组)/ v13 链式迁移 / validateSaveDict ——
+  const f = newGame(426514);
+  f.chooseClass("ranger");
+  f.spark = 9;
+  f.chainUp("r0");                          // r0 Lv1
+  f.chainBought = { ranger: 201 };
+  f.chainSpecialPick("sp_r1");
+  f.chainSpecialPick("sp_r3");
+  f.recalcHero();
+  f.save();
+  const dd = JSON.parse(mem.raw);
+  eq(dd.version, SAVE_VERSION, "toDict 写当前版本号(14)");
+  eq(dd.chain_talents.r0, 1, "chain_talents 入档");
+  eq(dd.chain_bought.ranger, 201, "chain_bought 入档");
+  ok(Array.isArray(dd.chain_picked.ranger) && dd.chain_picked.ranger.includes("sp_r1"),
+    "chain_picked 入档");
+  const f2 = Game.fromDict(dd);
+  eq(f2.chainLevel("r0"), 1, "往返链级保真");
+  eq(f2.chainBought["ranger"], 201, "往返终身累计保真");
+  eq(f2.chainTierPicked(50), "sp_r1", "往返:50 档点亮态保真");
+  eq(f2.chainTierPicked(200), "sp_r3", "往返:200 档点亮态保真");
+  const bad = JSON.parse(JSON.stringify(dd));
+  bad.chain_talents = { bad_node: 9, r0: -1, ra1: 99, wa1: 2 };
+  bad.chain_bought = { ranger: 30, pirate: 5 };
+  bad.chain_picked = { ranger: ["sp_w1", "nope", "sp_r1b", "sp_r1", "sp_r2"], pirate: ["sp_r1"] };
+  const f3 = Game.fromDict(bad);
+  eq(f3.chainLevel("bad_node"), 0, "未知链节点载入剔除");
+  eq(f3.chainLevel("r0"), 0, "负级载入剔除");
+  eq(f3.chainLevel("ra1"), CHAIN_DEF["ra1"].maxLv, "值超 maxLv 钳到满级");
+  eq(f3.chainLevel("wa1"), 0, "异职业节点载入剔除(ranger 档)");
+  eq(f3.chainBought["pirate"], undefined, "未知职业键载入剔除");
+  eq(f3.chainBought["ranger"], 30, "合法职业键保留");
+  ok((f3.chainPicked["ranger"] ?? []).includes("sp_r2"), "点亮态:合法 id 保留");
+  ok(!(f3.chainPicked["ranger"] ?? []).includes("sp_w1"), "点亮态:异职业 id 剔除");
+  ok(!(f3.chainPicked["ranger"] ?? []).includes("nope"), "点亮态:未知 id 剔除");
+  ok(!(f3.chainPicked["ranger"] ?? []).includes("sp_r1"), "点亮态:同档重复取首(sp_r1b 在前)");
+  eq(f3.chainPicked["pirate"], undefined, "点亮态:未知职业键剔除");
+  const v13 = JSON.parse(JSON.stringify(dd));
+  v13.version = 13;
+  delete v13.chain_picked;
+  const m14 = migrateSave(v13);
+  eq(m14.version, SAVE_VERSION, "v13 起步链式迁移至当前版本(v14 段)");
+  ok(m14.chain_picked && Object.keys(m14.chain_picked).length === 0, "v13 旧档点亮态默认空(三档待点亮)");
+  eq(validateSaveDict(dd).filter(i => i.field.startsWith("chain")).length, 0, "合法链字段无告警");
+  const vc = validateSaveDict({ ...dd,
+    chain_talents: { bad_node: 1, r0: 99 }, chain_bought: { pirate: 3, ranger: -2 },
+    chain_picked: { ranger: ["sp_w1", "sp_r1", "sp_r1"] } });
+  ok(vc.some(i => i.field === "chain_talents.bad_node"), "未知链节点键告警");
+  ok(vc.some(i => i.field === "chain_talents.r0"), "链级超 maxLv 告警");
+  ok(vc.some(i => i.field === "chain_bought.pirate"), "未知职业键告警");
+  ok(vc.some(i => i.field === "chain_bought.ranger"), "累计负值告警");
+  ok(vc.some(i => i.field === "chain_picked.ranger"), "点亮态:异职业 id/同档重复告警");
+
+  // —— G 离线冒烟:链态+天赋点点亮态档重载/resolve 推进后面板链加成仍在(从序列化字段重导,零漂移)——
+  const og = newGame(426515);
+  og.chooseClass("ranger");
+  const hBase = og.hero.haste;              // 基线含职业被动等既有加区
+  og.spark = 100;
+  og.chainUp("r0");
+  og.chainUp("r0");                         // haste +8(4/级 ×2)
+  close(og.hero.haste, hBase + CHAIN_DEF["r0"].per * 2, "r0 两级:haste 精确 +8(加区)");
+  og.chainBought = { ranger: 50 };
+  og.chainSpecialPick("sp_r1");
+  og.recalcHero();
+  og.save();
+  const reloaded = Game.fromDict(JSON.parse(mem.raw));
+  close(reloaded.hero.haste, og.hero.haste, "重载后链加成零漂移(与序列化前同值)");
+  resolve(reloaded, 600);
+  ok(classChainMods(reloaded).some(md => md.stat === "haste" && md.v === CHAIN_DEF["r0"].per * 2),
+    "离线推进后链 mods 仍从序列化字段重导(在线键不增长属预期)");
+  ok(chainSpecialMods(reloaded).some(md => md.stat === "dodge" && md.v === 3),
+    "离线推进后天赋点点亮态 mods 重导(sp_r1 dodge +3)");
+
+  // —— H autopilot 冒烟:星火+链双池候选取全局最便宜;里程碑达标自动点亮表序首选 ——
+  const ag = newGame(426516);
+  ag.chooseClass("warrior");
+  ag.time = 0;                              // autopilot 每 5s 一拍(时间门对齐)
+  ag.spark = 300;
+  for (let i = 0; i < 40; i++) autopilot(ag, true);
+  ok(Object.keys(ag.chainTalents).length > 0, "autopilot 会买链(候选并入职业链)");
+  ok((ag.chainBought["warrior"] ?? 0) > 0, "autopilot 买链计入终身累计(包络参考局覆盖)");
+  ok(ag.spark < 300, "星火被消费(两池共用以最便宜优先)");
+  ag.chainBought["warrior"] = 50;           // 造态:达标未点亮 → autopilot 补点亮
+  autopilot(ag, true);
+  eq(ag.chainTierPicked(50), "sp_w1", "autopilot:达标档点亮表序首选(sp_w1,玩家已选不覆盖)");
+}
+
+// ================================================================ 60. 塔套装(2.9)
+// 渠道收拢进塔:每 10 层一套(段序沿 SUITS 数组循环)、必掉、按未覆盖部位定向补缺、
+// 覆盖满 4 部位即该段毕业回归普通掉落;开局送 2 件 s0(宿主显式调 giveStarterSuit),
+// 野外/离线/锻造零套装产出 —— 背包不再被套装件堆积
+function testTowerSuits(): void {
+  // ---- ① 层段映射:每 10 层一套沿 SUITS 数组序循环,tier 跟 10 层档走
+  const g = newGame(426500);
+  g.chooseClass("warrior");
+  const at = (floor: number, sid: string, tier: number) => {
+    const p = g.towerSuitForFloor(floor);
+    eq(p.suitId, sid, `第${floor}层段套装 = ${sid}`);
+    eq(p.tier, tier, `第${floor}层段 tier = ${tier}`);
+  };
+  at(1, "s0", 10); at(9, "s0", 10); at(10, "s0", 10);
+  at(11, "s1", 20); at(20, "s1", 20); at(21, "s2", 30);
+  at(80, "s7", 80); at(81, "s0", 90);
+
+  // ---- ② 定向补缺:plan 报未覆盖部位(装备+背包合并计);不同 tier 独立;满 4 毕业
+  const g2 = newGame(426501);
+  g2.chooseClass("warrior");
+  const mk = (slot: string, tier: number, n: string) =>
+    new Item(slot, "common", tier, 5, [], 0, n, undefined, "atk", null, "s0");
+  const plan0 = g2.towerSuitPlan(5)!;
+  eq(plan0.covered, 0, "空号从 0 部位起");
+  eqStrArr(plan0.missing, ["weapon", "helmet", "armor", "boots", "amulet", "ring"], "全 6 部位皆缺");
+  g2.equip.weapon = mk("weapon", 10, "a");
+  g2.bag.push(mk("helmet", 10, "b"), mk("armor", 10, "c"));
+  const plan1 = g2.towerSuitPlan(5)!;
+  eq(plan1.covered, 3, "装备中+背包合并计 3 部位");
+  ok(!plan1.missing.includes("weapon") && !plan1.missing.includes("helmet")
+    && !plan1.missing.includes("armor"), "已覆盖部位不再进 missing(缺哪补哪)");
+  g2.bag.push(mk("boots", 20, "d"));
+  eq(g2.towerSuitPlan(5)!.covered, 3, "tier20 件不计入 tier10 段(高段位重刷进度独立)");
+  g2.bag.push(mk("boots", 10, "e"));
+  eq(g2.towerSuitPlan(5), null, "覆盖满 4 部位 → 该段毕业(plan=null)");
+  ok(g2.towerSuitPlan(15) !== null, "毕业只影响本段(s1/tier20 段照常)");
+  const plan15 = g2.towerSuitPlan(15)!;
+  ok(plan15.missing.includes(g2.rollTowerSuitSlot(plan15)), "rollTowerSuitSlot 只从未覆盖部位里出");
+
+  // ---- ③ 塔内实战:必掉段套装件、同段部位不重复、毕业层回归普通掉落
+  const g3 = newGame(426502);
+  g3.chooseClass("warrior");
+  g3.level = 60; g3.recalcHero();
+  g3.tower.keys = 9;
+  g3.towerEnter(1);
+  ok(g3.inTower, "进塔成功(1 层 → s0/tier10 段)");
+  for (let i = 0; i < 4000 && g3.inTower; i++) g3.tick(0.5);
+  ok(!g3.inTower, "钥匙耗尽自动离塔");
+  const drops = g3.bag.filter(it => it.suitId);
+  ok(drops.length >= 3 && drops.length <= 4, `1 层段掉 3~4 件后毕业(实际 ${drops.length})`);
+  ok(drops.every(it => it.suitId === "s0" && it.tier === 10), "掉落件全为 s0/tier10(段映射+tier 跟层)");
+  const seen = new Set<string>();
+  for (const it of drops) {
+    ok(!seen.has(it.slot), `同段掉落部位不重复(${it.slot})`);
+    seen.add(it.slot);
+  }
+
+  // ---- ④ 开局引子:宿主调 giveStarterSuit 送 2 件 s0(weapon+armor);幂等;野外零产出
+  const g4 = newGame(426503);
+  g4.chooseClass("warrior");
+  g4.giveStarterSuit();
+  const starter = g4.bag.filter(it => it.suitId === "s0");
+  eq(starter.length, 2, "开局引子送 2 件 s0");
+  eqStrArr(starter.map(it => it.slot).sort(), ["armor", "weapon"], "送的正是 weapon+armor(2 件效果即刻可穿)");
+  for (let i = 0; i < 3000; i++) g4.tick(0.5);   // 野外 25 分钟(游戏时)
+  eq(g4.bag.filter(it => it.suitId).length, 2, "野外挂机零新增套装件(送件受自动路径保护保留)");
+  g4.giveStarterSuit();
+  eq(g4.bag.filter(it => it.suitId === "s0").length, 2, "幂等:已有 s0 件不重复送(重载/误调安全)");
+}
+
 const TESTS: [string, () => void][] = [
   ["1.RNG(MT19937 与 CPython 对拍)", testRng],
   ["2.职业选择(handleKey/chooseClass/recalc)", testClassChoose],
@@ -3402,9 +3841,9 @@ const TESTS: [string, () => void][] = [
   ["38.每10层首通里程碑宝箱(重铸石)", testTowerMilestone],
   ["39.塔经济全链路(钥匙账/加购/禁转生/boss通道锁定)", testTowerEconomy],
   ["40.深渊套装(表值锚/掉落判定/2-4件加成/存档往返)", testGearSuitsCore],
-  ["41.深渊套装(折现防护:腾位/兜底/档位豁免/凑齐回归/配额)", testGearSuitsSalvageGuard],
+  ["41.深渊套装(折现防护:腾位/兜底/档位豁免;一键清理放行)", testGearSuitsSalvageGuard],
   ["42.深渊套装(换装守卫:手动必弹/自动静默/不顶待确认)", testGearSuitsSwapGuard],
-  ["43.深渊套装(分区特产/塔中口径/旧档v9/管理校验)", testGearSuitsZoneTowerMigrate],
+  ["43.深渊套装(野外零产出/塔中口径/旧档v9/管理校验)", testGearSuitsZoneTowerMigrate],
   ["44.终局一击(表锚/三职业结算对拍1e-9)", testUltTableDamage],
   ["45.终局一击(门槛拒绝/Lv35提示/CD未到无副作用)", testUltGates],
   ["46.终局一击(B1生命周期:新档undefined/重载即放/无NaN)", testUltLifecycle],
@@ -3418,6 +3857,9 @@ const TESTS: [string, () => void][] = [
   ["54.异步切磋(战绩计数/称号阈值10胜50胜/不重复发/无资源奖励)", testArenaRecord],
   ["55.异步切磋(存档:旧档v9补默认0胜0负/往返保真/fromDict防御/validateSaveDict规则)", testArenaSave],
   ["56.留存优化(新手任务链/boss可达过滤/level达到语义/倍速Lv5/ranger补偿/挂机掉落保底)", testRetentionBatch],
+  ["58.星火(升级得点/消费三拦/修饰管道/转生熄灭/离线同入口/存档v12)", testSpark],
+  ["59.职业天赋链(前置解锁/消费三拦/✵天赋点一次定型/职业隔离/转生换职业/存档v14)", testClassChain],
+  ["60.塔套装(层段映射/定向补缺/段毕业/塔内实战不重复/开局引子/野外零产出)", testTowerSuits],
 ];
 
 let failed = 0;

@@ -1,5 +1,5 @@
 /** 平台无关宿主逻辑:按键分发 + autopilot(与 abyss/main.py 一致) */
-import { ACTIVE_SKILLS, PASSIVE_SKILLS, ACTIVE_DEF, ALTAR_LINES, BAL, SLOTS } from "./data.ts";
+import { ACTIVE_SKILLS, PASSIVE_SKILLS, ACTIVE_DEF, ALTAR_LINES, BAL, CLASS_CHAINS, CLASS_CHAIN_SPECIALS, SLOTS, SPARKS } from "./data.ts";
 import type { ActiveSkill } from "./data.ts";
 import type { Game } from "./game.ts";
 
@@ -17,7 +17,10 @@ export function handleKey(g: Game, key: string): KeyResult {
   // 职业选择(新档)
   if (g.classId === null) {
     const cmap: Record<string, string> = { "1": "warrior", "2": "mage", "3": "ranger" };
-    if (cmap[key]) g.chooseClass(cmap[key]);
+    if (cmap[key]) {
+      g.chooseClass(cmap[key]);
+      g.giveStarterSuit();   // 开局套装引子(2.9),与 web 宿主同款;sim 的 autopilot 不送
+    }
     return true;
   }
 
@@ -256,6 +259,27 @@ export function autopilot(g: Game, sim = false, autoRebirth = false): void {
       .map(l => ({ id: l.id, cost: g.altarCost(l.id) }))
       .sort((a, b) => a.cost - b.cost)[0];
     if (cheapest && g.gold > cheapest.cost * 4) g.altarUp(cheapest.id, true);
+  }
+  // 星火+职业链:两个消费端共池,候选合并(链按当前职业过滤且未 gated)取全局
+  // 最便宜一颗(2.10 前链不存在,包络对链玩家偏紧,补上)—— 数值变更后须
+  // npm run gen:lb 重新生成并重新部署两端(server/leaderboard-ecs + workers/leaderboard)
+  if (g.spark > 0) {
+    const buyable = [
+      ...SPARKS.map(s => ({ up: () => g.sparkUp(s.id), cost: g.sparkCost(s.id) })),
+      ...CLASS_CHAINS
+        .filter(n => n.cls === g.classId && !g.chainGated(n.id))
+        .map(n => ({ up: () => g.chainUp(n.id), cost: g.chainCost(n.id) })),
+    ]
+      .filter(x => x.cost !== null && x.cost <= g.spark)
+      .sort((a, b) => (a.cost ?? 0) - (b.cost ?? 0))[0];
+    if (buyable) buyable.up();
+  }
+  // ✵天赋点:里程碑达标而该档未点亮时,点亮表序首选(挂机不欠账;玩家已自选的档不覆盖)
+  const cb = g.chainBought[g.classId ?? ""] ?? 0;
+  for (const need of BAL.chain_milestones) {
+    if (cb < need || g.chainTierPicked(need) !== undefined) continue;
+    const cand = CLASS_CHAIN_SPECIALS.find(s => s.cls === g.classId && s.need === need);
+    if (cand) g.chainSpecialPick(cand.id);
   }
   // farm→push 自动切回已内置于 Game.tick(maybeAutoPush),autopilot 不再重复
 }

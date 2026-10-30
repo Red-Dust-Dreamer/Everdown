@@ -1,6 +1,6 @@
 /** 战斗引擎(与 abyss/combat.py 语义一致,随机全部走 g.rng) */
 import { fmt } from "./ansi.ts";
-import { ACTIVE_DEF as ACTIVE_LOOKUP, ART, BAL, MONSTERS, RARITY_IDX, THEMES } from "./data.ts";
+import { ACTIVE_DEF as ACTIVE_LOOKUP, ART, BAL, MONSTERS, RARITY_IDX, SLOT_NAMES, SUIT_DEF, THEMES } from "./data.ts";
 import type { MobSkill } from "./data.ts";
 import { rollItem } from "./items.ts";
 import * as S from "./skills.ts";
@@ -428,13 +428,31 @@ function onMonsterKilled(g: Game, mon: Monster): void {
   let dropChance: number = BAL.drop_chance;
   if (mon.elite) dropChance = BAL.elite_drop;
   if (mon.boss) dropChance = BAL.boss_drop;
-  if (g.rng.random() < dropChance) {
-    const minIdx = mon.boss ? 2 : 0;
-    const boost = mon.boss ? 0.6 : mon.elite ? 0.25 : 0;
+  const minIdx = mon.boss ? 2 : 0;
+  const boost = mon.boss ? 0.6 : mon.elite ? 0.25 : 0;
+  if (g.inTower) {
+    // 塔掉落(2.9):必掉 1 件段套装件,按未覆盖部位定向补缺(层段→套装映射见
+    // towerSuitForFloor);该段毕业(4 部位齐)后回归普通概率掉落。
+    // 塔内不吃 farm tierFloor(塔层 tier 即装备 tier)
+    const plan = g.towerSuitPlan(g.towerFloorSel);
+    let item: ReturnType<typeof rollItem> | null = null;
+    if (plan) {
+      item = rollItem(plan.tier, g.rng, h.luck ?? 0, minIdx, boost, g.classId,
+        { suitId: plan.suitId, slot: g.rollTowerSuitSlot(plan) });
+    } else if (g.rng.random() < dropChance) {
+      item = rollItem(mon.tier, g.rng, h.luck ?? 0, minIdx, boost, g.classId);
+    }
+    if (item) {
+      g.addItem(item);
+      if (RARITY_IDX[item.rarity] >= 2) g.questProgress("loot", 1);
+      if (plan) g.log(`🎁 ${SUIT_DEF[plan.suitId].name} · ${SLOT_NAMES[item.slot] ?? item.slot} ${plan.covered + 1}/4`, "bright_green");
+      if (RARITY_IDX[item.rarity] >= 3) g.emit("anim", "loot:" + item.rarity);
+    }
+  } else if (g.rng.random() < dropChance) {
     // 挂机掉落保底(留存诊断建议5):挂机层位锚死低 tier 时,tier 下限随等级抬升,
     // 保证长挂玩家攒得出过关装备;推图模式不参与(保持推图 RNG 体验)
     const tierFloor = g.mode === "farm" ? Math.floor(g.level / BAL.farm_drop_tier_div) : 0;
-    const item = rollItem(Math.max(mon.tier, tierFloor), g.rng, h.luck ?? 0, minIdx, boost, g.classId, g.zone);
+    const item = rollItem(Math.max(mon.tier, tierFloor), g.rng, h.luck ?? 0, minIdx, boost, g.classId);
     g.addItem(item);
     if (RARITY_IDX[item.rarity] >= 2) g.questProgress("loot", 1);
     // 紫色(epic)或更好:发掉落光柱事件(宿主表现层用,纯视觉)

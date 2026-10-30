@@ -7,11 +7,11 @@ import { c, fmt } from "./ansi.ts";
 import { battleTick, spawnMonster, tierOf, mobGold } from "./combat.ts";
 import type { Monster } from "./combat.ts";
 import {
-  ACTIVE_DEF, ACTIVE_SKILLS, ACHIEVEMENTS, AFFIX_DEF, ARENA_TITLES, BAL, CAPS, CLASSES, PASSIVE_DEF, PASSIVE_SKILLS,
-  QUEST_TYPES, RARITIES, RARITY_IDX, REDEEM_CODES, SIGNIN_REWARDS, SLOTS, STAT_NAMES, SUIT_DEF, TALENT_DEF, TITLES,
+  ACTIVE_DEF, ACTIVE_SKILLS, ACHIEVEMENTS, AFFIX_DEF, ARENA_TITLES, BAL, CAPS, CHAIN_DEF, CLASSES, CLASS_CHAIN_SPECIALS, PASSIVE_DEF, PASSIVE_SKILLS,
+  QUEST_TYPES, RARITIES, RARITY_IDX, REDEEM_CODES, SIGNIN_REWARDS, SLOTS, SPARK_DEF, STAT_NAMES, SUITS, SUIT_DEF, TALENT_DEF, TITLES,
   WEEKLY_CHEST, WEEKLY_GOALS, TOWER, ALTAR_LINES, POTIONS, ULTS,
 } from "./data.ts";
-import type { ActiveSkill } from "./data.ts";
+import type { ActiveSkill, ChainNodeDef } from "./data.ts";
 import { Item, rollItem, rollItemForged } from "./items.ts";
 import * as RL from "./relics.ts";
 import { Relic } from "./relics.ts";
@@ -21,7 +21,7 @@ import { PyRandom } from "./rng.ts";
 import * as systems from "./systems.ts";
 import * as S from "./skills.ts";
 
-export const SAVE_VERSION = 11;
+export const SAVE_VERSION = 14;
 
 /** 本地日期键 YYYY-MM-DD(签到口径,按玩家本地时区) */
 function todayKey(): string {
@@ -40,6 +40,10 @@ function isoWeekKey(t: Date): string {
 /** 称号 id → 显示名(未知 id 返回原值) */
 function titleName(id: string): string {
   return TITLES.find(t => t.id === id)?.name ?? id;
+}
+/** 职业链前置节点 id(结构即规则):tier1 → 入口 <cls前缀>0;tier≥2 → 同支前一节点 */
+function chainPrevId(d: ChainNodeDef): string {
+  return d.tier <= 1 ? `${d.cls[0]}0` : `${d.cls[0]}${d.branch}${d.tier - 1}`;
 }
 /** 当前 ISO 周键(世界BOSS 用:UI 判定 last_round 是否停在上轮 → 排行榜红点) */
 export function currentWeekKey(): string {
@@ -125,6 +129,14 @@ export class Game {
   essence = 0;                  // 魂晶(转生货币,深渊天赋消费;永久,转生不重置)
   lifetimeEssence = 0;          // 终身累计获得魂晶(成就口径,不含已花费)
   talents: Record<string, number> = {};   // 深渊天赋等级表(节点 id → 级;永久)
+  spark = 0;                    // 星火(局内升级点数,每升 1 级得 BAL.spark_per_lv 点;转生熄灭)
+  sparkTalents: Record<string, number> = {};   // 星火等级表(节点 id → 级;局内,转生重置)
+  sparkHinted = false;          // 本世是否已提示过星火引导(瞬态,不序列化;转生时重置)
+  chainTalents: Record<string, number> = {};   // 职业链等级表(节点 id → 级;局内,转生重置)
+  chainBought: Record<string, number> = {};    // 各职业终身累计已购链级数(职业 id → 级;
+                                               // 永不重置,里程碑与特别天赋判定源,参照 lifetimeEssence)
+  chainPicked: Record<string, string[]> = {};  // 各职业已点亮的特别天赋 id(职业 id → [id];
+                                               // ✵天赋点有限:每档 1 枚一次定型,终身保留转生不清)
   loadout: Loadout = { active: [], passive: [] };
   skillLv: Record<string, number> = {};
   skillCd: Record<string, number> = {};
@@ -257,6 +269,22 @@ export class Game {
     this.spawn();
   }
 
+  /** 开局套装引子(2.9):送 2 件荆棘之誓(武器+护甲,精良保底,tier1 与开局装备持平)
+   *  —— 2 件效果(✦生命+8%)即刻可穿;剩余部位由深渊塔定向掉落(每 10 层一套、
+   *  定向补缺),从第一分钟建立「上塔补齐」的收集目标。
+   *  由宿主在新档首次选职业时调用(web 的 choose_class 指令 / CLI 选职业键),
+   *  不挂在 chooseClass 里 —— 回归测试的大量固定开局基线(纯净背包/纯净属性)不被动。
+   *  已有任何 s0 件则跳过(幂等,转生/重载不重复送) */
+  giveStarterSuit(): void {
+    if (this.classId === null) return;
+    for (const it of [...Object.values(this.equip), ...this.bag]) {
+      if (it?.suitId === "s0") return;
+    }
+    this.addItem(rollItem(1, this.rng, 0, 1, 0, this.classId, { suitId: "s0", slot: "weapon" }), true);
+    this.addItem(rollItem(1, this.rng, 0, 1, 0, this.classId, { suitId: "s0", slot: "armor" }), true);
+    this.log("🎁 荆棘之誓 武器+护甲(2件 ✦生命+8%)· 其余部位在深渊塔掉落", "bright_green");
+  }
+
   // ================================================================ 转生
   /** 门槛:等级达标且不在塔中(战败/换装弹窗无碍,UI 层自行拦截) */
   canRebirth(): boolean {
@@ -310,6 +338,10 @@ export class Game {
     this.equip = {};
     this.bag = [];
     this.skillLv = {};
+    this.spark = 0;               // 星火转生熄灭:不折算魂晶、不保留、无补偿(不改深渊天赋经济)
+    this.sparkTalents = {};
+    this.sparkHinted = false;
+    this.chainTalents = {};       // 链级随星火同熄;chainBought/chainPicked 终身保留,天赋点点亮不回退
     this.buffs = {};
     this.pendingSwap = null;
     this.monster = null;
@@ -393,6 +425,133 @@ export class Game {
   /** 离线收益上限:基础 12h + 天赋「时之沙」每级 +1h */
   offlineCapSec(): number {
     return BAL.offline_cap_sec + this.talentLevel("t_offline") * 3600;
+  }
+
+  // ================================================================ 星火(局内升级点数消费端)
+  sparkLevel(id: string): number {
+    return this.sparkTalents[id] ?? 0;
+  }
+
+  /** 升下一级费用;已满级返回 null */
+  sparkCost(id: string): number | null {
+    const d = SPARK_DEF[id];
+    if (!d) return null;
+    const lv = this.sparkLevel(id);
+    if (lv >= d.maxLv) return null;
+    return d.cost0 + d.costStep * lv;
+  }
+
+  /** 星火无解锁门槛(局内系统,第一世即可用):满级 → 余额 两重拦截,扣点后生效 */
+  sparkUp(id: string): void {
+    const d = SPARK_DEF[id];
+    if (!d) return;
+    const cost = this.sparkCost(id);
+    if (cost === null) { this.toast(`「${d.name}」已满级`); return; }
+    if (this.spark < cost) {
+      this.toast(`星火不足(需要 ★${cost},持有 ★${this.spark})`);
+      return;
+    }
+    this.spark -= cost;
+    this.sparkTalents[id] = this.sparkLevel(id) + 1;
+    this.recalcHero();
+    const lv = this.sparkTalents[id]!;
+    this.log(`★ 星火「${d.name}」升至 Lv.${lv}/${d.maxLv}(★${cost})`, "bright_yellow");
+    this.toast(`${d.name} Lv.${lv}`);
+  }
+
+  // ================================================================ 职业天赋链(星火池第二消费端)
+  chainLevel(id: string): number {
+    return this.chainTalents[id] ?? 0;
+  }
+
+  /** 升下一级费用;已满级返回 null(费用式与 sparkCost 同款) */
+  chainCost(id: string): number | null {
+    const d = CHAIN_DEF[id];
+    if (!d) return null;
+    const lv = this.chainLevel(id);
+    if (lv >= d.maxLv) return null;
+    return d.cost0 + d.costStep * lv;
+  }
+
+  /** 前置推导(结构即规则,无显式 req):tier0=入口无前置;tier1 需入口 ≥1 级;
+   *  tier≥2 需同支前一节点满级;异职业节点一律拒(mods 按 classId 过滤,换职业休眠) */
+  chainGated(id: string): boolean {
+    const d = CHAIN_DEF[id];
+    if (!d || d.cls !== this.classId) return true;
+    if (d.tier === 0) return false;
+    const prev = CHAIN_DEF[chainPrevId(d)];
+    return !prev || this.chainLevel(chainPrevId(d)) < (d.tier === 1 ? 1 : prev.maxLv);
+  }
+
+  /** 当前职业终身累计已购链级数(里程碑与特别天赋判定源) */
+  chainBoughtNow(): number {
+    return this.chainBought[this.classId ?? ""] ?? 0;
+  }
+
+  /** 该档(need)当前职业已点亮的特别天赋 id;未点亮返回 undefined。
+   *  天赋点可用性 = 里程碑已跨 && 该档未点亮 —— 特殊技能点有限:每档恰 1 枚,终身每职业至多 3 枚 */
+  chainTierPicked(need: number): string | undefined {
+    const list = this.chainPicked[this.classId ?? ""] ?? [];
+    return list.find(id => CLASS_CHAIN_SPECIALS.find(s => s.id === id)?.need === need);
+  }
+
+  /** ✵天赋点点亮特别天赋(一次性):四拦 —— 归属职业 → 里程碑已跨 → 该档未点亮
+   *  (一次定型,不可多点不可改选)→ id 属该职业该档候选;点亮即终身生效(转生不清) */
+  chainSpecialPick(id: string): void {
+    const sp = CLASS_CHAIN_SPECIALS.find(s => s.id === id);
+    if (!sp) return;
+    if (sp.cls !== this.classId) { this.toast(`「${sp.name}」属其它职业的天赋殿堂`); return; }
+    const bought = this.chainBought[sp.cls] ?? 0;
+    if (bought < sp.need) {
+      this.toast(`需累计 ${sp.need} 级(当前 ${bought})`);
+      return;
+    }
+    if (this.chainTierPicked(sp.need) !== undefined) {
+      this.toast("该档已点亮,一次定型不可改选");
+      return;
+    }
+    (this.chainPicked[sp.cls] ??= []).push(id);
+    this.recalcHero();
+    this.log(`✵ 消耗天赋点点亮「${sp.name}」(${CLASSES[sp.cls]?.name ?? sp.cls} ${sp.need} 级档,终身定型)`,
+      "bright_magenta");
+    this.toast(`✵ ${sp.name} 点亮`);
+  }
+
+  /** 消费端三重拦截(职业 → 前置 → 满级 → 余额),扣同一 spark 池;
+   *  每次购买 chainBought[职业] +1 并检测里程碑跨越(阈值只升不降) */
+  chainUp(id: string): void {
+    const d = CHAIN_DEF[id];
+    if (!d) return;
+    if (d.cls !== this.classId) { this.toast(`「${d.name}」属其它职业的链`); return; }
+    if (this.chainGated(id)) {
+      const prev = CHAIN_DEF[chainPrevId(d)];
+      this.toast(d.tier === 1 ? `需先点亮「${prev?.name ?? "?"}」` : `需「${prev?.name ?? "?"}」满级`);
+      return;
+    }
+    const cost = this.chainCost(id);
+    if (cost === null) { this.toast(`「${d.name}」已满级`); return; }
+    if (this.spark < cost) {
+      this.toast(`星火不足(需要 ★${cost},持有 ★${this.spark})`);
+      return;
+    }
+    this.spark -= cost;
+    this.chainTalents[id] = this.chainLevel(id) + 1;
+    const before = this.chainBought[d.cls] ?? 0;
+    this.chainBought[d.cls] = before + 1;
+    this.recalcHero();
+    const lv = this.chainTalents[id]!;
+    this.log(`⛓ 链「${d.name}」升至 Lv.${lv}/${d.maxLv}(★${cost})`, "bright_yellow");
+    this.toast(`${d.name} Lv.${lv}`);
+    // 里程碑跨越:before < need ≤ after → +1 枚✵天赋点(有限,档内 2+2+1 选 1,一次定型)
+    const after = before + 1;
+    for (const need of BAL.chain_milestones) {
+      if (before < need && need <= after) {
+        const cands = CLASS_CHAIN_SPECIALS.filter(s => s.cls === d.cls && s.need === need);
+        this.log(`⛓ ${need} 级里程碑达成:✵天赋点 +1,可在链顶「天赋殿堂」点亮特别天赋` +
+          `(${cands.length} 选 1,一次定型)`, "bright_magenta");
+        this.toast(`✵ 天赋点 +1(${need} 级档)`);
+      }
+    }
   }
 
   // ================================================================ 定向锻造(天赋解锁)
@@ -501,6 +660,9 @@ export class Game {
       ...systems.codexMods(this.monKills),
       ...systems.altarMods(this.altarLv),
       ...systems.talentMods(this.talents),
+      ...systems.sparkMods(this.sparkTalents),   // 星火(2.9):局内点数消费端,同管道独立记账
+      ...systems.classChainMods(this),           // 职业链(2.10):按当前职业过滤,同管道独立记账
+      ...systems.chainSpecialMods(this),         // 链特别天赋:✵天赋点点亮态(chainPicked,一次定型)
       ...suitMods(this.equip),          // 深渊套装(2.5):2/4 件效果(先 add 后 pct,无顺序耦合)
       ...(this.classId ? S.passiveMods(this) : []),
       ...RL.relicMods(this.relics),
@@ -542,19 +704,27 @@ export class Game {
   gainXp(n: number): void {
     this.xp += n;
     let leveled = false;
+    let gained = 0;             // 本帧升级数(离线批量补算可连升多级,星火按增量补发)
     while (this.xp >= this.xpReq()) {
       this.xp -= this.xpReq();
       this.level++;
       leveled = true;
+      gained++;
     }
     if (leveled) {
+      // 星火:每升 1 级得点(gainXp 是在线/离线击杀的共用升级入口,单点接线双路径生效)
+      this.spark += gained * BAL.spark_per_lv;
       const before = this.hero?.max_hp ?? 1;
       this.recalcHero();
       const heal = this.hero.max_hp * 0.3;
       this.hero.hp = Math.min(this.hero.max_hp, this.hero.hp + heal);
       this.log(`⇧ 升级!Lv.${this.level}  (+${Math.trunc(this.hero.max_hp - before)} 生命)`,
         "bright_yellow");
-      this.toast(`升级 → Lv.${this.level}`);
+      this.toast(`升级 → Lv.${this.level}(★${this.spark})`);
+      if (!this.sparkHinted) {
+        this.sparkHinted = true;
+        this.log("★ 星火 +1:升级得点,角色页·转生中心·星火分栏消费;转生熄灭", "bright_yellow");
+      }
       this.questProgress("level", this.level);   // level 型任务:达到语义,progress 取 max
       for (const which of ["active", "passive"] as const) {
         const pool = which === "active" ? ACTIVE_SKILLS : PASSIVE_SKILLS;
@@ -595,9 +765,42 @@ export class Game {
     return n;
   }
 
+  /** 塔层段 → 套装映射(2.9):每 10 层一段,段序沿 SUITS 数组循环。
+   *  纯查询不耗 RNG —— 战斗掉落与 UI(塔页/角色页)共用 */
+  towerSuitForFloor(floor: number): { suitId: string; tier: number } {
+    const suit = SUITS[(Math.floor((Math.max(1, floor) - 1) / 10)) % SUITS.length];
+    return { suitId: suit.id, tier: TW.towerRelicTier(floor) };
+  }
+
+  /** 该套该 tier 已覆盖的不同部位(装备中+背包中)。套装按件数激活但一身只有 6 槽,
+   *  同套 4 件必须落在 4 个不同部位才能同时生效 —— 覆盖数即"可穿满"进度 */
+  suitCoverage(suitId: string, tier: number): Set<string> {
+    const covered = new Set<string>();
+    for (const it of [...Object.values(this.equip), ...this.bag]) {
+      if (it?.suitId === suitId && it.tier === tier) covered.add(it.slot);
+    }
+    return covered;
+  }
+
+  /** 塔掉落计划(纯查询):该层的段套装 + 未覆盖部位表;覆盖满 4 部位 = 该段毕业
+   *  返回 null(塔内该层回归普通概率掉落)。掉落侧另调 rollTowerSuitSlot 消耗 RNG */
+  towerSuitPlan(floor: number): { suitId: string; tier: number; covered: number; missing: string[] } | null {
+    const { suitId, tier } = this.towerSuitForFloor(floor);
+    const covered = this.suitCoverage(suitId, tier);
+    if (covered.size >= 4) return null;
+    const missing = SLOTS.filter(s => !covered.has(s.id)).map(s => s.id);
+    return { suitId, tier, covered: covered.size, missing };
+  }
+
+  /** 从未覆盖部位里 roll 一个(掉落侧专用,消耗 RNG) */
+  rollTowerSuitSlot(plan: { missing: string[] }): string {
+    return plan.missing[this.rng.randrange(plan.missing.length)];
+  }
+
   /** 套装收集保护:背包/装备内已有件(it 已计入 suitTotal)—— 同套总数 ≤4 时
-   *  卖掉任一件都会散套,豁免自动出售/一键清理;凑齐 4 件后多出的件回归普通件
-   *  (10% 掉率下不再无限囤积)。与玩家手动 🔒 完全解耦 */
+   *  卖掉任一件都会散套,豁免自动路径(掉落自动出售/背包满自动腾位);凑齐 4 件后
+   *  多出的件回归普通件(10% 掉率下不再无限囤积)。一键出售/批量分解是玩家显式
+   *  操作,不在此列(否则换区后的过时套装永远清不掉,背包被占死)。与手动 🔒 解耦 */
   protectedSuit(it: Item): boolean {
     return !!it.suitId && this.suitTotal(it.suitId) <= 4;
   }
@@ -605,19 +808,6 @@ export class Game {
   /** 新掉落件(尚未入库,须 +1 计入自身)是否受套装收集保护 */
   protectedNewSuit(item: Item): boolean {
     return !!item.suitId && this.suitTotal(item.suitId) + 1 <= 4;
-  }
-
-  /** 各套装可清理配额 = max(0, 全身总件数-4):批量出售/分解用它逐件放行,
-   *  保证清完每套至少剩 4 件 —— 逐件判 protectedSuit 会把"5 件套"整套装卖光
-   *  (每件判定时 total 都 >4),配额制才是"清多余、保成套"的正确语义 */
-  suitQuota(): Record<string, number> {
-    const ids = new Set<string>();
-    for (const it of [...Object.values(this.equip), ...this.bag]) {
-      if (it?.suitId) ids.add(it.suitId);
-    }
-    const q: Record<string, number> = {};
-    for (const sid of ids) q[sid] = Math.max(0, this.suitTotal(sid) - 4);
-    return q;
   }
 
   addItem(item: Item, noAutoSell = false): void {
@@ -742,32 +932,27 @@ export class Game {
     }
   }
 
-  /** 一键出售背包中品质 ≤ maxRid 的装备(默认 1=普通+精良;CLI 键位沿用默认) */
+  /** 一键出售背包中品质 ≤ maxRid 的装备(默认 1=普通+精良;CLI 键位沿用默认)。
+   *  套装件与普通件同权:一键操作是玩家显式意图,保留手段是手动 🔒。
+   *  套装保护只挡自动路径(掉落自动出售/背包满自动腾位)防挂机误卖散套 ——
+   *  配额式"每套保底剩 4 件"曾让换区后的过时套装永远清不掉,背包被占死 */
   sellJunk(maxRid = 1): void {
-    let n = 0, gold = 0, suitKept = 0;
+    let n = 0, gold = 0;
     const keep: Item[] = [];
-    const quota = this.suitQuota();   // 每套最多清到剩 4 件,防整套装被一键卖光
     for (const it of this.bag) {
-      if (!it.locked && RARITY_IDX[it.rarity] <= maxRid
-          && (!it.suitId || (quota[it.suitId] ?? 0) > 0)) {
-        if (it.suitId) quota[it.suitId]!--;
+      if (!it.locked && RARITY_IDX[it.rarity] <= maxRid) {
         gold += it.sellPrice(); n++;
-      } else {
-        // 被套装保护拦下(锁定件不算):说清留下了什么,别让玩家以为是没生效
-        if (!it.locked && it.suitId && RARITY_IDX[it.rarity] <= maxRid) suitKept++;
-        keep.push(it);
-      }
+      } else keep.push(it);
     }
     if (n) {
       this.bag = keep;
       this.gold += gold;
       this.stats.gold_earned += gold;
       this.stats.sold_total = (this.stats.sold_total ?? 0) + n;
-      this.log(`一键出售 ${n} 件 ≤${RARITIES[maxRid].name} (+${fmt(gold)} 金币)` +
-        (suitKept ? `(套装保护 ${suitKept} 件)` : ""), "bright_black");
-      this.toast(`出售 ${n} 件 +${fmt(gold)}` + (suitKept ? `(套装保护${suitKept})` : ""));
+      this.log(`一键出售 ${n} 件 ≤${RARITIES[maxRid].name} (+${fmt(gold)} 金币)`, "bright_black");
+      this.toast(`出售 ${n} 件 +${fmt(gold)}`);
     } else {
-      this.toast(suitKept ? `无可出售(套装保护 ${suitKept} 件)` : "没有可出售的装备");
+      this.toast("没有可出售的装备(锁定件跳过)");
     }
   }
 
@@ -779,21 +964,16 @@ export class Game {
     this.toast(it.locked ? `🔒 已锁定 ${it.name}(不出售/不分解)` : `🔓 已解锁 ${it.name}`);
   }
 
-  /** 一键分解 ≤ 所选品质(跳过锁定件与未凑齐的套装件):金币略高于出售价,史诗+附重铸石 */
+  /** 一键分解 ≤ 所选品质(跳过锁定件):金币略高于出售价,史诗+附重铸石。
+   *  套装件与一键出售同权 —— 显式操作不受套装保护,保留手段是手动 🔒 */
   dismantleJunk(maxRid = 3): void {
-    let n = 0, gold = 0, stones = 0, suitKept = 0;
+    let n = 0, gold = 0, stones = 0;
     const keep: Item[] = [];
-    const quota = this.suitQuota();   // 与一键出售同款:每套最多清到剩 4 件
     for (const it of this.bag) {
-      if (!it.locked && RARITY_IDX[it.rarity] <= maxRid
-          && (!it.suitId || (quota[it.suitId] ?? 0) > 0)) {
-        if (it.suitId) quota[it.suitId]!--;
+      if (!it.locked && RARITY_IDX[it.rarity] <= maxRid) {
         const [g, s] = it.dismantle();
         gold += g; stones += s; n++;
-      } else {
-        if (!it.locked && it.suitId && RARITY_IDX[it.rarity] <= maxRid) suitKept++;
-        keep.push(it);
-      }
+      } else keep.push(it);
     }
     if (n) {
       this.bag = keep;
@@ -802,13 +982,10 @@ export class Game {
       this.stats.gold_earned += gold;
       this.stats.dismantled = (this.stats.dismantled ?? 0) + n;
       this.log(`一键分解 ${n} 件 ≤${RARITIES[maxRid].name} (+${fmt(gold)} 金币` +
-        `${stones ? `, +${stones} 重铸石` : ""})` +
-        (suitKept ? `(套装保护 ${suitKept} 件)` : ""), "bright_magenta");
-      this.toast(`分解 ${n} 件 +${fmt(gold)}金${stones ? `/${stones}石` : ""}` +
-        (suitKept ? `(套装保护${suitKept})` : ""));
+        `${stones ? `, +${stones} 重铸石` : ""})`, "bright_magenta");
+      this.toast(`分解 ${n} 件 +${fmt(gold)}金${stones ? `/${stones}石` : ""}`);
     } else {
-      this.toast(suitKept ? `无可分解(套装保护 ${suitKept} 件)`
-        : "没有可分解的装备(锁定件跳过)");
+      this.toast("没有可分解的装备(锁定件跳过)");
     }
   }
 
@@ -1899,6 +2076,11 @@ export class Game {
       essence: this.essence,
       lifetime_essence: this.lifetimeEssence,
       talents: this.talents,
+      spark: this.spark,
+      spark_talents: this.sparkTalents,
+      chain_talents: this.chainTalents,
+      chain_bought: this.chainBought,
+      chain_picked: this.chainPicked,
       loadout: this.loadout,
       skill_lv: this.skillLv,
       equip: Object.fromEntries(Object.entries(this.equip).map(([k, v]) => [k, v.toDict()])),
@@ -1994,6 +2176,53 @@ export class Game {
         if (def && typeof lv === "number" && Number.isFinite(lv) && lv > 0) {
           g.talents[id] = Math.min(def.maxLv, Math.trunc(lv));
         }
+      }
+    }
+    // 星火(2.9):负值/非数钳 0;spark_talents 照 talents 防御白名单(未知节点剔除)
+    g.spark = Number.isFinite(d.spark) ? Math.max(0, Math.trunc(d.spark)) : 0;
+    g.sparkTalents = {};
+    if (d.spark_talents && typeof d.spark_talents === "object" && !Array.isArray(d.spark_talents)) {
+      for (const [id, lv] of Object.entries(d.spark_talents as Record<string, unknown>)) {
+        const def = SPARK_DEF[id];
+        if (def && typeof lv === "number" && Number.isFinite(lv) && lv > 0) {
+          g.sparkTalents[id] = Math.min(def.maxLv, Math.trunc(lv));
+        }
+      }
+    }
+    // 职业天赋链(2.10):照 spark_talents 防御(CHAIN_DEF 白名单 + 异职业节点剔除,
+    // 此时 classId 已赋值);chain_bought 键 ∈ CLASSES(未知职业键剔除,负值钳 0)
+    g.chainTalents = {};
+    if (d.chain_talents && typeof d.chain_talents === "object" && !Array.isArray(d.chain_talents)) {
+      for (const [id, lv] of Object.entries(d.chain_talents as Record<string, unknown>)) {
+        const def = CHAIN_DEF[id];
+        if (def && def.cls === g.classId && typeof lv === "number" && Number.isFinite(lv) && lv > 0) {
+          g.chainTalents[id] = Math.min(def.maxLv, Math.trunc(lv));
+        }
+      }
+    }
+    g.chainBought = {};
+    if (d.chain_bought && typeof d.chain_bought === "object" && !Array.isArray(d.chain_bought)) {
+      for (const [cid, n] of Object.entries(d.chain_bought as Record<string, unknown>)) {
+        if (CLASSES[cid] && typeof n === "number" && Number.isFinite(n)) {
+          g.chainBought[cid] = Math.max(0, Math.trunc(n));
+        }
+      }
+    }
+    // ✵天赋点点亮态(2.11):键 ∈ CLASSES;id ∈ 该职业候选,同档去重(取首个)、至多档数条
+    g.chainPicked = {};
+    if (d.chain_picked && typeof d.chain_picked === "object" && !Array.isArray(d.chain_picked)) {
+      for (const [cid, ids] of Object.entries(d.chain_picked as Record<string, unknown>)) {
+        if (!CLASSES[cid] || !Array.isArray(ids)) continue;
+        const picked: string[] = [];
+        for (const id of ids) {
+          if (typeof id !== "string") continue;
+          const sp = CLASS_CHAIN_SPECIALS.find(s => s.id === id && s.cls === cid);
+          if (!sp || picked.some(p =>
+            CLASS_CHAIN_SPECIALS.find(s => s.id === p)?.need === sp.need)) continue;
+          if (picked.length >= BAL.chain_milestones.length) break;
+          picked.push(id);
+        }
+        if (picked.length > 0) g.chainPicked[cid] = picked;
       }
     }
     g.loadout = d.loadout ?? { active: [], passive: [] };
@@ -2173,6 +2402,25 @@ export function migrateSave(d: Record<string, any>): Record<string, any> {
       if (it && typeof it === "object" && it.suit_id) delete it.locked;
     }
     d.version = 11;
+  }
+  if (v < 12) {
+    // v11 → v12:星火(局内升级点数经济;旧档默认 0 点空表,无破坏性变更)
+    d.spark = d.spark ?? 0;
+    d.spark_talents = d.spark_talents ?? {};
+    d.version = 12;
+  }
+  if (v < 13) {
+    // v12 → v13:职业天赋链(旧档默认空链零累计,无破坏性变更;fromDict 全 ?? 兜底,
+    // 升段为显式性与 admin 校验,照 v12 星火段范式)
+    d.chain_talents = d.chain_talents ?? {};
+    d.chain_bought = d.chain_bought ?? {};
+    d.version = 13;
+  }
+  if (v < 14) {
+    // v13 → v14:✵天赋点点亮态(旧档默认空 = 三档均待玩家自行点亮;链功能未随任何
+    // 版本上线,线上无存量档,无破坏性变更;照 v13 段范式)
+    d.chain_picked = d.chain_picked ?? {};
+    d.version = 14;
   }
   // 悬赏目标封顶钳制(幂等,不挂版本号):修复前的指数曲线在深区滚出 10^10+ 的天文目标
   // 持久化在旧档里,新公式只管新任务——这里加载时把旧任务一并收敛到封顶值,

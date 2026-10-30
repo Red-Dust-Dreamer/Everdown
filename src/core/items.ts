@@ -268,11 +268,16 @@ export function rollRarity(rng: PyRandom, luck = 0, minIdx = 0, boost = 0): numb
 }
 
 export function rollItem(tier: number, rng: PyRandom, luck = 0, minIdx = 0, boost = 0,
-                         cls: string | null = null, zone?: number): Item {
-  const slotDef = SLOTS[rng.randrange(SLOTS.length)];
+                         cls: string | null = null,
+                         opts?: { suitId?: string | null; slot?: string | null }): Item {
+  // opts.slot = 定向槽位(塔套装补缺);缺省随机 —— 指定时不消耗 randrange,
+  // 与旧序列的漂移已接受(python 对拍侧已退役)
+  const slotDef = opts?.slot
+    ? SLOTS.find(s => s.id === opts.slot)!
+    : SLOTS[rng.randrange(SLOTS.length)];
   const rid = rollRarity(rng, luck, minIdx, boost);
   const rar = RARITIES[rid];
-  // 主属性按槽位候选表 roll(防具槽生命/防御二选一);rng 调用顺序与 python 严格一致
+  // 主属性按槽位候选表 roll(防具槽生命/防御二选一)
   const pick = MAIN_ROLLS[slotDef.id][rng.randrange(MAIN_ROLLS[slotDef.id].length)];
   let mainVal: number;
   if (PCT_MAINS.includes(pick.stat)) {
@@ -299,21 +304,11 @@ export function rollItem(tier: number, rng: PyRandom, luck = 0, minIdx = 0, boos
       .filter(s => s.cls === cls).map(s => s.id);
     skillSid = sidPool.length ? rng.choice(sidPool) : null;
   }
-  // 深渊套装(2.5):主题特产 —— 判定消耗一次 rng.random();命中即按区主题标记套装 id。
-  // 不再"掉落即锁":套装保护由 game.ts protectedSuit 按"未凑齐 4 件"独立判定,
-  // 🔒 只留给玩家手动上锁(否则到手即锁无法解释,自动出售跳过也被感知为失效)。
-  // zone 缺省(定向锻造/admin 造件等)不判不出套装;
-  // 主题按 (zone-1)%THEMES 轮换,与 combat.zoneTheme 同口径,套装永不过时。
-  // 塔中击杀同样走这里:套装主题按进塔前 g.zone、tier 按塔层(预期行为非 bug)。
-  let suitId: string | null = null;
-  if (zone !== undefined && Number.isFinite(zone)
-      && SUITS.length === THEMES.length
-      && rng.random() < BAL.suit_drop_chance) {
-    const zi = ((Math.trunc(zone) - 1) % THEMES.length + THEMES.length) % THEMES.length;
-    suitId = SUITS[zi]?.id ?? null;
-  }
+  // 深渊套装(2.9):渠道收拢进塔 —— 野外/离线/锻造不再产出套装件(旧版按 zone 主题
+  // 10% 掉,背包被过时套装持续堆积),塔内由调用方按「层段映射+定向补缺」传入
+  // opts.suitId/opts.slot。套装保护语义不变:自动路径(自动出售/满包腾位)豁免未凑齐件
   return new Item(slotDef.id, rar.key, tier, mainVal, affixes, 0, null, rng,
-    pick.stat, skillSid, suitId);
+    pick.stat, skillSid, opts?.suitId ?? null);
 }
 
 /** 定向锻造(2.4):指定部位 + 一条必带词缀,稀有度保底稀有+;其余词缀与主属性

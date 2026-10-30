@@ -148,6 +148,10 @@ interface State {
   /** 魂晶(转生货币)+ 终身获得 + 天赋总级数 + 定向锻造解锁态 */
   essence: number; lifetime_essence: number; talent_total: number;
   forge_unlocked: boolean;
+  /** 星火(局内升级点数):当前持有 */
+  spark: number;
+  /** 职业天赋链(2.10):当前职业终身累计已购级数(里程碑判定源) */
+  chain_bought: number;
   /** 推进受阻(自动转挂机中)= 游戏自身的"卡墙"信号;转生推荐的时机 */
   stuck: boolean;
   gold: number; stones: number; playtime: number; time: number;
@@ -190,6 +194,7 @@ interface State {
          ready: boolean; cd_left: number; cd_total: number;
          unlock_lv: number; unlocked: boolean } | null;
   tower: { keys: number; max_floor: number };
+  tower_suit: { icon: string; name: string; seg: string; covered: number; done: boolean } | null;
   in_tower: boolean;
   tower_floor_sel: number;
   relics: (RelicUI | null)[];
@@ -453,6 +458,8 @@ function buildState(g: Game): State {
     essence: g.essence, lifetime_essence: g.lifetimeEssence,
     talent_total: Object.values(g.talents).reduce((s, v) => s + v, 0),
     forge_unlocked: g.canForge(),
+    spark: g.spark,
+    chain_bought: g.chainBought[g.classId ?? ""] ?? 0,
     stuck: g.mode === "farm" && g.autoFarm,
     gold: g.gold, stones: g.stones, playtime: g.playtime, time: g.time,
     zone: g.zone, stage: g.stage, stage_kills: g.stageKills,
@@ -493,6 +500,17 @@ function buildState(g: Game): State {
       };
     })(),
     tower: { keys: g.tower.keys, max_floor: g.tower.max_floor },
+    // 塔层段套装(2.9):塔页显示当前(或下一)层段掉哪套、集了几个部位;段毕业标记
+    tower_suit: (() => {
+      if (!g.classId) return null;
+      const floor = g.inTower ? g.towerFloorSel : g.tower.max_floor + 1;
+      const { suitId } = g.towerSuitForFloor(floor);
+      const plan = g.towerSuitPlan(floor);
+      const def = D.SUIT_DEF[suitId];
+      const segStart = Math.floor((floor - 1) / 10) * 10 + 1;
+      return { icon: def.icon, name: def.name, seg: `${segStart}-${segStart + 9}层`,
+               covered: plan ? plan.covered : 4, done: plan === null };
+    })(),
     altar: D.ALTAR_LINES.map(l => {
       const lv = g.altarLv[l.id] ?? 0;
       const maxMode = altarBatch === Infinity;
@@ -555,7 +573,10 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
         break;
       }
       // 新档选职业后进入 3 步新手引导
-      if (a) g.chooseClass(a);
+      if (a) {
+        g.chooseClass(a);
+        g.giveStarterSuit();   // 开局套装引子(2.9):2 件荆棘之誓,其余部位指向塔
+      }
       introStep = 1;
       break;
     case "mode": g.setMode(g.mode === "push" ? "farm" : "push"); break;
@@ -689,6 +710,9 @@ function doCmd(name: string, a: string | null = null, b: string | null = null): 
     case "weekly_chest": if (a) g.claimWeeklyChest(a); break;
     case "set_title": g.setTitle(a ?? ""); break;
     case "talent_up": if (a) g.talentUp(a); break;
+    case "spark_up": if (a) g.sparkUp(a); break;
+    case "chain_up": if (a) g.chainUp(a); break;
+  case "chain_special": if (a) g.chainSpecialPick(a); break;
     case "forge_slot": if (a) forgeSlot = a; break;
     case "forge_affix": if (a) forgeAffix = a; break;
     case "forge_go": g.craft(forgeSlot, forgeAffix); break;
@@ -1414,33 +1438,39 @@ function heroSkillDom(sid: string): void {
 
   switch (sid) {
     // —— 战士 ——
-    case "w_strike":   // 重击:金色巨斩 + 轻震
+    case "w_strike":   // 重击:金色巨斩 + 像素火花 + 轻震
       fxSpawn("fx-slash", mx, my,
         { "--r": `${mobRnd(-60, -25)}deg`, "--c1": "#fff3c4", "--c2": "#ffb347", "--s": "1.5" });
+      later(90, () => fxSpawn("fx-spark", mx, my, { "--sz": "100px" }));
       stageShake(200);
       break;
-    case "w_whirl": {  // 旋风斩:CC0 像素龙卷风(Pixor tornado 橙金染色)罩住怪物,转满整个 2 秒引导
+    case "w_whirl": {  // 旋风斩:CC0 像素龙卷风(Pixor 橙金染色)罩住怪物,转满整个 2 秒引导
       // 尺寸罩住怪物立绘(留边),头目龙卷也更大;略下移让漏斗根部贴怪物脚下
       const art = stage.querySelector<HTMLElement>(".mon-art");
       const monW = art ? art.getBoundingClientRect().width : 120;
       const size = Math.round(Math.max(130, Math.min(200, monW + 46)));
-      fxSpawn("fx-vortex", mx, my + size * 0.08, { "--sz": `${size}px` });
+      // 倍速下引导的真实时长 = channel/speed,特效时长/转速同倒数缩放,
+      // 否则 3× 时技能早已结束、龙卷还在原地转
+      const spd = Math.max(1, g.settings.speed ?? 1);
+      fxSpawn("fx-vortex", mx, my + size * 0.08, {
+        "--sz": `${size}px`,
+        "--fx-dur": `${(2.05 / spd).toFixed(3)}s`,
+        "--fx-loop": `${(0.48 / spd).toFixed(3)}s`,
+      });
       break;
     }
-    case "w_warcry":   // 战吼:以英雄为心的三重冲击环
-      [0, 1, 2].forEach(i => later(i * 95, () =>
-        fxSpawn("fx-ring", hx, hy, { "--c": "#ff9c54" })));
+    case "w_warcry":   // 战吼:英雄侧金色像素光环(增益 aura)
+      fxSpawn("fx-aura", hx, hy, { "--sz": "140px", "--life": "1.3s" });
       break;
     case "w_taunt":    // 嘲讽打击:怪头顶💢标记 + 小斩
       fxSpawn("fx-glyph", mx, my - 34, { "--c": "#ffd94a" }).textContent = "💢";
       fxSpawn("fx-slash", mx, my,
         { "--r": "-45deg", "--c1": "#ffe3bc", "--c2": "#ff9c54", "--s": "0.9" });
       break;
-    case "w_exec":     // 处决:交叉双巨斩(深红;震屏在粒子层)
+    case "w_exec":     // 处决:像素爆炸(CC0 Pixor)+ 白红巨斩(震屏在粒子层)
+      fxSpawn("fx-explode", mx, my, { "--sz": "170px" });
       fxSpawn("fx-slash", mx, my,
         { "--r": "-38deg", "--c1": "#ffffff", "--c2": "#d42020", "--s": "2.2" });
-      later(120, () => fxSpawn("fx-slash", mx, my,
-        { "--r": "26deg", "--c1": "#ffb0b0", "--c2": "#d42020", "--s": "1.6" }));
       break;
     case "w_blood":    // 嗜血打击:撕裂斩 + 血液回流英雄(吸血叙事)
       fxSpawn("fx-slash", mx, my,
@@ -1448,77 +1478,87 @@ function heroSkillDom(sid: string): void {
       [0, 1, 2].forEach(i => later(160 + i * 100, () =>
         fxSpawn("fx-tick", hx + mobRnd(-10, 10), hy + mobRnd(-14, 14), { "--fx-c": "#ff6b6b" })));
       break;
-    case "w_wall":     // 护盾壁垒:英雄侧青色穹顶
-      fxSpawn("fx-dome", hx, hy, { "--c": "#7ff0ff" });
+    case "w_wall":     // 护盾壁垒:英雄侧青色像素护盾泡
+      fxSpawn("fx-shield c-cyan", hx, hy, { "--sz": "130px", "--life": "1.5s" });
       break;
-    case "w_fury":     // 狂暴:红色双环 + 速度线
-      [0, 1].forEach(i => later(i * 110, () =>
-        fxSpawn("fx-ring", hx, hy, { "--c": "#ff6b6b" })));
+    case "w_fury":     // 狂暴:红色像素火焰环 + 速度线
+      fxSpawn("fx-fury", hx, hy, { "--sz": "110px", "--life": "1s" });
       fxSpawn("fx-lines", hx - 40, hy - 20, { "--c": "#ff9c54" });
       break;
-    case "w_fatal":    // 致命一击:金色交叉巨斩 + 爆闪(震屏在粒子层)
+    case "w_fatal":    // 致命一击:金色交叉巨斩 + 像素火花迸发(震屏在粒子层)
       fxSpawn("fx-slash", mx, my,
         { "--r": "-35deg", "--c1": "#fff6cf", "--c2": "#ffb347", "--s": "2" });
       later(110, () => fxSpawn("fx-slash", mx, my,
         { "--r": "30deg", "--c1": "#fff6cf", "--c2": "#ffd94a", "--s": "1.5" }));
-      later(150, () => fxSpawn("fx-hit", mx, my, { "--fx-c": "#ffd94a" }));
+      later(150, () => fxSpawn("fx-spark", mx, my, { "--sz": "120px" }));
       break;
-    case "w_roar":     // 毁灭怒吼:四重冲击环(震屏在粒子层)
-      [0, 1, 2, 3].forEach(i => later(i * 90, () =>
-        fxSpawn("fx-ring", hx, hy, { "--c": "#ff6b6b" })));
+    case "w_roar":     // 毁灭怒吼:英雄侧像素蒸汽咆哮喷发(震屏在粒子层)
+      fxSpawn("fx-vent", hx, hy, { "--sz": "160px", "--life": "1.2s" });
       break;
     // —— 法师 ——
-    case "m_missile":  // 奥术飞弹:三发能量珠连射
-      [0, 1, 2].forEach(i => later(i * 95, () => proj("fx-bolt", mobRnd(-14, 14))));
-      break;
-    case "m_fire":     // 火球术:三枚火球连发,逐枚爆闪(吟唱期节拍)
-      [0, 1, 2].forEach(i => later(i * 260, () => {
-        proj("fx-mproj", mobRnd(-10, 10));
-        later(240, () => fxSpawn("fx-burst", mx, my + mobRnd(-10, 10)));
+    case "m_missile":  // 奥术飞弹:三发能量珠连射 + 逐发青色像素魔爆
+      [0, 1, 2].forEach(i => later(i * 95, () => {
+        proj("fx-bolt", mobRnd(-14, 14));
+        later(230, () => fxSpawn("fx-burstc", mx, my + mobRnd(-8, 8), { "--sz": "90px" }));
       }));
       break;
-    case "m_ice":      // 寒冰箭:冰箭 + 落点冰闪(结霜在粒子层)
-      proj("fx-arrow", mobRnd(-8, 8));
-      later(120, () => fxSpawn("fx-hit", mx, my, { "--fx-c": "#7ff0ff" }));
+    case "m_fire":     // 火球术:像素火球连发,逐枚落地像素爆(吟唱期节拍)
+      [0, 1, 2].forEach(i => later(i * 260, () => {
+        const dy = mobRnd(-10, 10);
+        fxSpawn("fx-fireball", hx, my + dy, { "--sz": "76px", "--x": `${dx}px` });
+        later(430, () => fxSpawn("fx-explode", mx, my + dy, { "--sz": "85px" }));
+      }));
       break;
-    case "m_surge":    // 奥术涌动:英雄侧✦脉冲
+    case "m_ice":      // 寒冰箭:像素冰锥飞行 + 落点冰刺爆发(结霜在粒子层)
+      {
+        const dy = mobRnd(-8, 8);
+        fxSpawn("fx-icearrow", hx, my + dy, { "--sz": "80px", "--x": `${dx}px` });
+        later(300, () => fxSpawn("fx-spikes", mx, my + dy, { "--sz": "120px" }));
+      }
+      break;
+    case "m_surge":    // 奥术涌动:英雄侧✦脉冲 + 青色像素魔爆
       fxSpawn("fx-glyph", hx + 6, hy, { "--c": "#5adfff" }).textContent = "✦";
+      later(60, () => fxSpawn("fx-burstc", hx + 6, hy, { "--sz": "80px" }));
       break;
-    case "m_chain":    // 闪电链:锯齿电弧 + 落点爆闪 + 轻震
+    case "m_chain":    // 闪电链:锯齿电弧 + 落点原生色像素闪电 + 轻震
       spawnChain(hx, hy, mx, my);
-      later(130, () => fxSpawn("fx-hit", mx, my, { "--fx-c": "#ffe98a" }));
+      later(130, () => fxSpawn("fx-zap", mx, my, { "--sz": "130px" }));
       stageShake(180);
       break;
-    case "m_storm":    // 烈焰风暴:怪物位置火焰环(余烬落雨在粒子层)
-      fxSpawn("fx-ring", mx, my, { "--c": "#ff9c54" });
+    case "m_storm":    // 烈焰风暴:怪物位置像素火焰风暴(余烬落雨在粒子层)
+      fxSpawn("fx-fira", mx, my, { "--sz": "150px", "--life": "1.5s" });
       break;
-    case "m_nova":     // 冰霜新星:大范围冰环(结霜在粒子层)
-      fxSpawn("fx-nova", mx, my);
+    case "m_nova":     // 冰霜新星:像素冰刺大范围迸发(结霜在粒子层)
+      fxSpawn("fx-spikes", mx, my, { "--sz": "170px" });
       break;
-    case "m_shield":   // 法力护盾:蓝色穹顶
-      fxSpawn("fx-dome", hx, hy, { "--c": "#5adfff" });
+    case "m_shield":   // 法力护盾:蓝色像素护盾泡
+      fxSpawn("fx-shield c-blue", hx, hy, { "--sz": "130px", "--life": "1.5s" });
       break;
-    case "m_meteor":   // 陨石术:四段陨石连坠(震屏在粒子层)
+    case "m_meteor":   // 陨石术:像素陨石四连坠,逐枚落地像素爆(震屏在粒子层)
       [0, 1, 2, 3].forEach(i => later(i * 300, () => {
-        fxSpawn("fx-meteor", mx + mobRnd(-26, 26), my + mobRnd(-10, 10));
-        later(330, () => fxSpawn("fx-burst", mx + mobRnd(-20, 20), my + mobRnd(-8, 8)));
+        const x = mx + mobRnd(-26, 26), y = my + mobRnd(-10, 10);
+        fxSpawn("fx-meteor2", x, y, { "--sz": "105px" });
+        later(430, () => fxSpawn("fx-explode", x, y, { "--sz": "95px" }));
       }));
       break;
-    case "m_cata":     // 元素灾变:电弧+冰环+火环三连(震屏在粒子层)
+    case "m_cata":     // 元素灾变:电弧+冰环+灰白像素龙卷风(震屏在粒子层)
       spawnChain(hx, hy, mx, my);
       later(110, () => fxSpawn("fx-nova", mx, my));
-      later(230, () => fxSpawn("fx-ring", mx, my, { "--c": "#ff9c54" }));
+      later(230, () => fxSpawn("fx-stormspin", mx, my, { "--sz": "150px" }));
       break;
     // —— 射手 ——
-    case "r_volley":   // 疾风连射:三连箭
-      [0, 1, 2].forEach(i => later(i * 85, () => proj("fx-arrow", mobRnd(-12, 12))));
+    case "r_volley":   // 疾风连射:三连箭 + 逐箭像素火花落点
+      [0, 1, 2].forEach(i => later(i * 85, () => {
+        proj("fx-arrow", mobRnd(-12, 12));
+        later(120, () => fxSpawn("fx-spark", mx, my + mobRnd(-8, 8), { "--sz": "80px" }));
+      }));
       break;
-    case "r_pierce":   // 穿透箭:贯穿光束 + 落点闪
+    case "r_pierce":   // 穿透箭:贯穿光束 + 落点像素火花
       {
         const el = fxSpawn("fx-pierce", hx, my, { "--c": "#6bff8f" });
         el.style.width = (sw - hx - 6) + "px";
       }
-      later(120, () => fxSpawn("fx-hit", mx, my, { "--fx-c": "#6bff8f" }));
+      later(120, () => fxSpawn("fx-spark", mx, my, { "--sz": "100px" }));
       break;
     case "r_mark":     // 猎杀印记:怪物身上◎烙印 + 印记环
       fxSpawn("fx-glyph", mx, my, { "--c": "#ffd94a" }).textContent = "◎";
@@ -1528,10 +1568,10 @@ function heroSkillDom(sid: string): void {
       proj("fx-arrow", mobRnd(-8, 8));
       fxSpawn("fx-lines", hx - 46, hy - 20, { "--c": "#7ff0ff" });
       break;
-    case "r_rain":     // 箭雨:五箭从天而降,逐箭落点闪
+    case "r_rain":     // 箭雨:五枚绿锥像素箭从天而降,逐箭落点闪
       [0, 1, 2, 3, 4].forEach(i => later(i * 210, () => {
         const x = mx + mobRnd(-46, 46);
-        fxSpawn("fx-rainarrow", x, my + mobRnd(-8, 8)).textContent = "➤";
+        fxSpawn("fx-icicle", x, my + mobRnd(-8, 8), { "--sz": "72px" });
         later(360, () => fxSpawn("fx-tick", x, my + 4, { "--fx-c": "#6bff8f" }));
       }));
       break;
@@ -1542,24 +1582,40 @@ function heroSkillDom(sid: string): void {
       fxSpawn("fx-lines", hx - 36, hy - 22, { "--c": "#7ff0ff" });
       fxSpawn("fx-glyph", hx, hy - 20, { "--c": "#7ff0ff" }).textContent = "💨";
       break;
-    case "r_deadly":   // 致命连射:三连金箭 + 三爆闪(震屏在粒子层)
+    case "r_deadly":   // 致命连射:三连金箭 + 逐箭像素火花爆点(震屏在粒子层)
       [0, 1, 2].forEach(i => later(i * 90, () => {
         proj("fx-arrow", mobRnd(-10, 10));
-        later(110, () => fxSpawn("fx-hit", mx, my, { "--fx-c": "#ffd94a" }));
+        later(110, () => fxSpawn("fx-spark", mx, my, { "--sz": "90px" }));
       }));
       break;
-    case "r_sky":      // 穿云箭:整屏贯穿金色粗光束(震屏在粒子层)
+    case "r_sky":      // 穿云箭:整屏贯穿金色粗光束 + 落点大火花(震屏在粒子层)
       {
         const el = fxSpawn("fx-pierce", hx, my, { "--c": "#ffd94a" });
         el.style.width = (sw - hx - 4) + "px";
         el.style.height = "9px";
       }
-      later(140, () => fxSpawn("fx-hit", mx, my, { "--fx-c": "#ffd94a" }));
+      later(140, () => fxSpawn("fx-spark", mx, my, { "--sz": "130px" }));
       break;
-    case "r_god":      // 猎神之怒:英雄侧🌟 + 金色三重环(震屏在粒子层)
+    case "r_god":      // 猎神之怒:英雄侧🌟 + 怪物处像素火花迸发(震屏在粒子层)
       fxSpawn("fx-glyph", hx + 8, hy, { "--c": "#ffd94a" }).textContent = "🌟";
-      [0, 1, 2].forEach(i => later(80 + i * 95, () =>
-        fxSpawn("fx-ring", hx, hy, { "--c": "#ffd94a" })));
+      later(120, () => fxSpawn("fx-spark", mx, my, { "--sz": "150px" }));
+      break;
+    // —— 终局一击(手动大招):此前只有粒子层,补 Pixor CC0 像素精灵主视觉 ——
+    case "ult_w_judg":  // 深渊断罪:品红像素闪电双重击(必暴)
+      fxSpawn("fx-lightning", mx, my, { "--sz": "230px" });
+      later(140, () => fxSpawn("fx-lightning", mx + 22, my - 8, { "--sz": "150px" }));
+      break;
+    case "ult_m_stars": // 湮灭星陨:五枚红陨星连坠,逐枚像素爆(冻结在核心层)
+      [0, 1, 2, 3, 4].forEach(i => later(i * 140, () => {
+        const x = mx + mobRnd(-55, 55), y = my + mobRnd(-16, 16);
+        fxSpawn("fx-meteor2", x, y, { "--sz": "100px" });
+        later(430, () => fxSpawn("fx-explode", x, y, { "--sz": "90px" }));
+      }));
+      break;
+    case "ult_r_rain":  // 万箭归宗:八枚绿锥箭雨连坠贯穿
+      [0, 1, 2, 3, 4, 5, 6, 7].forEach(i => later(i * 70, () =>
+        fxSpawn("fx-icicle", mx + mobRnd(-70, 70), my + mobRnd(-14, 14),
+          { "--sz": `${Math.round(88 + mobRnd(-10, 14))}px` })));
       break;
   }
 }
@@ -2226,8 +2282,8 @@ function renderHeroPage(st: State): void {
     `<div class="gear-frame">${frame}</div>`;
 }
 
-/** 深渊套装区块(角色页属性分栏底部):8 套主题特产的身穿件数与激活效果;
- *  零件数的套暗显 —— 一眼可见「去哪个主题刷哪套」,不新开页不弹窗 */
+/** 深渊套装区块(角色页属性分栏底部):8 套塔层特产的身穿件数与激活效果;
+ *  零件数的套暗显 —— 一眼可见「去塔的哪一层段刷哪套」,不新开页不弹窗 */
 function suitBlockHtml(st: State): string {
   const chips = st.suits.map(s =>
     `<div style="padding:7px 9px;border:1px solid var(--line);border-radius:8px;` +
@@ -2237,9 +2293,7 @@ function suitBlockHtml(st: State): string {
       `<div style="font-size:11px;color:${s.n >= 2 ? "var(--gold)" : "var(--dim)"};margin-top:3px">✦2件 ${esc(s.b2)}</div>` +
       `<div style="font-size:11px;color:${s.n >= 4 ? "var(--gold)" : "var(--dim)"}">✦4件 ${esc(s.b4)}</div>` +
     `</div>`).join("");
-  return `<h3 style="margin-top:16px"><span class="dot"></span>深渊套装 · 主题特产</h3>` +
-    `<div style="color:var(--dim);font-size:11.5px;margin:-6px 0 8px">` +
-      `各区掉落该主题专属套装(锁定防折现),同套 2/4 件激活效果</div>` +
+  return `<h3 style="margin-top:16px"><span class="dot"></span>深渊套装 · 塔层特产</h3>` +
     `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:6px">${chips}</div>`;
 }
 
@@ -2285,12 +2339,13 @@ function renderTitlesModal(st: State): void {
         `尚未转生:50 级后可转生,历代冒险记录会出现在这里</div>`);
 }
 
-/** 转生中心入口(功能按钮):角色页只留一行摘要,点开弹窗才是 转生+深渊天赋 */
+/** 转生中心入口(功能按钮):角色页只留一行摘要,点开弹窗才是 转生+深渊天赋+星火 */
 function rebirthEntryHtml(st: State): string {
   const statPct = Math.round(D.BAL.rebirth_stat_pct * st.rebirths * 10) / 10;
   const gainPct = Math.round(D.BAL.rebirth_gain_pct * st.rebirths * 10) / 10;
-  const dot = (st.can_rebirth && st.stuck) || st.essence > 0;
+  const dot = (st.can_rebirth && st.stuck) || st.essence > 0 || st.spark > 0;
   const desc = `转生 ${r1(st.rebirths)} 世 · 三围 +${r1(statPct)}% · 金币经验 +${r1(gainPct)}% · 魂晶 ✧${fmt(st.essence)}` +
+    ` · 星火 ★${fmt(st.spark)} · ⛓${fmt(st.chain_bought)}` +
     (st.can_rebirth && st.stuck ? " · ⛔ 受阻,推荐转生" : "");
   return `<div class="set-row" style="margin-top:12px"><div class="lbl">♻ 转生 · 深渊天赋` +
     `<div class="d">${desc}</div></div>` +
@@ -2335,9 +2390,9 @@ function rebirthBlockHtml(st: State): string {
     `</div>`;
 }
 
-/** 转生中心弹窗:两个分栏(转生 / 深渊天赋);点「+1」即买天赋,弹窗保持打开 */
+/** 转生中心弹窗:四个分栏(转生 / 深渊天赋 / 星火 / 职业链);点「+1」即买,弹窗保持打开 */
 let talentMenu = false;
-let rebirthView: "rebirth" | "talents" = "rebirth";
+let rebirthView: "rebirth" | "talents" | "sparks" | "chains" = "rebirth";
 function renderTalentModal(st: State): void {
   const m = $("talent-modal");
   if (!talentMenu || !st.class_id) {
@@ -2355,6 +2410,130 @@ function renderTalentModal(st: State): void {
     return;
   }
   sub.style.display = "";
+  // 职业链分栏(2.11):自下而上竖梯 —— 入口在底,逐级向上点亮,⛓ 连接线亮起 =
+  // 攀爬路径;顶部「✵天赋殿堂」= 天赋点(有限):里程碑 50/100/200 各 +1 枚,
+  // T1/T2 档 2 选 1、T3 终极 1 条,一次点亮终身定型不可多点
+  if (rebirthView === "chains") {
+    const cls = st.class_id;
+    const nodes = D.CLASS_CHAINS.filter(n => n.cls === cls);
+    const entry = nodes.find(n => n.tier === 0);
+    const lvTotal = nodes.reduce((s, n) => s + g.chainLevel(n.id), 0);
+    const lvCap = nodes.reduce((s, n) => s + n.maxLv, 0);
+    const bought = g.chainBoughtNow();
+    const pickedCount = (g.chainPicked[cls] ?? []).length;
+    sub.textContent =
+      `星火 ★${fmt(g.spark)}(与星火树共用)· 转生熄灭;本局已点 ${lvTotal}/${lvCap} · ` +
+      `${st.cls.name}累计 ${bought} 级 · ✵ 天赋点 ${pickedCount}/3(每档 1 枚,一次定型)`;
+    const nodeCard = (n: D.ChainNodeDef): string => {
+      const lv = g.chainLevel(n.id);
+      const maxed = lv >= n.maxLv;
+      const gated = g.chainGated(n.id);
+      const cost = g.chainCost(n.id);
+      const cur = lv > 0 ? `(当前 +${numTxt(n.per * lv)}${n.op === "add" ? " 点" : "%"})` : "";
+      let btn: string;
+      if (gated) {
+        const prevId = n.tier <= 1 ? `${n.cls[0]}0` : `${n.cls[0]}${n.branch}${n.tier - 1}`;
+        const prev = D.CHAIN_DEF[prevId];
+        // 紧凑锁芯片:窄列放不下整句按钮(nowrap 会撑破 3 列 grid),前置名 + 悬浮提示
+        const tip = n.tier === 1 ? `需先点亮入口「${prev?.name ?? "?"}」` : `需「${prev?.name ?? "?"}」满级`;
+        btn = `<span class="chain-lock" title="${esc(tip)}">🔒 ${esc(prev?.name ?? "?")}</span>`;
+      } else if (maxed) {
+        btn = `<span class="tal-maxed">已满级</span>`;
+      } else {
+        btn = `<button class="btn mini${g.spark >= (cost ?? 0) ? " sell-on" : ""}"` +
+          ` data-cmd="chain_up" data-a="${n.id}">+1 ★${cost}</button>`;
+      }
+      return `<div class="tal-node${maxed ? " maxed" : ""}">` +
+        `<div class="tn-head"><span class="ic">${n.icon}</span>` +
+        `<span class="nm">${esc(n.name)}</span><span class="lv">${lv}/${n.maxLv}</span></div>` +
+        `<div class="tn-desc">${esc(n.desc)}${cur ? ` <b>${cur}</b>` : ""}</div>` +
+        `<div class="tn-op">${btn}</div></div>`;
+    };
+    // ⛓ 竖梯:t5 → t1 逐行向上(行内三支并列),连接线在卡片上方、亮起 = 该节点已点;
+    // DOM 自上而下 = 殿堂 → t5 → … → t1 → 支标题 → 入口(底部),玩家自下而上攀爬
+    const ladderRows = [5, 4, 3, 2, 1].map(t =>
+      (["a", "b", "c"] as const).map(br => {
+        const n = nodes.find(x => x.branch === br && x.tier === t);
+        if (!n) return "<div class=\"chain-cell\"></div>";
+        return `<div class="chain-cell"><div class="chain-link${g.chainLevel(n.id) > 0 ? " on" : ""}"></div>${nodeCard(n)}</div>`;
+      }).join("")).join("");
+    const titlesRow = (D.CLASS_CHAIN_BRANCHES[cls] ?? []).map(br =>
+      `<div class="chain-bt"><span>${br.icon} ${esc(br.name)}</span><small>${esc(br.blurb)} ↗</small></div>`).join("");
+    const entryCell = entry
+      ? `<div class="chain-cell chain-entry"><div class="chain-link${g.chainLevel(entry.id) > 0 ? " on" : ""}"></div>${nodeCard(entry)}</div>`
+      : "";
+    // ✵ 天赋殿堂:三档横排;已点亮 = 生效卡;达标未选 = 候选并排待点;未达 = 锁定占位
+    const specCard = (s: D.ChainSpecialDef, pickable: boolean): string => {
+      const picked = g.chainTierPicked(s.need) === s.id;
+      const effList = s.effects.map(e =>
+        `${D.STAT_NAMES[e.stat] ?? e.stat} +${numTxt(e.v)}${e.op === "add" ? " 点" : "%"}`).join(" · ");
+      const op = picked
+        ? `<span class="tal-maxed">✵ 生效中(终身定型)</span>`
+        : pickable
+          ? `<button class="btn mini sell-on" data-cmd="chain_special" data-a="${s.id}">✵ 点亮</button>`
+          : `<span style="color:var(--dim);font-size:12px">🔒 累计 ${s.need} 级解锁天赋点</span>`;
+      return `<div class="tal-node${picked ? " maxed" : ""}">` +
+        `<div class="tn-head"><span class="ic">${s.icon}</span>` +
+        `<span class="nm">${esc(s.name)}</span></div>` +
+        `<div class="tn-desc">${esc(effList)}</div><div class="tn-op">${op}</div></div>`;
+    };
+    const specSlot = (need: number): string => {
+      const cands = D.CLASS_CHAIN_SPECIALS.filter(s => s.cls === cls && s.need === need);
+      const pickedId = g.chainTierPicked(need);
+      if (pickedId !== undefined) {
+        const s = cands.find(x => x.id === pickedId);
+        return `<div class="chain-spec-slot on"><h5>✵ ${need} 级档</h5>${s ? specCard(s, false) : ""}</div>`;
+      }
+      if (bought >= need) {
+        return `<div class="chain-spec-slot open"><h5>✵ ${need} 级档 · 天赋点可用(${cands.length} 选 1,选一永定)</h5>` +
+          `<div class="chain-spec-cands">${cands.map(x => specCard(x, true)).join("")}</div></div>`;
+      }
+      return `<div class="chain-spec-slot"><h5>✵ ${need} 级档</h5>` +
+        `<div class="tal-node" style="opacity:.5"><div class="tn-desc">累计 ${need} 级得 1 枚天赋点(当前 ${bought})</div></div></div>`;
+    };
+    const specStrip = (D.BAL.chain_milestones as readonly number[]).map(specSlot).join("");
+    if (!modalPress) $("talent-body").innerHTML =
+      `<div class="chain-specs"><h4>✵ 天赋殿堂` +
+      `<span class="tal-blurb">天赋点:每档 1 枚,选一永定 · 转生不清</span></h4>` +
+      `<div class="chain-spec-row">${specStrip}</div></div>` +
+      `<div class="chain-ladder">${ladderRows}</div>` +
+      `<div class="chain-titles">${titlesRow}</div>${entryCell}`;
+    return;
+  }
+  // 星火分栏:局内升级点数消费端(转生熄灭);节点卡复用 tal-node 结构与样式
+  if (rebirthView === "sparks") {
+    const capTotal = D.SPARKS.reduce((s, d) =>
+      s + Array.from({ length: d.maxLv }, (_, i) => d.cost0 + d.costStep * i)
+        .reduce((a, b) => a + b, 0), 0);
+    // 本局已投入的星火点数(与分母同单位):Σ Lv×cost0 + costStep×Lv(Lv-1)/2
+    const spentTotal = D.SPARKS.reduce((s, d) => {
+      const lv = g.sparkLevel(d.id);
+      return s + lv * d.cost0 + d.costStep * lv * (lv - 1) / 2;
+    }, 0);
+    sub.textContent =
+      `星火 ★${fmt(g.spark)} · 升级得点,转生熄灭;本局已投入 ${spentTotal}/${capTotal}`;
+    const branchHtml = D.SPARK_BRANCHES.map(br => {
+      const nodes = D.SPARKS.filter(s => s.branch === br.id).map(s => {
+        const lv = g.sparkLevel(s.id);
+        const maxed = lv >= s.maxLv;
+        const cost = g.sparkCost(s.id);
+        const cur = lv > 0 ? `(当前 +${numTxt(s.per * lv)}${s.op === "add" ? " 点" : "%"})` : "";
+        const btn = maxed
+          ? `<span class="tal-maxed">已满级</span>`
+          : `<button class="btn mini${g.spark >= (cost ?? 0) ? " sell-on" : ""}"` +
+            ` data-cmd="spark_up" data-a="${s.id}">+1 ★${cost}</button>`;
+        return `<div class="tal-node${maxed ? " maxed" : ""}">` +
+          `<div class="tn-head"><span class="ic">${s.icon}</span>` +
+          `<span class="nm">${esc(s.name)}</span><span class="lv">${lv}/${s.maxLv}</span></div>` +
+          `<div class="tn-desc">${esc(s.desc)}${cur ? ` <b>${cur}</b>` : ""}</div>` +
+          `<div class="tn-op">${btn}</div></div>`;
+      }).join("");
+      return `<div class="tal-branch"><h4>${br.icon} ${br.name}` +
+        `<span class="tal-blurb">${br.blurb}</span></h4>${nodes}</div>`;
+    }).join("");
+    if (!modalPress) $("talent-body").innerHTML = `<div class="tal-branches">${branchHtml}</div>`;
+    return;
+  }
   sub.textContent =
     `持有魂晶 ✧${fmt(g.essence)} · 终身获得 ${fmt(g.lifetimeEssence)} · 总等级 ${st.talent_total}` +
     `;天赋永久生效,转生不重置;节点按转生世数逐步解锁`;
@@ -2725,6 +2904,7 @@ function renderTower(st: State): void {
     st.tower_key_cost ?? "-", st.tower_keys_bought, towerBagOpen ? 1 : 0,
     st.relic_bag.length, st.relic_bag_cap, upCost0 ?? "-",
     upCost0 === null || st.gold >= upCost0 ? 1 : 0,
+    st.tower_suit ? `${st.tower_suit.name}:${st.tower_suit.covered}:${st.tower_suit.done ? 1 : 0}` : "-",
     st.relics.map(relicSig).join(";"), st.relic_bag.map(relicSig).join(";")].join("#");
   if (panel.dataset.sig === sig) return;
   panel.dataset.sig = sig;
@@ -2754,12 +2934,20 @@ function renderTower(st: State): void {
       `<span class="tw-keys"${tw.keys < 1 ? ` style="color:#ff8a8a"` : ""}>🔑 ×${tw.keys}` +
         `<small>每日${D.TOWER.keys_per_day}把 · 可囤${D.TOWER.keys_cap}</small></span>` +
       `<span class="tw-best">最高 <b>第${tw.max_floor}层</b></span>` +
-    `</div>`;
+    `</div>` +
+    (st.tower_suit
+      ? `<div style="display:flex;align-items:center;gap:6px;margin:8px 0 0;padding:7px 9px;` +
+        `border:1px solid var(--line);border-radius:8px;background:var(--panel,#161a24);font-size:12px">` +
+        `<span>🎁</span><span><b>${st.tower_suit.icon} ${esc(st.tower_suit.name)}</b>` +
+        `<span style="color:var(--dim)"> · ${st.tower_suit.seg}</span></span>` +
+        `<span style="margin-left:auto" class="mono">${st.tower_suit.done
+          ? `<span style="color:var(--gold)">已集齐 4/4 ✓</span>`
+          : `${st.tower_suit.covered}/4`}</span></div>`
+      : ``);
 
   if (st.in_tower) {
     html += `<div class="tw-live">` +
       `<span class="st">⚔ 爬塔中 · 第${st.tower_floor_sel}层</span>` +
-      `<span style="color:var(--dim);font-size:12px">胜利自动连爬下一层</span>` +
       `<button class="btn warn" data-cmd="tower_exit">撤退(钥匙已消耗)</button></div>`;
   } else {
     html += `<div class="tw-pick">` +
@@ -2771,9 +2959,7 @@ function renderTower(st: State): void {
         `<button class="btn mini" data-cmd="tower_floor" data-a="1" title="选下一层">▶</button>` +
       `</div>` +
       `<div class="tw-sub">` +
-        (pick < reach
-          ? `重打已通层 · 通关不涨最高层,收益照旧(1~${tw.max_floor})`
-          : `新高度 · 胜利后自动连爬下一层`) +
+        (pick < reach ? `重打已通层(不涨最高层)` : `新高度`) +
       `</div>` +
       `<button class="btn big tw-go"${tw.keys < 1 ? ` style="opacity:.55"` : ""}` +
         ` data-cmd="tower_enter"${pick !== reach ? ` data-a="${pick}"` : ""}` +
@@ -2781,16 +2967,14 @@ function renderTower(st: State): void {
         (pick < reach ? `⚔ 重打 · 第${pick}层` : `⚔ 开始爬塔 · 第${reach}层`) + `</button>` +
       (tw.keys < 1
         ? `<div class="tw-sub nokey">钥匙不足 · 明日 0 点刷新,或上方加购</div>`
-        : `<div class="tw-sub">每层消耗 1 把钥匙 · 连胜连爬</div>`) +
+        : `<div class="tw-sub">每层 1 把钥匙</div>`) +
     `</div>`;
   }
 
   html += `<div class="bar q lg" style="margin-top:10px"><div class="fill" style="width:${p}%"></div>` +
-      `<div class="num">${tw.max_floor > 0 ? `已爬到 第${tw.max_floor}层` : `尚未登塔 · 从第 1 层出发`}</div></div>` +
-    `<div class="tw-mile">🏆 里程碑 每${D.TOWER.milestone_every}层 +${D.TOWER.milestone_stones}✦(下一个 第${msNext}层)` +
-      ` · 每${D.TOWER.boss_every}层一头目(遗物保底稀有)</div>` +
-    `<h3 style="margin-top:16px"><span class="dot"></span>遗物 · 4 槽(通关必得,空槽优先装满)` +
-    `<span style="color:var(--dim);font-size:12px;font-weight:400;margin-left:8px">点击槽位查看详情</span></h3>` +
+      `<div class="num">${tw.max_floor > 0 ? `已爬到 第${tw.max_floor}层` : `尚未登塔`}</div></div>` +
+    `<div class="tw-mile">🏆 每${D.TOWER.milestone_every}层 +${D.TOWER.milestone_stones}✦ · 下一个 第${msNext}层</div>` +
+    `<h3 style="margin-top:16px"><span class="dot"></span>遗物 · 4 槽</h3>` +
     `<div class="gear-frame">${relicFrame}</div>`;
 
   // ---- 遗物背包(2.4.3 重构:默认折叠 + 展开限高内滚,200 件也不撑爆整页) ----
@@ -2811,8 +2995,7 @@ function renderTower(st: State): void {
           `扩容${nextCap} ◈${fmt(upCost)}${st.gold < upCost ? "(不足)" : ""}</button>`
       : `<span style="color:var(--dim)">已满级 ${st.relic_bag_cap} 格</span>`}</span></h3>`;
   if (!nBag) {
-    html += `<div class="tw-bag-empty">遗物槽满时新掉落存入这里;卸下的遗物也保存在这里` +
-      (nBag >= st.relic_bag_cap ? `。背包已满:再掉落将自动替换装备中效果最少的一件` : ``) + `</div>`;
+    html += `<div class="tw-bag-empty">— 空 —</div>`;
   } else if (towerBagOpen) {
     html += `<div class="tw-bag-list">`;
     st.relic_bag.forEach((r, i) => {
@@ -2831,8 +3014,9 @@ function renderTower(st: State): void {
         `</div></div>`;
     });
     html += `</div>`;
-  } else {
-    html += `<div class="tw-bag-empty">点上方标题展开 ${nBag} 件(装备 / 分解)</div>`;
+    if (nBag >= st.relic_bag_cap) {
+      html += `<div class="tw-bag-empty">背包已满:再掉落将自动替换装备中效果最少的一件</div>`;
+    }
   }
   panel.innerHTML = html;
   const newList = panel.querySelector(".tw-bag-list") as HTMLElement | null;
@@ -2863,7 +3047,7 @@ function renderAutoSellModal(st: State): void {
     rows += opt(i, `出售 ≤ ${qname(i)}`, `折现:${sold}` + (kept ? ` · 保留:${kept}` : ""));
   }
   // 套装保护是档位之外的独立规则:不说清楚会被感知为"自动出售失效"(2.5 曾用掉落即锁,更困惑)
-  rows += `<div class="as-note">🛡 同套装不足 4 件时始终保留(不出售/不分解);凑齐 4 件后多出的件按档位正常清理</div>`;
+  rows += `<div class="as-note">🛡 未凑齐套装件不自动出售;一键清理不受保护,想留请 🔒</div>`;
   if (!modalPress) $("autosell-body").innerHTML = rows;
 }
 
@@ -3331,7 +3515,7 @@ document.addEventListener("click", (e: MouseEvent) => {
   const qmEl = target.closest<HTMLElement>("[data-quest-modal]");
   if (qmEl) { questModal = qmEl.dataset.questModal as QuestModalView; renderNow(); return; }
   const tvEl = target.closest<HTMLElement>("[data-tview]");
-  if (tvEl) { rebirthView = tvEl.dataset.tview as "rebirth" | "talents"; renderNow(); return; }
+  if (tvEl) { rebirthView = tvEl.dataset.tview as "rebirth" | "talents" | "sparks" | "chains"; renderNow(); return; }
   const gearEl = target.closest<HTMLElement>("[data-gear]");
   if (gearEl) {
     const [kind, val] = (gearEl.dataset.gear ?? "").split(":");

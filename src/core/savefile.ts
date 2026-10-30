@@ -6,9 +6,9 @@
  */
 import { SAVE_VERSION } from "./game.ts";
 import {
-  ACTIVE_DEF, AFFIX_DEF, ALTAR_LINES, BAL, CLASSES, MAIN_ROLLS, MONSTERS,
+  ACTIVE_DEF, AFFIX_DEF, ALTAR_LINES, BAL, CHAIN_DEF, CLASSES, CLASS_CHAIN_SPECIALS, MAIN_ROLLS, MONSTERS,
   PASSIVE_DEF, QUEST_TYPES, RARITY_IDX, REDEEM_CODES, RELIC_EFF_DEF,
-  SIGNIN_REWARDS, SLOTS, SUIT_DEF, TITLES, WEEKLY_CHEST, WEEKLY_GOALS,
+  SIGNIN_REWARDS, SLOTS, SPARK_DEF, SUIT_DEF, TITLES, WEEKLY_CHEST, WEEKLY_GOALS,
 } from "./data.ts";
 
 export interface SaveIssue { field: string; level: "error" | "warn"; message: string }
@@ -377,6 +377,92 @@ export function validateSaveDict(d: Record<string, any>): SaveIssue[] {
   if (d.rebirths !== undefined && !(isInt(d.rebirths) && d.rebirths >= 0)) {
     out.push(issue("rebirths", "warn",
       `rebirths 应为 ≥0 的整数(当前 ${fmtVal(d.rebirths)}),非法值回落 0 = 丢转生加成`));
+  }
+  // 星火(2.9):局内点数与消费表(负值载入钳 0;未知节点剔除、值超 maxLv 钳制)
+  if (d.spark !== undefined && !(isInt(d.spark) && d.spark >= 0)) {
+    out.push(issue("spark", "warn",
+      `spark 应为 ≥0 的整数(当前 ${fmtVal(d.spark)}),负值载入时钳 0`));
+  }
+  if (d.spark_talents !== undefined && !isObj(d.spark_talents)) {
+    out.push(issue("spark_talents", "warn",
+      `spark_talents 应为普通对象(当前 ${fmtVal(d.spark_talents)}),非对象整体忽略`));
+  } else if (isObj(d.spark_talents)) {
+    for (const [sid, slv] of Object.entries(d.spark_talents)) {
+      const sdef = SPARK_DEF[sid];
+      if (!sdef) {
+        out.push(issue(`spark_talents.${sid}`, "warn",
+          `键不在 SPARK_DEF(当前 ${fmtVal(sid)}),载入时剔除`));
+      } else if (!(isInt(slv) && slv >= 0 && slv <= sdef.maxLv)) {
+        out.push(issue(`spark_talents.${sid}`, "warn",
+          `级应为 0..${sdef.maxLv} 的整数(当前 ${fmtVal(slv)}),超界钳制`));
+      }
+    }
+  }
+  // 职业天赋链(2.10):局内链级表 + 各职业终身累计(照星火规则范式;
+  // 异职业节点/未知职业键载入时剔除,超 maxLv 钳制)
+  if (d.chain_talents !== undefined && !isObj(d.chain_talents)) {
+    out.push(issue("chain_talents", "warn",
+      `chain_talents 应为普通对象(当前 ${fmtVal(d.chain_talents)}),非对象整体忽略`));
+  } else if (isObj(d.chain_talents)) {
+    for (const [cid, clv] of Object.entries(d.chain_talents)) {
+      const cdef = CHAIN_DEF[cid];
+      if (!cdef) {
+        out.push(issue(`chain_talents.${cid}`, "warn",
+          `键不在 CHAIN_DEF(当前 ${fmtVal(cid)}),载入时剔除`));
+      } else if (!(isInt(clv) && clv >= 0 && clv <= cdef.maxLv)) {
+        out.push(issue(`chain_talents.${cid}`, "warn",
+          `级应为 0..${cdef.maxLv} 的整数(当前 ${fmtVal(clv)}),超界钳制`));
+      }
+    }
+  }
+  if (d.chain_bought !== undefined && !isObj(d.chain_bought)) {
+    out.push(issue("chain_bought", "warn",
+      `chain_bought 应为普通对象(当前 ${fmtVal(d.chain_bought)}),非对象整体忽略`));
+  } else if (isObj(d.chain_bought)) {
+    for (const [cid, n] of Object.entries(d.chain_bought)) {
+      if (!CLASSES[cid]) {
+        out.push(issue(`chain_bought.${cid}`, "warn",
+          `键不在 CLASSES(当前 ${fmtVal(cid)}),载入时剔除`));
+      } else if (!(isInt(n) && n >= 0)) {
+        out.push(issue(`chain_bought.${cid}`, "warn",
+          `累计级数应为 ≥0 的整数(当前 ${fmtVal(n)}),负值载入时钳 0`));
+      }
+    }
+  }
+  // ✵天赋点点亮态(2.11):各职业已点亮特别天赋 id 列表(一次定型;载入剔除未知/异职业 id、同档取首)
+  if (d.chain_picked !== undefined && !isObj(d.chain_picked)) {
+    out.push(issue("chain_picked", "warn",
+      `chain_picked 应为普通对象(当前 ${fmtVal(d.chain_picked)}),非对象整体忽略`));
+  } else if (isObj(d.chain_picked)) {
+    for (const [cid, ids] of Object.entries(d.chain_picked)) {
+      if (!CLASSES[cid]) {
+        out.push(issue(`chain_picked.${cid}`, "warn",
+          `键不在 CLASSES(当前 ${fmtVal(cid)}),载入时剔除`));
+        continue;
+      }
+      if (!Array.isArray(ids)) {
+        out.push(issue(`chain_picked.${cid}`, "warn",
+          `值应为 id 数组(当前 ${fmtVal(ids)}),该职业点亮态载入时忽略`));
+        continue;
+      }
+      const seen = new Set<number>();
+      for (const id of ids) {
+        const sp = CLASS_CHAIN_SPECIALS.find(s => s.id === id);
+        if (!sp || sp.cls !== cid) {
+          out.push(issue(`chain_picked.${cid}`, "warn",
+            `未知或异职业特别天赋 id(当前 ${fmtVal(id)}),载入时剔除`));
+        } else if (seen.has(sp.need)) {
+          out.push(issue(`chain_picked.${cid}`, "warn",
+            `同档(${sp.need})重复点亮(当前 ${fmtVal(id)}),载入时只保留首个`));
+        } else {
+          seen.add(sp.need);
+        }
+      }
+      if (ids.length > BAL.chain_milestones.length) {
+        out.push(issue(`chain_picked.${cid}`, "warn",
+          `点亮数超过档位数 ${BAL.chain_milestones.length}(当前 ${ids.length}),载入时截断`));
+      }
+    }
   }
 
   // ---- warn:2.2-2.3 批次新字段(签到/周常/称号/世系/兑换/图鉴/自动化) ----

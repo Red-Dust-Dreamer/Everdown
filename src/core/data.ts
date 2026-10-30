@@ -269,10 +269,12 @@ export const THEMES: ThemeDef[] = [
   { name: "虚空裂隙", mobs: ["imp", "goblin", "hound", "eye", "voidling", "shard"], boss: "虚空吞噬者", color: "bright_magenta" },
 ];
 
-// ---------------------------------------------------------------- 深渊套装(2.5):主题特产装备
-// 每张主题地图出产专属套装(rollItem 按 zone 主题标记 suitId,掉率 BAL.suit_drop_chance),
-// 集齐 2/4 件激活主题风味效果 —— 挂机选址第一次有了真实决策(「去 33 区刷寒冰套」)。
-// SUITS 与 THEMES 逐索引对齐(themeIdx = 表下标),套装永不过时(主题按 (zone-1)%8 轮换)。
+// ---------------------------------------------------------------- 深渊套装(2.5→2.9):塔层特产装备
+// 套装获取渠道 2.9 收拢进塔:每 10 层一段(floor 1-10 → SUITS[0],依序循环),塔内击杀
+// 必掉 1 件该段套装、按「该套该 tier 未覆盖部位」定向补缺,覆盖满 4 部位即该段毕业、
+// 回归普通掉落 —— 收集从碰运气变稳定推进,野外背包不再被套装件堆积(保护逻辑仍保留)。
+// 开局选职业送 2 件荆棘之誓(武器+护甲),剩余部位指向塔,第一分钟建立收集目标。
+// themeIdx 保留为主题风味溯源(套装命名),不再参与掉落判定。
 // 效果键走 recalcHero 统一修饰管道(stat 为 string,agg 已预置 0):crit_extra/kill_haste 等
 // 是 VIRTUAL_STATS 键、不在 StatKey 联合内 —— 不为此扩 StatKey/CAPS。
 // 4 件效果值对照系(锚定实现时的数值依据):
@@ -593,6 +595,378 @@ export const TALENTS: TalentDef[] = [
 export const TALENT_DEF: Record<string, TalentDef> =
   Object.fromEntries(TALENTS.map(t => [t.id, t]));
 
+// ---------------------------------------------------------------- 星火(2.9):局内升级点数消费端
+// 星火 = 每升 1 级得 1 点(BAL.spark_per_lv),局内手动消费,转生熄灭
+// (spark/sparkTalents 随 rebirth 重置)—— 补深渊天赋「转生后才存在」的前期空窗:
+// 第一世即可用的主动乘区,补的正是前期成长感来源。
+// 与深渊天赋双表双字段彻底隔离(essence/talents 永久,spark/sparkTalents 局内,
+// 互不读写):加成同走 recalcHero 的 mods 管道叠加但独立记账,CAPS 末端统一截断,
+// 无双计;成就口径不加星火 metric(stats.talent_total 只算深渊天赋)。
+// 数值锚定:满配 +16%攻/+20%血/+20%防 ≈ 永久 t_atk/t_hp/t_def 满级(25/30/30)的
+// 0.64-0.8 倍;crit/skill_dmg/xp_pct/haste 满配占 CAPS 3.2%/10%/10%/8%,
+// 全树总容量 149 点(踩线 50 级转生 = 49 点,点亮 33%)。
+export interface SparkDef {
+  id: string;
+  branch: "blaze" | "ward" | "star";   // 燎原 / 薪壁 / 星轨
+  name: string; icon: string;
+  maxLv: number;
+  cost0: number; costStep: number;     // 升下一级费用 = cost0 + costStep × 当前级
+  kind: "stat";                        // 全 stat 节点,无 special / 无解锁门槛
+  stat: StatKey; op: "add" | "pct"; per: number;   // 走统一修饰管道
+  /** 每级效果描述(数值已内联;当前合计由 UI 按 per×lv 现算) */
+  desc: string;
+}
+export const SPARK_BRANCHES: { id: SparkDef["branch"]; name: string; icon: string; blurb: string }[] = [
+  { id: "blaze", name: "燎原", icon: "🔥", blurb: "锋锐与杀意" },
+  { id: "ward", name: "薪壁", icon: "🛡", blurb: "血肉与壁垒" },
+  { id: "star", name: "星轨", icon: "⭑", blurb: "拾荒与疾行" },
+];
+export const SPARKS: SparkDef[] = [
+  // ---- 燎原 ----
+  { id: "s_atk", branch: "blaze", name: "锋芒", icon: "⚔", maxLv: 4, cost0: 1, costStep: 2,
+    kind: "stat", stat: "atk", op: "pct", per: 4, desc: "每级攻击 +4%" },
+  { id: "s_crit", branch: "blaze", name: "灼目", icon: "🎯", maxLv: 3, cost0: 1, costStep: 3,
+    kind: "stat", stat: "crit", op: "add", per: 0.8, desc: "每级暴击率 +0.8 点" },
+  { id: "s_skill", branch: "blaze", name: "星核", icon: "✦", maxLv: 3, cost0: 2, costStep: 4,
+    kind: "stat", stat: "skill_dmg", op: "add", per: 10, desc: "每级技能伤害 +10%" },
+  // ---- 薪壁 ----
+  { id: "s_hp", branch: "ward", name: "薪血", icon: "❤", maxLv: 4, cost0: 1, costStep: 2,
+    kind: "stat", stat: "hp", op: "pct", per: 5, desc: "每级生命 +5%" },
+  { id: "s_def", branch: "ward", name: "灰壁", icon: "🛡", maxLv: 4, cost0: 1, costStep: 2,
+    kind: "stat", stat: "def", op: "pct", per: 5, desc: "每级防御 +5%" },
+  { id: "s_regen", branch: "ward", name: "烬暖", icon: "🩸", maxLv: 3, cost0: 1, costStep: 3,
+    kind: "stat", stat: "kill_heal", op: "add", per: 1.2, desc: "每级击杀回血 +1.2%(按最大生命)" },
+  // ---- 星轨 ----
+  { id: "s_gold", branch: "star", name: "拾薪", icon: "◈", maxLv: 3, cost0: 2, costStep: 3,
+    kind: "stat", stat: "goldfind", op: "add", per: 5, desc: "每级金币加成 +5 点" },
+  { id: "s_xp", branch: "star", name: "启明", icon: "📖", maxLv: 4, cost0: 2, costStep: 3,
+    kind: "stat", stat: "xp_pct", op: "add", per: 5, desc: "每级经验加成 +5%" },
+  { id: "s_haste", branch: "star", name: "迅燃", icon: "💨", maxLv: 3, cost0: 2, costStep: 4,
+    kind: "stat", stat: "haste", op: "add", per: 4, desc: "每级攻击速度 +4 点" },
+];
+export const SPARK_DEF: Record<string, SparkDef> =
+  Object.fromEntries(SPARKS.map(s => [s.id, s]));
+
+// ---------------------------------------------------------------- 职业天赋链(2.10):星火池的第二消费端
+// 拓扑:每职业 1 条链 = 入口×1(无前置,maxLv3)+ 三支各 5 节点(支内逐级前置,
+// 第 k+1 节点需第 k 节点满级;tier 字段推导,无显式 req);入口点亮 ≥1 级即解锁三支。
+// 节点 id 规则 `<cls前缀><支字母><序号>`:w0 入口 / wa1..wa5 / wb1.. / wc1..(m_*、r_* 同构)。
+// 与星火树共用同一 spark 池:星火树=通用速效(31 级/149 点) / 职业链=职业特化+终身里程碑
+// (69 级/369 点,吸收 Lv200 局 199 点 > 149 的溢出)—— 局内永远买不完两个,分配即决策。
+// 里程碑口径(分层):链级 chainTalents 是局内状态,随转生清零(与星火同熄);
+// chainBought[职业] 是终身累计已购级数(转生不清,参照 lifetimeEssence 范式),
+// BAL.chain_milestones=[50,100,200] 三档各解锁 1 条特别天赋(永久被动,解锁态是
+// chainBought≥need 的派生态 → 无解锁标志字段,重载零漂移;仅当前职业=归属职业时生效)。
+// 生效路径:全部 stat 走 recalcHero 统一 mods 管道 → 在线/离线/战力/切磋四路自动生效;
+// 仅在线键(armor_pierce/boss_dmg_r/kill_heal/deathward/crit_extra/kill_haste 离线
+// heroDps 不读)刻意压在每支最多 1 个且不在支主干,文案明示而非依赖。
+// 数值依据(费用贪婪全投链实算:49 点/局≈18 级、99≈30、199≈47):
+//   容量 69 级/369 点 = 星火树 31 级/149 点的 ≈2.5 倍;里程碑 50/100/200 对应
+//   踩线局 3 局 / Lv100 局 5 局 / 长局 8 局(新手曲线)——梯度对齐 1-3 区不动缓曲线
+//   (1-3 区 Lv≈5-15 → 星火≤14 → 至多入口+2-3 个支首级,不碾压前期)。
+//   满配职业主属性 +27~42% ≈ 魂晶天赋满级同量级(t_atk 满 +25%),但单局最多持 47/69 级
+//   且与星火树共享预算,局内实际 ≈ 满配×⅔,无双计、CAPS 末端截断兜底。
+//   CAPS 余量逐键:haste 链满 +39(ranger)/150、dodge +13.5/40、lifesteal +5/25、
+//   crit +5/75、armor_pierce +25/50、cd_reduce +7.5/40、xp_pct +32/200、luck +5/50;
+//   crit_dmg/kill_heal/deathward 无上限键;skill_dmg 受 CAPS 300 封顶(链满 +84,占 28%)。
+//   费用骨架全职业统一:入口[2,2]max3=12 点;支内 n1[1,1]max4=10 / n2[2,1]max5=20 /
+//   n3[2,2]max5=30 / n4[3,2]max5=35 / n5[5,3]max3=24;单支 22 级/119 点。
+export interface ChainNodeDef {
+  id: string;                     // w0 入口 / wa1..wa5 / wb1.. / wc1..(m_*、r_* 同构)
+  cls: string;                    // 归属职业(warrior/mage/ranger;消费端按 cls 拦截)
+  branch: "a" | "b" | "c";        // 支字母(入口 tier=0 不参与门控,占位 "a")
+  tier: number;                   // 0=入口(无前置) / 1..5 支内序(tier≥2 需同支前一节点满级)
+  name: string; icon: string;
+  maxLv: number;
+  cost0: number; costStep: number;   // 升下一级费用 = cost0 + costStep × 当前级(sparkCost 同款)
+  kind: "stat";                   // 全 stat 节点;多属性多效果只出现在特别天赋(effects 数组)
+  stat: StatKey | (typeof VIRTUAL_STATS)[number]; op: "add" | "pct"; per: number;
+  desc: string;
+}
+/** 三支标题(UI 分栏遍历;顺序 = a/b/c) */
+export const CLASS_CHAIN_BRANCHES: Record<string,
+  { id: "a" | "b" | "c"; name: string; icon: string; blurb: string }[]> = {
+  warrior: [
+    { id: "a", name: "利刃", icon: "⚔", blurb: "锋锐与斩杀" },
+    { id: "b", name: "坚壁", icon: "🛡", blurb: "血肉与壁垒" },
+    { id: "c", name: "嗜血", icon: "🩸", blurb: "战意与狂怒" },
+  ],
+  mage: [
+    { id: "a", name: "灾变", icon: "☄", blurb: "元素与毁灭" },
+    { id: "b", name: "秘法", icon: "🛡", blurb: "生存与洞悉" },
+    { id: "c", name: "星火", icon: "⭑", blurb: "拾荒与疾行" },
+  ],
+  ranger: [
+    { id: "a", name: "连射", icon: "🏹", blurb: "攻速与暴击" },
+    { id: "b", name: "风筝", icon: "💨", blurb: "走位与闪避" },
+    { id: "c", name: "猎杀", icon: "🎯", blurb: "猎首与拾荒" },
+  ],
+};
+export const CLASS_CHAINS: ChainNodeDef[] = [
+  // ---- 战士 ⚔「不灭战魂」:钢铁与怒火,三围最硬 + 斩杀收头 ----
+  { id: "w0", cls: "warrior", branch: "a", tier: 0, name: "战魂燃烧", icon: "❤",
+    maxLv: 3, cost0: 2, costStep: 2, kind: "stat", stat: "hp", op: "pct", per: 3,
+    desc: "每级生命 +3%;点亮后解锁三条支线" },
+  // 利刃
+  { id: "wa1", cls: "warrior", branch: "a", tier: 1, name: "蛮击", icon: "⚔",
+    maxLv: 4, cost0: 1, costStep: 1, kind: "stat", stat: "atk", op: "pct", per: 3,
+    desc: "每级攻击 +3%" },
+  { id: "wa2", cls: "warrior", branch: "a", tier: 2, name: "破甲", icon: "🗡",
+    maxLv: 5, cost0: 2, costStep: 1, kind: "stat", stat: "armor_pierce", op: "add", per: 5,
+    desc: "每级无视防御 +5 点(仅在线与切磋结算)" },
+  { id: "wa3", cls: "warrior", branch: "a", tier: 3, name: "斩铁", icon: "🪓",
+    maxLv: 5, cost0: 2, costStep: 2, kind: "stat", stat: "crit_dmg", op: "add", per: 8,
+    desc: "每级暴击伤害 +8 点" },
+  { id: "wa4", cls: "warrior", branch: "a", tier: 4, name: "猎首", icon: "💀",
+    maxLv: 5, cost0: 3, costStep: 2, kind: "stat", stat: "boss_dmg_r", op: "add", per: 4,
+    desc: "每级对精英与头目伤害 +4%(仅在线技能命中)" },
+  { id: "wa5", cls: "warrior", branch: "a", tier: 5, name: "处决者", icon: "⚡",
+    maxLv: 3, cost0: 5, costStep: 3, kind: "stat", stat: "atk", op: "pct", per: 5,
+    desc: "每级攻击 +5%" },
+  // 坚壁
+  { id: "wb1", cls: "warrior", branch: "b", tier: 1, name: "铁躯", icon: "🛡",
+    maxLv: 4, cost0: 1, costStep: 1, kind: "stat", stat: "def", op: "pct", per: 3,
+    desc: "每级防御 +3%" },
+  { id: "wb2", cls: "warrior", branch: "b", tier: 2, name: "巨鲸", icon: "🐋",
+    maxLv: 5, cost0: 2, costStep: 1, kind: "stat", stat: "hp", op: "pct", per: 4,
+    desc: "每级生命 +4%" },
+  { id: "wb3", cls: "warrior", branch: "b", tier: 3, name: "影步", icon: "👟",
+    maxLv: 5, cost0: 2, costStep: 2, kind: "stat", stat: "dodge", op: "add", per: 1,
+    desc: "每级闪避 +1 点" },
+  { id: "wb4", cls: "warrior", branch: "b", tier: 4, name: "不屈", icon: "🧱",
+    maxLv: 5, cost0: 3, costStep: 2, kind: "stat", stat: "deathward", op: "add", per: 3,
+    desc: "每级不死 +3 点(仅在线战斗)" },
+  { id: "wb5", cls: "warrior", branch: "b", tier: 5, name: "堡垒", icon: "🏰",
+    maxLv: 3, cost0: 5, costStep: 3, kind: "stat", stat: "def", op: "pct", per: 6,
+    desc: "每级防御 +6%" },
+  // 嗜血
+  { id: "wc1", cls: "warrior", branch: "c", tier: 1, name: "汲血", icon: "🩸",
+    maxLv: 4, cost0: 1, costStep: 1, kind: "stat", stat: "lifesteal", op: "add", per: 1,
+    desc: "每级吸血 +1 点" },
+  { id: "wc2", cls: "warrior", branch: "c", tier: 2, name: "血宴", icon: "🍷",
+    maxLv: 5, cost0: 2, costStep: 1, kind: "stat", stat: "kill_heal", op: "add", per: 1,
+    desc: "每级击杀回血 +1%(仅在线战斗;离线为固定 8% 近似)" },
+  { id: "wc3", cls: "warrior", branch: "c", tier: 3, name: "狂怒", icon: "😡",
+    maxLv: 5, cost0: 2, costStep: 2, kind: "stat", stat: "haste", op: "add", per: 3,
+    desc: "每级攻击速度 +3 点" },
+  { id: "wc4", cls: "warrior", branch: "c", tier: 4, name: "战意", icon: "🎯",
+    maxLv: 5, cost0: 3, costStep: 2, kind: "stat", stat: "crit", op: "add", per: 1,
+    desc: "每级暴击率 +1 点" },
+  { id: "wc5", cls: "warrior", branch: "c", tier: 5, name: "血怒", icon: "🔥",
+    maxLv: 3, cost0: 5, costStep: 3, kind: "stat", stat: "atk", op: "pct", per: 5,
+    desc: "每级攻击 +5%" },
+  // ---- 法师 ✦「奥数星图」:元素与毁灭,普攻平庸技能伤害爆炸 ----
+  { id: "m0", cls: "mage", branch: "a", tier: 0, name: "奥数回响", icon: "✦",
+    maxLv: 3, cost0: 2, costStep: 2, kind: "stat", stat: "skill_dmg", op: "add", per: 8,
+    desc: "每级技能伤害 +8%;点亮后解锁三条支线" },
+  // 灾变
+  { id: "ma1", cls: "mage", branch: "a", tier: 1, name: "燎原", icon: "🔥",
+    maxLv: 4, cost0: 1, costStep: 1, kind: "stat", stat: "skill_dmg", op: "add", per: 6,
+    desc: "每级技能伤害 +6%" },
+  { id: "ma2", cls: "mage", branch: "a", tier: 2, name: "湮灭", icon: "💥",
+    maxLv: 5, cost0: 2, costStep: 1, kind: "stat", stat: "crit_dmg", op: "add", per: 10,
+    desc: "每级暴击伤害 +10 点" },
+  { id: "ma3", cls: "mage", branch: "a", tier: 3, name: "精准", icon: "🎯",
+    maxLv: 5, cost0: 2, costStep: 2, kind: "stat", stat: "crit", op: "add", per: 1,
+    desc: "每级暴击率 +1 点" },
+  { id: "ma4", cls: "mage", branch: "a", tier: 4, name: "汇聚", icon: "⏳",
+    maxLv: 5, cost0: 3, costStep: 2, kind: "stat", stat: "cd_reduce", op: "add", per: 1.5,
+    desc: "每级冷却缩减 +1.5 点" },
+  { id: "ma5", cls: "mage", branch: "a", tier: 5, name: "灾变", icon: "☄",
+    maxLv: 3, cost0: 5, costStep: 3, kind: "stat", stat: "skill_dmg", op: "add", per: 12,
+    desc: "每级技能伤害 +12%" },
+  // 秘法
+  { id: "mb1", cls: "mage", branch: "b", tier: 1, name: "法袍", icon: "🧥",
+    maxLv: 4, cost0: 1, costStep: 1, kind: "stat", stat: "def", op: "pct", per: 3,
+    desc: "每级防御 +3%" },
+  { id: "mb2", cls: "mage", branch: "b", tier: 2, name: "冰甲", icon: "❄",
+    maxLv: 5, cost0: 2, costStep: 1, kind: "stat", stat: "hp", op: "pct", per: 4,
+    desc: "每级生命 +4%" },
+  { id: "mb3", cls: "mage", branch: "b", tier: 3, name: "寒盾", icon: "🛡",
+    maxLv: 5, cost0: 2, costStep: 2, kind: "stat", stat: "dodge", op: "add", per: 1,
+    desc: "每级闪避 +1 点" },
+  { id: "mb4", cls: "mage", branch: "b", tier: 4, name: "洞悉", icon: "👁",
+    maxLv: 5, cost0: 3, costStep: 2, kind: "stat", stat: "xp_pct", op: "add", per: 4,
+    desc: "每级经验加成 +4%" },
+  { id: "mb5", cls: "mage", branch: "b", tier: 5, name: "大法师", icon: "🧙",
+    maxLv: 3, cost0: 5, costStep: 3, kind: "stat", stat: "hp", op: "pct", per: 6,
+    desc: "每级生命 +6%" },
+  // 星火
+  { id: "mc1", cls: "mage", branch: "c", tier: 1, name: "贤者", icon: "📖",
+    maxLv: 4, cost0: 1, costStep: 1, kind: "stat", stat: "xp_pct", op: "add", per: 3,
+    desc: "每级经验加成 +3%" },
+  { id: "mc2", cls: "mage", branch: "c", tier: 2, name: "财脉", icon: "◈",
+    maxLv: 5, cost0: 2, costStep: 1, kind: "stat", stat: "goldfind", op: "add", per: 4,
+    desc: "每级金币加成 +4 点" },
+  { id: "mc3", cls: "mage", branch: "c", tier: 3, name: "疾咏", icon: "💨",
+    maxLv: 5, cost0: 2, costStep: 2, kind: "stat", stat: "haste", op: "add", per: 3,
+    desc: "每级攻击速度 +3 点" },
+  { id: "mc4", cls: "mage", branch: "c", tier: 4, name: "天命", icon: "🍀",
+    maxLv: 5, cost0: 3, costStep: 2, kind: "stat", stat: "luck", op: "add", per: 1,
+    desc: "每级幸运 +1 点" },
+  { id: "mc5", cls: "mage", branch: "c", tier: 5, name: "星陨", icon: "🌠",
+    maxLv: 3, cost0: 5, costStep: 3, kind: "stat", stat: "atk", op: "pct", per: 4,
+    desc: "每级攻击 +4%" },
+  // ---- 射手 ➤「风羽连弩」:风与箭雨,攻速快暴击高连击风筝 ----
+  { id: "r0", cls: "ranger", branch: "a", tier: 0, name: "风之呼吸", icon: "💨",
+    maxLv: 3, cost0: 2, costStep: 2, kind: "stat", stat: "haste", op: "add", per: 4,
+    desc: "每级攻击速度 +4 点;点亮后解锁三条支线" },
+  // 连射
+  { id: "ra1", cls: "ranger", branch: "a", tier: 1, name: "迅捷", icon: "🏹",
+    maxLv: 4, cost0: 1, costStep: 1, kind: "stat", stat: "haste", op: "add", per: 3,
+    desc: "每级攻击速度 +3 点" },
+  { id: "ra2", cls: "ranger", branch: "a", tier: 2, name: "鹰眼", icon: "🦅",
+    maxLv: 5, cost0: 2, costStep: 1, kind: "stat", stat: "crit", op: "add", per: 1,
+    desc: "每级暴击率 +1 点" },
+  { id: "ra3", cls: "ranger", branch: "a", tier: 3, name: "致命", icon: "☠",
+    maxLv: 5, cost0: 2, costStep: 2, kind: "stat", stat: "crit_dmg", op: "add", per: 8,
+    desc: "每级暴击伤害 +8 点" },
+  { id: "ra4", cls: "ranger", branch: "a", tier: 4, name: "连锁", icon: "⛓",
+    maxLv: 5, cost0: 3, costStep: 2, kind: "stat", stat: "crit_extra", op: "add", per: 4,
+    desc: "每级暴击追击 +4%(仅在线战斗)" },
+  { id: "ra5", cls: "ranger", branch: "a", tier: 5, name: "箭雨", icon: "🌧",
+    maxLv: 3, cost0: 5, costStep: 3, kind: "stat", stat: "haste", op: "add", per: 5,
+    desc: "每级攻击速度 +5 点" },
+  // 风筝
+  { id: "rb1", cls: "ranger", branch: "b", tier: 1, name: "风衣", icon: "🧥",
+    maxLv: 4, cost0: 1, costStep: 1, kind: "stat", stat: "def", op: "pct", per: 3,
+    desc: "每级防御 +3%" },
+  { id: "rb2", cls: "ranger", branch: "b", tier: 2, name: "猎体", icon: "❤",
+    maxLv: 5, cost0: 2, costStep: 1, kind: "stat", stat: "hp", op: "pct", per: 4,
+    desc: "每级生命 +4%" },
+  { id: "rb3", cls: "ranger", branch: "b", tier: 3, name: "疾走", icon: "👟",
+    maxLv: 5, cost0: 2, costStep: 2, kind: "stat", stat: "dodge", op: "add", per: 1.5,
+    desc: "每级闪避 +1.5 点" },
+  { id: "rb4", cls: "ranger", branch: "b", tier: 4, name: "汲血", icon: "🩸",
+    maxLv: 5, cost0: 3, costStep: 2, kind: "stat", stat: "lifesteal", op: "add", per: 1,
+    desc: "每级吸血 +1 点" },
+  { id: "rb5", cls: "ranger", branch: "b", tier: 5, name: "风灵", icon: "🌬",
+    maxLv: 3, cost0: 5, costStep: 3, kind: "stat", stat: "dodge", op: "add", per: 2,
+    desc: "每级闪避 +2 点" },
+  // 猎杀
+  { id: "rc1", cls: "ranger", branch: "c", tier: 1, name: "利刃", icon: "🗡",
+    maxLv: 4, cost0: 1, costStep: 1, kind: "stat", stat: "atk", op: "pct", per: 3,
+    desc: "每级攻击 +3%" },
+  { id: "rc2", cls: "ranger", branch: "c", tier: 2, name: "猎首", icon: "💀",
+    maxLv: 5, cost0: 2, costStep: 1, kind: "stat", stat: "boss_dmg_r", op: "add", per: 4,
+    desc: "每级对精英与头目伤害 +4%(仅在线技能命中)" },
+  { id: "rc3", cls: "ranger", branch: "c", tier: 3, name: "杀意", icon: "😤",
+    maxLv: 5, cost0: 2, costStep: 2, kind: "stat", stat: "kill_haste", op: "add", per: 3,
+    desc: "每级杀意 +3 点(击杀提速,仅在线战斗)" },
+  { id: "rc4", cls: "ranger", branch: "c", tier: 4, name: "拾荒", icon: "◈",
+    maxLv: 5, cost0: 3, costStep: 2, kind: "stat", stat: "goldfind", op: "add", per: 4,
+    desc: "每级金币加成 +4 点" },
+  { id: "rc5", cls: "ranger", branch: "c", tier: 5, name: "猎神", icon: "🎯",
+    maxLv: 3, cost0: 5, costStep: 3, kind: "stat", stat: "atk", op: "pct", per: 5,
+    desc: "每级攻击 +5%" },
+];
+export const CHAIN_DEF: Record<string, ChainNodeDef> =
+  Object.fromEntries(CLASS_CHAINS.map(n => [n.id, n]));
+
+/** 特别天赋:里程碑(终身累计已购该职业链级数)点亮「✵天赋点」后手动选择的一次性被动。
+ *  天赋点 = 特殊技能点,有限:每跨一档(50/100/200)仅得 1 枚,终身每职业至多 3 枚;
+ *  T1/T2 档各 2 候选选 1、T3 档为该职业终极唯一 —— 一次点亮终身定型,不可多点、
+ *  不可改选(转生不清、无解锁回退);选择态入档 chainPicked,
+ *  仅当前职业=归属职业时经 chainSpecialMods 进 mods 管道。
+ *  强度锚:T1 ≈ 单条永久天赋满级线的 0.2-0.6×、T3 全套 ≈ +10-20% 主属性+资源,
+ *  一次性有界解锁(与转生无界乘区不同),远小于反作弊包络 ×4 SLACK。 */
+export interface ChainSpecialDef {
+  id: string; cls: string;
+  need: number;                   // BAL.chain_milestones 档位(50/100/200);同档候选 2+2+1
+  name: string; icon: string;
+  effects: { stat: ChainNodeDef["stat"]; op: "add" | "pct"; v: number }[];
+  desc: string;
+}
+export const CLASS_CHAIN_SPECIALS: ChainSpecialDef[] = [
+  { id: "sp_w1", cls: "warrior", need: 50, name: "百战之躯", icon: "🛡",
+    effects: [
+      { stat: "def", op: "pct", v: 6 }, { stat: "hp", op: "pct", v: 6 },
+      { stat: "kill_heal", op: "add", v: 2 },
+    ],
+    desc: "防御 +6% · 生命 +6% · 击杀回血 +2 点(仅在线战斗)" },
+  { id: "sp_w1b", cls: "warrior", need: 50, name: "嗜战", icon: "🩸",
+    effects: [
+      { stat: "atk", op: "pct", v: 4 }, { stat: "haste", op: "add", v: 4 },
+      { stat: "lifesteal", op: "add", v: 2 },
+    ],
+    desc: "攻击 +4% · 攻击速度 +4 点 · 吸血 +2 点" },
+  { id: "sp_w2", cls: "warrior", need: 100, name: "怒火燎原", icon: "⚔",
+    effects: [
+      { stat: "atk", op: "pct", v: 8 }, { stat: "crit_dmg", op: "add", v: 15 },
+      { stat: "armor_pierce", op: "add", v: 5 },
+    ],
+    desc: "攻击 +8% · 暴击伤害 +15 点 · 无视防御 +5 点(仅在线与切磋)" },
+  { id: "sp_w2b", cls: "warrior", need: 100, name: "不动如山", icon: "🏰",
+    effects: [
+      { stat: "hp", op: "pct", v: 8 }, { stat: "dodge", op: "add", v: 3 },
+      { stat: "deathward", op: "add", v: 3 },
+    ],
+    desc: "生命 +8% · 闪避 +3 点 · 不死 +3 点(仅在线)" },
+  { id: "sp_w3", cls: "warrior", need: 200, name: "不灭战魂", icon: "🔥",
+    effects: [
+      { stat: "atk", op: "pct", v: 10 }, { stat: "hp", op: "pct", v: 10 },
+      { stat: "deathward", op: "add", v: 5 }, { stat: "goldfind", op: "add", v: 10 },
+    ],
+    desc: "攻击 +10% · 生命 +10% · 不死 +5 点(仅在线)· 金币加成 +10 点" },
+  { id: "sp_m1", cls: "mage", need: 50, name: "元素亲和", icon: "✦",
+    effects: [
+      { stat: "skill_dmg", op: "add", v: 15 }, { stat: "xp_pct", op: "add", v: 5 },
+    ],
+    desc: "技能伤害 +15% · 经验加成 +5%" },
+  { id: "sp_m1b", cls: "mage", need: 50, name: "咒盾", icon: "🛡",
+    effects: [
+      { stat: "def", op: "pct", v: 5 }, { stat: "hp", op: "pct", v: 5 },
+      { stat: "cd_reduce", op: "add", v: 2 },
+    ],
+    desc: "防御 +5% · 生命 +5% · 冷却缩减 +2 点" },
+  { id: "sp_m2", cls: "mage", need: 100, name: "时间扭曲", icon: "⏳",
+    effects: [
+      { stat: "cd_reduce", op: "add", v: 4 }, { stat: "crit", op: "add", v: 3 },
+      { stat: "xp_pct", op: "add", v: 8 },
+    ],
+    desc: "冷却缩减 +4 点 · 暴击率 +3 点 · 经验加成 +8%" },
+  { id: "sp_m2b", cls: "mage", need: 100, name: "焚天", icon: "🔥",
+    effects: [
+      { stat: "skill_dmg", op: "add", v: 20 }, { stat: "crit_dmg", op: "add", v: 10 },
+      { stat: "goldfind", op: "add", v: 5 },
+    ],
+    desc: "技能伤害 +20% · 暴击伤害 +10 点 · 金币加成 +5 点" },
+  { id: "sp_m3", cls: "mage", need: 200, name: "湮灭星陨", icon: "☄",
+    effects: [
+      { stat: "skill_dmg", op: "add", v: 30 }, { stat: "crit_dmg", op: "add", v: 20 },
+      { stat: "atk", op: "pct", v: 8 }, { stat: "goldfind", op: "add", v: 10 },
+    ],
+    desc: "技能伤害 +30% · 暴击伤害 +20 点 · 攻击 +8% · 金币加成 +10 点" },
+  { id: "sp_r1", cls: "ranger", need: 50, name: "疾风之魂", icon: "💨",
+    effects: [
+      { stat: "haste", op: "add", v: 6 }, { stat: "dodge", op: "add", v: 3 },
+    ],
+    desc: "攻击速度 +6 点 · 闪避 +3 点" },
+  { id: "sp_r1b", cls: "ranger", need: 50, name: "猎首烙印", icon: "💀",
+    effects: [
+      { stat: "boss_dmg_r", op: "add", v: 6 }, { stat: "atk", op: "pct", v: 3 },
+    ],
+    desc: "对精英与头目伤害 +6%(仅在线技能命中)· 攻击 +3%" },
+  { id: "sp_r2", cls: "ranger", need: 100, name: "鹰眼猎杀", icon: "🎯",
+    effects: [
+      { stat: "crit", op: "add", v: 4 }, { stat: "crit_dmg", op: "add", v: 15 },
+      { stat: "luck", op: "add", v: 3 },
+    ],
+    desc: "暴击率 +4 点 · 暴击伤害 +15 点 · 幸运 +3 点" },
+  { id: "sp_r2b", cls: "ranger", need: 100, name: "疾影", icon: "💨",
+    effects: [
+      { stat: "haste", op: "add", v: 5 }, { stat: "dodge", op: "add", v: 2 },
+      { stat: "kill_haste", op: "add", v: 5 },
+    ],
+    desc: "攻击速度 +5 点 · 闪避 +2 点 · 杀意 +5 点(击杀提速,仅在线)" },
+  { id: "sp_r3", cls: "ranger", need: 200, name: "万箭归宗", icon: "☔",
+    effects: [
+      { stat: "atk", op: "pct", v: 8 }, { stat: "haste", op: "add", v: 8 },
+      { stat: "crit_extra", op: "add", v: 8 }, { stat: "goldfind", op: "add", v: 10 },
+    ],
+    desc: "攻击 +8% · 攻击速度 +8 点 · 暴击追击 +8%(仅在线)· 金币加成 +10 点" },
+];
+
 // ---------------------------------------------------------------- 兑换码(2.3):本地哈希校验,零后端
 /** 单机游戏,防君子不防小人;码表哈希内嵌,声称记录进存档防重复 */
 export interface RedeemDef {
@@ -744,15 +1118,15 @@ export const BAL = {
 
   // ---- 深渊天赋(2.4):魂晶经济与定向锻造 ----
   rebirth_essence_base: 5,   // 转生魂晶 = round(k × base),至少 1;锚点1档=5,封顶4档=20
+  // ---- 星火(2.9):局内升级点数经济(表驱动;50 级踩线转生 = 49 点) ----
+  spark_per_lv: 1,           // 每升 1 级得点(开局 level=1 不给点;转生熄灭)
   forge_gold_k: 200,         // 定向锻造金币费 = 击杀金(当前区域档) × k
   forge_stones0: 4,          // 重铸石基础费
   forge_stones_t: 80,        // 每满 tier/80 加 1 颗
   forge_stones_cap: 25,      // 重铸石费封顶(深层不再失控)
   forge_min_rid: 2,          // 锻造稀有度保底:稀有+
   forge_rarity_boost: 0.5,   // 高稀有度权重增益(介于精英 0.25 与头目 0.6 之间)
-
-  // ---- 深渊套装(2.5):主题特产装备的掉率(rollItem 命中即按区主题标记 suitId 并锁定)
-  suit_drop_chance: 0.10,
+  // (2.9 套装掉率 suit_drop_chance 已删:渠道收拢进塔,必掉+定向补缺,无概率参数)
 
   // ---- 玩家自动化三开关(2.2.2):逐步放手,先强化→技能→祭坛 ----
   auto_enhance_lv: 20,     // 自动强化解锁等级
@@ -781,6 +1155,9 @@ export const BAL = {
   // ---- 异步切磋(2.7):阵容快照对战 —— 回合制期望对撞,奖励仅称号
   arena_turn_sec: 0.5,        // 每回合等效输出秒数(120 回合 = 60s 等效战斗)
   arena_max_rounds: 120,      // 回合上限;未分胜负按剩余血量百分比判,持平判攻方胜
+
+  // ---- 职业天赋链(2.10):里程碑档位(终身累计已购该职业链级数,表驱动照 speed_unlock 范式)
+  chain_milestones: [50, 100, 200],   // 逐档 +1 枚✵天赋点(特殊技能点,有限):T1/T2 各 2 选 1、T3 终极 1 条,一次定型
 } as const;
 
 export const VIRTUAL_STATS = ["skill_dmg", "cd_reduce", "dodge", "armor_pierce", "xp_pct",
