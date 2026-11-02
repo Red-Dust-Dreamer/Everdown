@@ -1141,10 +1141,12 @@ export const BAL = {
   world_boss_var_lo: 0.9,      // 折算浮动下界
   world_boss_var_hi: 1.1,      // 折算浮动上界
   world_boss_def: 2000,        // 折算假人防御(固定值;perBase 分量与真实差异 ≤ 约 3×)
-  world_boss_attempts: 3,      // 每轮挑战次数上限(纯本地记账,服务端靠包络+限流兜底)
+  world_boss_attempts: 3,      // 每日挑战次数上限(2026-10-26 无尽血配套:rollDaily 跨日清零;
+                               // 周轮只管贡献榜/奖励凭据;次数纯本地记账,服务端靠包络+限流兜底)
   world_boss_gold_k: 50,       // 参与档金币 = 当前区击杀金 × 50(≈10 分钟挂机收入,与签到同保守哲学)
-  world_boss_stones_pct: 2,    // ≥1% 贡献档:重铸石
-  world_boss_stones_kill: 2,   // 上轮全服击杀档:重铸石(可与贡献档叠加)
+  world_boss_stones_pct: 2,    // 贡献占上轮全服 ≥1% 档:重铸石
+  world_boss_stones_kill: 2,   // 全服重创档(上轮全服累计 ≥ world_boss_server_goal):重铸石
+  world_boss_server_goal: 5_000_000,  // 全服重创里程碑(无尽血叙事:巨兽不可杀,但重创有奖)
   world_boss_claim_keep: 8,    // claimed 幂等记录滚动保留轮数(防存档膨胀)
   // 服务端伤害包络系数(server.cjs/worker.js 的 world_boss_dmg_cap_k 同名常量互指,
   // scripts/lb-smoke.ts G 组 readFileSync 断言双端各含该字样,漂移即 FAIL)。

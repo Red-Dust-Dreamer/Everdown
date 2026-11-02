@@ -1773,6 +1773,10 @@ export class Game {
       this.questDailyCount = 0;
       this.questRerollCount = 0;
       this.towerKeysBought = 0;
+      // 世界BOSS 挑战次数按日刷新(2026-10-26,无尽血配套:周轮只管贡献榜,次数日清;
+      // my_best 仍按周轮换清零 —— getBossSync 口径)
+      if (this.boss.attempts > 0) this.log("🌍 世界BOSS 挑战次数已刷新", "bright_cyan");
+      this.boss.attempts = 0;
     }
     // 每日免费钥匙与加购额度同拍发放:rollDaily 是跨日打点的统一入口
     // (tick/击杀/悬赏/周常/签到都过这里),页面跨天不重开也能领;
@@ -1854,7 +1858,7 @@ export class Game {
   bossChallenge(): number | null {
     if (this.classId === null) { this.toast("先选择职业"); return null; }
     if (this.boss.attempts >= BAL.world_boss_attempts) {
-      this.toast(`本轮挑战次数已用完(${BAL.world_boss_attempts}/${BAL.world_boss_attempts}),下轮刷新`);
+      this.toast(`今日挑战次数已用完(${BAL.world_boss_attempts}/${BAL.world_boss_attempts}),明日 0 点刷新`);
       return null;
     }
     const [dps] = systems.heroDps(this, BAL.world_boss_def, 1e12, true);
@@ -1904,17 +1908,17 @@ export class Game {
       && !this.boss.claimed.includes(r) ? r : null;
   }
 
-  /** 上轮奖励档位预览(纯函数,bossClaim 同口径):
-   *  参与>0 → 金币=当前区击杀金×world_boss_gold_k;≥1% → +重铸石;≥5% → +1 塔钥匙;
-   *  上轮 killed → 再 +重铸石(可与贡献档叠加)。未参与时全 0。 */
-  bossClaimTiers(prev: { total_hp: number; my_dmg: number; killed: boolean }):
+  /** 上轮奖励档位预览(纯函数,bossClaim 同口径;无尽血 2026-10-26):
+   *  参与(伤害>0)→ 金币;贡献占上轮全服累计 ≥1% → +重铸石、≥5% → +1 塔钥匙;
+   *  上轮全服累计 ≥ world_boss_server_goal → 全服档 +重铸石。未参与时全 0。 */
+  bossClaimTiers(prev: { my_dmg: number; dealt_sum: number }):
       { gold: number; stones: number; keys: number } {
-    const joined = prev.my_dmg > 0 && prev.total_hp > 0;
-    const share = joined ? prev.my_dmg / prev.total_hp : 0;
+    const joined = prev.my_dmg > 0;
+    const share = joined ? prev.my_dmg / Math.max(1, prev.dealt_sum) : 0;
     let stones = 0, keys = 0;
     if (share >= 0.01) stones += BAL.world_boss_stones_pct;
     if (share >= 0.05) keys += 1;
-    if (joined && prev.killed) stones += BAL.world_boss_stones_kill;
+    if (prev.dealt_sum >= BAL.world_boss_server_goal) stones += BAL.world_boss_stones_kill;
     return {
       gold: joined ? Math.round(mobGold(tierOf(this.zone, this.stage)) * BAL.world_boss_gold_k) : 0,
       stones, keys,
@@ -1922,10 +1926,10 @@ export class Game {
   }
 
   /** 领取上轮世界BOSS奖励(纯本地发奖,幂等:同轮重复领取被拒)。
-   *  prev 形如 GET /boss 的 prev:{round,total_hp,my_dmg,killed}。 */
-  bossClaim(prev: { round: string; total_hp: number; my_dmg: number; killed: boolean }): void {
+   *  prev 形如 GET /boss 的 prev:{round, my_dmg, dealt_sum}。 */
+  bossClaim(prev: { round: string; my_dmg: number; dealt_sum: number }): void {
     if (this.boss.claimed.includes(prev.round)) { this.toast("该轮奖励已领取"); return; }
-    if (!(prev.my_dmg > 0) || !(prev.total_hp > 0)) {
+    if (!(prev.my_dmg > 0)) {
       this.toast("上轮未参与,没有可领的奖励");
       return;
     }
@@ -1940,8 +1944,7 @@ export class Game {
     if (tiers.gold) parts.push(`◈${fmt(tiers.gold)}`);
     if (tiers.stones) parts.push(`✦${tiers.stones}`);
     if (tiers.keys) parts.push(`🔑${tiers.keys}`);
-    this.log(`🎁 世界BOSS·${prev.round} 轮奖励:${parts.join(" + ")}${prev.killed ? "(全服击杀!)" : ""}`,
-      "bright_green");
+    this.log(`🎁 世界BOSS·${prev.round} 轮奖励:${parts.join(" + ")}`, "bright_green");
     this.toast(`世界BOSS奖励 ${parts.join(" + ")}`);
   }
 

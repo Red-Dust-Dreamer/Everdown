@@ -2830,56 +2830,66 @@ function testWorldBossDamage(): void {
   eq(gA.boss.attempts, BAL.world_boss_attempts, "记账封顶不再上探");
 }
 
-/** 奖励档位:参与/≥1%/≥5%/击杀轮逐档 eq + bossClaim 同轮重复领取被拒(claimed 幂等) */
+/** 奖励档位(无尽血 2026-10-26):参与/≥1%/≥5%/全服重创档逐档 eq + bossClaim 幂等 + 每日刷新 */
 function testWorldBossRewards(): void {
   const g = newGame(426303);
   g.chooseClass("warrior");
   const goldTier = Math.round(mobGold(tierOf(g.zone, g.stage)) * BAL.world_boss_gold_k);
-  // 档位金币随当前区计价:断言用的期望值与 bossClaim 同式现算(锚定 zone/stage 不变)
 
-  // —— bossClaimTiers 逐档 eq(边界取等号:恰 1%/恰 5% 均入档) ——
-  eq(g.bossClaimTiers({ total_hp: 1e9, my_dmg: 5e6, killed: false }).gold, goldTier,
+  // —— bossClaimTiers 逐档 eq(边界取等号:恰 1%/恰 5% 均入档;分母=上轮全服累计) ——
+  eq(g.bossClaimTiers({ my_dmg: 5e3, dealt_sum: 1e6 }).gold, goldTier,
     "参与(0.5%):金币档");
-  eq(g.bossClaimTiers({ total_hp: 1e9, my_dmg: 5e6, killed: false }).stones, 0, "参与档无重铸石");
-  eq(g.bossClaimTiers({ total_hp: 1e9, my_dmg: 1e7, killed: false }).stones,
+  eq(g.bossClaimTiers({ my_dmg: 5e3, dealt_sum: 1e6 }).stones, 0, "参与档无重铸石");
+  eq(g.bossClaimTiers({ my_dmg: 1e4, dealt_sum: 1e6 }).stones,
     BAL.world_boss_stones_pct, "恰 1%:入 ≥1% 档(边界含等号)");
-  eq(g.bossClaimTiers({ total_hp: 1e9, my_dmg: 4.99e7, killed: false }).keys, 0, "4.99% 无塔钥匙");
-  eq(g.bossClaimTiers({ total_hp: 1e9, my_dmg: 5e7, killed: false }).keys, 1,
+  eq(g.bossClaimTiers({ my_dmg: 4.99e4, dealt_sum: 1e6 }).keys, 0, "4.99% 无塔钥匙");
+  eq(g.bossClaimTiers({ my_dmg: 5e4, dealt_sum: 1e6 }).keys, 1,
     "恰 5%:入 ≥5% 档(边界含等号)");
-  const tk = g.bossClaimTiers({ total_hp: 1e9, my_dmg: 5e7, killed: true });
+  const tk = g.bossClaimTiers({ my_dmg: 5e7, dealt_sum: BAL.world_boss_server_goal });
   eq(tk.stones, BAL.world_boss_stones_pct + BAL.world_boss_stones_kill,
-    "击杀轮:击杀档与贡献档叠加");
-  eq(g.bossClaimTiers({ total_hp: 1e9, my_dmg: 0, killed: true }).gold, 0, "未参与:全 0(击杀也不发)");
+    "全服重创(累计≥里程碑):全服档与贡献档叠加");
+  eq(g.bossClaimTiers({ my_dmg: 0, dealt_sum: BAL.world_boss_server_goal }).gold, 0,
+    "未参与:全 0(全服重创也不发)");
 
-  // —— bossClaim 全链路:资源精确入账(参与档 / 击杀+≥5% 档) ——
+  // —— bossClaim 全链路:资源精确入账 ——
   const snap = (): [number, number, number] => [g.gold, g.stones, g.tower.keys];
   const delta = (before: [number, number, number]): [number, number, number] =>
     [g.gold - before[0], g.stones - before[1], g.tower.keys - before[2]];
 
   let s = snap();
-  g.bossClaim({ round: "2026-W40", total_hp: 1e9, my_dmg: 5e6, killed: false });
+  g.bossClaim({ round: "2026-W40", my_dmg: 5e3, dealt_sum: 1e6 });
   let dlt = delta(s);
   eqNumArr(dlt, [goldTier, 0, 0], "参与档精确发金币");
   eq(g.boss.claimed.includes("2026-W40"), true, "领取后 claimed 记轮");
 
   s = snap();
-  g.bossClaim({ round: "2026-W41", total_hp: 1e9, my_dmg: 5e7, killed: true });
+  g.bossClaim({ round: "2026-W41", my_dmg: 5e7, dealt_sum: BAL.world_boss_server_goal });
   dlt = delta(s);
   eqNumArr(dlt, [goldTier, BAL.world_boss_stones_pct + BAL.world_boss_stones_kill, 1],
-    "≥5%+击杀轮:金币+重铸石(叠加)+塔钥匙");
+    "≥5%+全服重创:金币+重铸石(叠加)+塔钥匙");
 
   // —— 幂等:同轮重复领取被拒,资源零变化 ——
   s = snap();
-  g.bossClaim({ round: "2026-W41", total_hp: 1e9, my_dmg: 5e7, killed: true });
+  g.bossClaim({ round: "2026-W41", my_dmg: 5e7, dealt_sum: BAL.world_boss_server_goal });
   eqNumArr(delta(s), [0, 0, 0], "同轮重复领取不发任何资源");
   ok(toastTexts(g).some(t => t.includes("已领取")), "重复领取 toast 明示已领");
   eq(g.boss.claimed.filter(r => r === "2026-W41").length, 1, "claimed 不重复记轮");
 
   // —— 未参与:拒绝发奖 ——
   s = snap();
-  g.bossClaim({ round: "2026-W42", total_hp: 1e9, my_dmg: 0, killed: false });
+  g.bossClaim({ round: "2026-W42", my_dmg: 0, dealt_sum: 1e6 });
   eqNumArr(delta(s), [0, 0, 0], "未参与(my_dmg=0)无奖励");
   eq(g.boss.claimed.includes("2026-W42"), false, "被拒不入 claimed");
+
+  // —— 每日刷新:rollDaily 跨日只清 attempts,my_best/claimed 不动(周轮口径) ——
+  const g2 = newGame(426305);
+  g2.chooseClass("mage");
+  g2.boss.attempts = BAL.world_boss_attempts;
+  g2.boss.my_best = 12345;
+  g2.questDailyDate = "2020-01-01";   // 伪造昨日 → 下次 rollDaily 触发跨日
+  g2.rollDaily();
+  eq(g2.boss.attempts, 0, "跨日:挑战次数清零");
+  eq(g2.boss.my_best, 12345, "跨日:my_best 保留(周轮换才清)");
 }
 
 /** 轮次切换:getBossSync 新轮号≠last_round 时 attempts/my_best 清零且 claimed 保留;
@@ -2924,7 +2934,7 @@ function testWorldBossRounds(): void {
   eq(g2.bossPendingClaim(), null, "同步进当前轮红点即消");
   g2.getBossSync("1970-W2");
   g2.boss.my_best = 100;
-  g2.bossClaim({ round: "1970-W2", total_hp: 1e6, my_dmg: 100, killed: false });
+  g2.bossClaim({ round: "1970-W2", my_dmg: 100, dealt_sum: 1e6 });
   eq(g2.bossPendingClaim(), null, "已领取后无红点");
 
   // —— claimed 滚动裁剪:按 (年, 周数值) 排序保留最近 8 轮 ——
@@ -2948,7 +2958,7 @@ function testWorldBossSave(): void {
   g.chooseClass("warrior");
   g.getBossSync("2026-W43");
   g.bossHitAccept(123456);
-  g.bossClaim({ round: "2026-W42", total_hp: 1e6, my_dmg: 2e4, killed: false });
+  g.bossClaim({ round: "2026-W42", my_dmg: 2e4, dealt_sum: 1e6 });
 
   // —— 往返保真 ——
   g.save();

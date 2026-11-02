@@ -293,12 +293,12 @@ try {
     return { status: r.status, body: await r.json() as { ok?: boolean; error?: string; my_dmg?: number } };
   };
 
-  await check("S22 世界BOSS:GET /boss 首次自动建轮(prev:null);hit 合法通过/更高覆盖/更低不降", async () => {
+  await check("S22 世界BOSS(无尽血):GET /boss 首次自动建轮(prev:null);hit 合法通过/更高覆盖/更低不降", async () => {
     const first = await getBoss("uuid=bossA00001");
     ok(first.status === 200 && !first.body.error, `首建轮应 200,实际 ${first.status} ${first.body.error ?? ""}`);
     ok(/^\d{4}-W\d+$/.test(first.body.round ?? ""), `轮号应为 ISO 周键,实际 ${first.body.round}`);
-    ok(first.body.total_hp === 2_000_000, `首轮总血应为 200 万,实际 ${first.body.total_hp}`);
-    ok(first.body.killed === false, "首轮未击杀");
+    ok(first.body.total_hp === undefined && first.body.killed === undefined,
+      "无尽血:响应不再有 total_hp/killed 字段");
     ok(first.body.prev === null, `首建轮 prev 应为 null,实际 ${JSON.stringify(first.body.prev)}`);
     ok(Array.isArray(first.body.top) && first.body.top.length === 0, "首建轮贡献榜为空");
     ok(first.body.my_dmg === 0, "首建轮我的伤害为 0");
@@ -314,45 +314,44 @@ try {
     ok(after.body.my_dmg === 2000, `GET /boss 同步口径,实际 ${after.body.my_dmg}`);
     ok(after.body.dealt === 2000, `全服合计 = 去重后的个人最好,实际 ${after.body.dealt}`);
     ok((after.body.top ?? []).some(r => r.is_me && r.dmg === 2000), "贡献榜含本人(is_me,不回传 uuid)");
+    // 无尽血:高伤害(包络内)只累计 dealt,响应无 killed/击杀语义(超包络仍被反作弊拦)
+    await bossHit({ uuid: "bossA00009", dmg: 500_000 });
+    const huge = await getBoss("uuid=bossA00009");
+    ok(huge.body.dealt > 500_000 && huge.body.killed === undefined,
+      "高伤害仅累计 dealt,无击杀语义");
     // scope 独立:boss 3 连击后,同 uuid 的 /submit(scope 空)不受 boss 桶影响
     const board = await post(sub({ uuid: "bossA00001", name: "挑战者" }));
     ok(board.status === 200 && !board.error, `boss hit 不烧四榜限流额度,实际 ${board.status} ${board.error ?? ""}`);
   });
 
-  await check("S23 世界BOSS:惰性轮次跨越(上轮结算 killed/新轮 ×1.6/×0.8 下限 50 万)", async () => {
+  await check("S23 世界BOSS(无尽血):惰性轮次跨越(上轮全服累计写入 dealt_sum,新轮清零起步)", async () => {
     // 注入历史轮(直接写临时 DB,同 S8 手法):清空后把"最新轮"伪装成上周 →
-    // 下一次 GET /boss 触发惰性结算 + 开新轮 + 旧数据懒清理
+    // 下一次 GET /boss 触发惰性结算(dealt_sum)+ 开新轮 + 旧数据懒清理
     const db = new DatabaseSync(join(tmp, "t.db"));
-    const inject = (round: string, totalHp: number, dmg: number): void => {
+    const inject = (round: string, dmg: number): void => {
       db.prepare("DELETE FROM boss_damage").run();
       db.prepare("DELETE FROM boss_rounds").run();
       const at = Date.now() - 7 * 86400_000;
-      db.prepare("INSERT INTO boss_rounds (round, total_hp, killed, created_at) VALUES (?, ?, 0, ?)")
-        .run(round, totalHp, at);
+      db.prepare("INSERT INTO boss_rounds (round, total_hp, killed, created_at) VALUES (?, 0, 0, ?)")
+        .run(round, at);
       db.prepare("INSERT INTO boss_damage (round, uuid, name, dmg, updated_at) VALUES (?, ?, '挑战者', ?, ?)")
         .run(round, "bossA00001", dmg, at);
     };
 
-    // 场景一:上轮打穿(SUM ≥ total)→ 结算 killed=1,新轮 ×1.6(注入总量取下限之上,缩放可见)
-    inject("2020-W1", 1_000_000, 1_500_000);
+    // 场景一:上轮全服累计(多 uuid 去重求和)写入 prev.dealt_sum
+    inject("2020-W1", 1_500_000);
     let r = await getBoss("uuid=bossA00001");
     ok(r.body.prev?.round === "2020-W1", `跨越后 prev=上一轮,实际 ${JSON.stringify(r.body.prev)}`);
-    ok(r.body.prev?.killed === true, "上轮 SUM≥total_hp 惰性结算为已击杀");
+    ok(r.body.prev?.dealt_sum === 1_500_000,
+      `prev.dealt_sum=上轮全服累计,实际 ${r.body.prev?.dealt_sum}`);
     ok(r.body.prev?.my_dmg === 1_500_000, `prev.my_dmg=上轮个人伤害,实际 ${r.body.prev?.my_dmg}`);
-    ok(r.body.total_hp === 1_600_000, `击杀轮 → 新轮总血 ×1.6(100 万→160 万),实际 ${r.body.total_hp}`);
     ok(r.body.my_dmg === 0 && r.body.dealt === 0, "新轮个人/全服伤害清零起步");
-    ok(r.body.killed === false, "新轮未击杀");
+    ok(r.body.killed === undefined, "无尽血:新轮无击杀语义");
 
-    // 场景二:上轮没打穿且缩放后低于下限(SUM 100 < total 60 万,×0.8=48 万)→ 下限 50 万
-    inject("2020-W2", 600_000, 100);
+    // 场景二:零参与轮(dealt_sum=0)→ 奖励档分母 0 也不炸(prev.dealt_sum=0)
+    inject("2020-W2", 0);
     r = await getBoss("uuid=bossA00001");
-    ok(r.body.prev?.killed === false, "上轮未打穿不结算击杀");
-    ok(r.body.total_hp === 500_000, `未杀轮 ×0.8(48 万)触及下限 50 万,实际 ${r.body.total_hp}`);
-
-    // 场景三:上轮没打穿但缩放后仍高于下限(×0.8=80 万)→ 精确 80 万
-    inject("2020-W3", 1_000_000, 100);
-    r = await getBoss("uuid=bossA00001");
-    ok(r.body.total_hp === 800_000, `未杀轮 ×0.8 高于下限时精确缩放,实际 ${r.body.total_hp}`);
+    ok(r.body.prev?.dealt_sum === 0, `空轮 dealt_sum=0,实际 ${r.body.prev?.dealt_sum}`);
   });
 
   await check("S24 世界BOSS:伤害超 curveAt(power,playtime)×1200 返回 400(边界含等号)", async () => {

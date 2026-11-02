@@ -63,12 +63,14 @@ CREATE TABLE IF NOT EXISTS save_sync (
   updated_at INTEGER NOT NULL
 );
 
--- 世界BOSS(周轮合力,2.6):全服每周对同一头目异步输出,伤害只升不降聚合进总血池。
--- 轮次滚动 = weekKeyNow + 惰性结算(无 cron);仅保留最近两轮(当轮+上轮供 prev)。
+-- 世界BOSS(无尽血模式,2026-10-26):巨兽生命无穷不被击杀,全服伤害累计进输出榜;
+-- 轮次按周滚动(贡献榜/上轮奖励凭据);dealt_sum=换轮时写入的上轮全服累计(奖励档
+-- 贡献占比分母)。total_hp/killed 列保留(NOT NULL 兼容)但恒 0;线上库走 ALTER 补列。
 CREATE TABLE IF NOT EXISTS boss_rounds (
   round      TEXT    NOT NULL PRIMARY KEY,  -- ISO 周标识,如 '2026-W43'(与周榜同口径)
-  total_hp   INTEGER NOT NULL,              -- 上轮击杀×1.6/未杀×0.8(下限 50 万),首轮 200 万
-  killed     INTEGER NOT NULL DEFAULT 0,    -- 惰性结算:SUM(dmg)≥total_hp → 1
+  total_hp   INTEGER NOT NULL DEFAULT 0,    -- 兼容列,无尽血模式恒 0
+  killed     INTEGER NOT NULL DEFAULT 0,    -- 兼容列,无尽血模式恒 0
+  dealt_sum  REAL,                          -- 上轮全服累计伤害(换轮惰性结算时写入)
   created_at INTEGER NOT NULL
 );
 CREATE TABLE IF NOT EXISTS boss_damage (
