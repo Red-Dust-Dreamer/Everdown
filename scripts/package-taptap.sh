@@ -10,7 +10,7 @@ OUT="abyss-idle-taptap-${VERSION}.zip"
 # 排行榜/云档端点:TapTap 托管页是 https,端点必须 https——ECS 裸 IP 的 IP 证书
 # TLS 前置(nginx 8788 → 本机 8787,与网站版同一个 SQLite 库;见 docs/ecs-https-lb.md)。
 # 覆盖方式: LB_API=https://xxx bash scripts/package-taptap.sh
-LB_API="${LB_API:-https://47.99.151.214:8788}"
+LB_API="${LB_API:-https://47.118.52.5:8788}"
 
 echo "== 构建(base=./,LB_API=$LB_API,输出 dist-taptap/)"
 rm -rf dist-taptap src/web/dist-taptap "$OUT"

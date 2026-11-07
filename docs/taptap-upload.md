@@ -112,7 +112,7 @@
 ## 技术备注(开发者向)
 
 - 打包脚本 `scripts/package-taptap.sh`:`VITE_BASE=./` 相对路径构建 +
-  `VITE_LB_API`(默认 `https://47.99.151.214:8788`,`LB_API=` 可覆盖)注入排行榜/云档端点 →
+  `VITE_LB_API`(默认 `https://47.118.52.5:8788`,`LB_API=` 可覆盖;2026-11-07 换 IP 事故后指向新地址)注入排行榜/云档端点 →
   校验无根绝对路径 + **端点已注入产物**(防 import.meta.env 替换失效静默回落 Workers)→
   python zipfile 组包(zip 内统一正斜杠)。
 - 端点为什么是 https IP:8788:TapTap 托管页为 HTTPS,http 接口被混合内容拦截;
