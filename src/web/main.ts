@@ -3741,9 +3741,15 @@ function cloudPushDebounced(): void {
 // 排行榜端点:默认 Cloudflare Worker(海外/HTTPS 网页版);
 // 国内/TapTap APK 构建时注入 ECS 地址:VITE_LB_API=http://<IP>:8787 npx vite build
 // (HTTPS 页面不能拉 http 接口——混合内容限制;APK 内 native WebView 无此限制)
-const LEADERBOARD_API: string = (import.meta as unknown as {
+/** TapTap 构建标志:vite --mode taptap 时被静态替换为 true。TapTap 版联网体系整体
+ *  切官方能力(排行榜走 tap 全局对象,见下方 tt 区块;BOSS/切磋/存档上云隐藏),
+ *  自建体系(本段起的所有 fetch)仅网站版保留——2.10.1 因「安装包检测到联网功能,
+ *  需小游戏 ICP 核准」被拒(2026-11-08)后的对策:TapTap 产物内自建端点零残留
+ *  (scripts/package-taptap.sh 纯度断言把关)。 */
+const TT_MODE: boolean = import.meta.env.MODE === "taptap";
+const LEADERBOARD_API: string = TT_MODE ? "" : ((import.meta as unknown as {
   env?: Record<string, string | undefined> }).env?.VITE_LB_API
-  ?? "https://abyss-leaderboard.a-red6108.workers.dev";
+  ?? "https://abyss-leaderboard.a-red6108.workers.dev");
 /** dev 构建标志:vite dev server 为 true,任何 vite build(含 taptap mode)为 false。
  *  数值覆盖键仅 dev 读取(boot),线上/TapTap 构建不认——防排行榜作弊面。
  *  用裸 import.meta.env.DEV(非类型断言形式)保证 vite define 精确替换。 */
@@ -3797,7 +3803,7 @@ let lbEditing = false;        // 昵称编辑中:暂停本页重建,避免输入
 //    CF Worker 端点全天在线不设时段。时段外连不上是预期行为,要用人话告诉玩家而不是「网络错误」
 //    让人以为自己网坏了;BOSS 挑战在时段外直接禁用,免得白看 30s 演出再失败。 ——
 const LB_SERVICE_HOURS: [number, number] | null =
-  LEADERBOARD_API.includes("workers.dev") ? null : [8, 23];
+  TT_MODE || LEADERBOARD_API.includes("workers.dev") ? null : [8, 23];
 function lbServiceOpen(): boolean {
   if (!LB_SERVICE_HOURS) return true;
   const h = new Date().getHours();
@@ -4127,8 +4133,9 @@ function arenaChallenge(idx: number): void {
   renderNow();
 }
 
-/** 排行榜页顶部分段条:排行(四榜)| 世界BOSS | 切磋 */
+/** 排行榜页顶部分段条:排行(四榜)| 世界BOSS | 切磋(TapTap 版只有排行,后两者隐藏) */
 function sectionSegs(): string {
+  if (TT_MODE) return `<button class="btn mini on" data-lb="section" data-a="board">排行</button>`;
   return `<button class="btn mini ${lbSection === "board" ? "on" : ""}" data-lb="section" data-a="board">排行</button>` +
     `<button class="btn mini ${lbSection === "boss" ? "on" : ""}" data-lb="section" data-a="boss">世界BOSS</button>` +
     `<button class="btn mini ${lbSection === "arena" ? "on" : ""}" data-lb="section" data-a="arena">切磋</button>`;
@@ -4177,6 +4184,243 @@ function renderArena(st: State, mine: HTMLElement, list: HTMLElement): void {
      对手快照来自其他玩家周期上传的裁剪阵容,挑战全程在本地模拟;胜负只计战绩与称号,不影响任何资源。</p>`);
 }
 
+// ================================================================ TapTap 官方排行榜(仅 taptap 构建)
+// 2026-11-08:2.10.1 因「安装包检测到联网功能,需小游戏 ICP 核准」被拒——TapTap 版
+// 五榜整体切换官方排行榜服务:tap.getLeaderboardManager() 免 SDK,玩家身份由容器自动
+// 识别,显示 TapTap 昵称与真实名次。榜单在开发者中心「游戏服务→游戏排行」创建
+// (降序/周榜/保留历史最高分),五个 ID 打包时经 VITE_TT_LB_IDS 注入,
+// 逗号序:主线,等级,爬塔,战力,转生。世界BOSS/切磋/存档上云在 TapTap 版隐藏,
+// 自建体系(上文)完整保留给网站版。
+interface TtLbRow { rank: number; name: string; score: number }
+interface TtLbBoardData { top: TtLbRow[]; me: { rank: number; score: number } | null }
+interface TtLbManager {
+  submitScores(p: { scores: { leaderboardId: string; score: number }[];
+    callback: { onSuccess: (r: unknown) => void; onFailure: (c: number, m: string) => void } }): void;
+  loadLeaderboardScores(p: { leaderboardId: string; maxSize: number;
+    callback: { onSuccess: (r: { scores?: unknown }) => void;
+                onFailure: (c: number, m: string) => void } }): void;
+  loadCurrentPlayerLeaderboardScore(p: { leaderboardId: string;
+    callback: { onSuccess: (r: unknown) => void; onFailure: (c: number, m: string) => void } }): void;
+}
+/** 主线榜复合分:区域主导(×1e7)、击杀破平(封顶 1e7-1);展示时经 ttZoneParts 反解 */
+const TT_ZONE_KILLS_CAP = 9_999_999;
+const ttZoneScore = (zone: number, kills: number): number =>
+  Math.max(0, Math.trunc(zone)) * (TT_ZONE_KILLS_CAP + 1) +
+  Math.min(Math.max(0, Math.trunc(kills)), TT_ZONE_KILLS_CAP);
+function ttZoneParts(score: number): { zone: number; kills: number } {
+  const zone = Math.floor(score / (TT_ZONE_KILLS_CAP + 1));
+  return { zone, kills: score - zone * (TT_ZONE_KILLS_CAP + 1) };
+}
+const TT_LB_IDS: string[] = ((import.meta as unknown as {
+  env?: Record<string, string | undefined> }).env?.VITE_TT_LB_IDS ?? "")
+  .split(",").map(s => s.trim()).filter(Boolean);
+const ttBoardId = (b: LbBoard): string => TT_LB_IDS[LB_BOARDS.indexOf(b)] ?? "";
+const ttLbData: Partial<Record<LbBoard, TtLbBoardData>> = {};
+const ttLbErr: Partial<Record<LbBoard, string>> = {};
+let ttLbBusy = false;          // 提交中(按钮态)
+let ttLbSubmitErr: string | null = null;
+let ttLastPush = 0;            // 自动提交节流(10 分钟,与自建榜同节奏)
+let ttTapName = "";            // 容器回填的 TapTap 昵称(拿不到则显示默认)
+let ttMgr: TtLbManager | null = null;
+function ttTap(): TtLbManager | null {
+  if (ttMgr) return ttMgr;
+  const tap = (window as unknown as
+    { tap?: { getLeaderboardManager?: () => TtLbManager } }).tap;
+  if (!tap?.getLeaderboardManager) return null;
+  try { ttMgr = tap.getLeaderboardManager(); } catch { return null; }
+  return ttMgr;
+}
+/** 本端各榜当前分(与自建榜同口径):塔层/转生未达线返回 null = 不交;主线为复合分 */
+function ttScoreOf(b: LbBoard): number | null {
+  if (b === "zone") return ttZoneScore(g.stats.max_zone, g.stats.kills);
+  if (b === "tower") return g.tower.max_floor >= 1 ? g.tower.max_floor : null;
+  if (b === "rebirth") return Math.floor(g.rebirths) >= 1 ? Math.floor(g.rebirths) : null;
+  if (b === "power") return Math.trunc(heroPower(g, false).total);
+  return g.level;
+}
+/** 提交单榜(回调式 API 包 Promise);不达线/未配置 = 成功空转 */
+function ttSubmit(b: LbBoard): Promise<string | null> {
+  return new Promise(resolve => {
+    const mgr = ttTap();
+    const id = ttBoardId(b);
+    const score = ttScoreOf(b);
+    if (!mgr) { resolve("未在 TapTap 内打开"); return; }
+    if (!id || score === null) { resolve(null); return; }
+    mgr.submitScores({ scores: [{ leaderboardId: id, score }],
+      callback: { onSuccess: () => resolve(null),
+                  onFailure: (c, m) => resolve(`TapTap ${c}:${m}`) } });
+  });
+}
+/** 官方回调字段结构文档未详列,防御式解析;返回 null=结构异常按空榜处理 */
+function ttParseRow(e: unknown, i: number): TtLbRow | null {
+  if (typeof e !== "object" || e === null) return null;
+  const o = e as { score?: unknown; value?: unknown; rank?: unknown; position?: unknown;
+    player?: { name?: unknown }; playerName?: unknown; name?: unknown };
+  const score = Number(o.score ?? o.value ?? 0);
+  if (!Number.isFinite(score)) return null;
+  const rank = Number(o.rank ?? o.position ?? i + 1);
+  const nameRaw = o.player?.name ?? o.playerName ?? o.name;
+  return { rank: Number.isFinite(rank) ? rank : i + 1,
+           name: typeof nameRaw === "string" && nameRaw ? nameRaw : `行者#${rank || i + 1}`,
+           score };
+}
+function ttLoadTop(mgr: TtLbManager, b: LbBoard): Promise<string | null> {
+  return new Promise(resolve => {
+    mgr.loadLeaderboardScores({ leaderboardId: ttBoardId(b), maxSize: 50,
+      callback: {
+        onSuccess: r => {
+          const arr = r?.scores;
+          const rows = (Array.isArray(arr) ? arr : [])
+            .map((e, i) => ttParseRow(e, i))
+            .filter((x): x is TtLbRow => x !== null);
+          ttLbData[b] = { top: rows, me: ttLbData[b]?.me ?? null };
+          resolve(null);
+        },
+        onFailure: (c, m) => resolve(`TapTap ${c}:${m}`),
+      } });
+  });
+}
+/** 查自己名次(真实名次,替代自建榜的估算名次);未上榜/失败静默——非错误态 */
+function ttLoadMe(mgr: TtLbManager, b: LbBoard): Promise<void> {
+  return new Promise(resolve => {
+    mgr.loadCurrentPlayerLeaderboardScore({ leaderboardId: ttBoardId(b),
+      callback: {
+        onSuccess: r => {
+          if (typeof r === "object" && r !== null) {
+            const o = r as { score?: unknown; rank?: unknown; playerRank?: unknown;
+              player?: { name?: unknown } };
+            const rank = Number(o.rank ?? o.playerRank ?? 0);
+            const score = Number(o.score ?? 0);
+            if (Number.isFinite(rank) && rank > 0)
+              ttLbData[b] = { top: ttLbData[b]?.top ?? [], me: { rank, score } };
+            const n = o.player?.name;
+            if (typeof n === "string" && n) ttTapName = n;
+          }
+          resolve();
+        },
+        onFailure: () => resolve(),   // 未上榜是常态,不当错误
+      } });
+  });
+}
+/** 拉单榜(Top50 + 我的名次);手动切换/重试/提交后均走此路径 */
+async function ttLoad(b: LbBoard): Promise<string | null> {
+  const mgr = ttTap();
+  if (!mgr) { ttLbErr[b] = "在 TapTap 内打开后可用"; return ttLbErr[b]!; }
+  if (!ttBoardId(b)) { ttLbErr[b] = "榜单未配置"; return ttLbErr[b]!; }
+  const topErr = await ttLoadTop(mgr, b);
+  await ttLoadMe(mgr, b);
+  if (topErr) { ttLbErr[b] = topErr; return topErr; }
+  delete ttLbErr[b];
+  return null;
+}
+/** 提交当前榜并刷新(「提交上榜」按钮) */
+async function ttSubmitCurrent(): Promise<string | null> {
+  const err = await ttSubmit(lbBoard);
+  if (err) { ttLbSubmitErr = err; return err; }
+  ttLbSubmitErr = null;
+  await ttLoad(lbBoard);
+  return null;
+}
+/** 进入排行榜页:10 分钟节流的五榜自动提交 + 当前榜拉取(与自建榜同节奏) */
+async function ttEnter(): Promise<void> {
+  if (!ttTap()) return;   // 非容器环境:渲染层画引导态,这里不闪错误
+  const now = Date.now();
+  if (now - ttLastPush > 10 * 60_000) {
+    ttLastPush = now;
+    ttLbBusy = true;
+    const errs = await Promise.all(LB_BOARDS.map(ttSubmit));
+    ttLbBusy = false;
+    const err = errs.find(e => e) ?? null;
+    ttLbSubmitErr = err;
+    if (err) toast("排行榜提交失败:" + err);
+  }
+  await ttLoad(lbBoard);
+  if (!document.hidden) renderNow();
+}
+
+/** TapTap 版排行榜渲染:结构对齐自建榜(我的卡 + 五榜 segs + Top50),
+ *  无终身/本周切换(官方榜单周期)、无改名(昵称跟 TapTap 账号)。 */
+function renderLeaderboardTT(st: State, mine: HTMLElement, list: HTMLElement): void {
+  const myScore = lbBoard === "zone" ? st.stats.max_zone
+                : lbBoard === "tower" ? st.tower.max_floor
+                : lbBoard === "power" ? (st.power ? heroPower(g, false).total : 0)
+                : lbBoard === "rebirth" ? Math.floor(st.rebirths)
+                : st.level;
+  const myLabel = lbBoard === "zone" ? "当前最远区域"
+                : lbBoard === "tower" ? (st.tower.max_floor > 0 ? "塔层" : "塔层(未挑战)")
+                : lbBoard === "power" ? "当前战力(不含增益)"
+                : lbBoard === "rebirth" ? "转生世数(深度加权)"
+                : "等级";
+  if (!ttTap()) {
+    // 非 TapTap 容器(浏览器直开产物/预览):明确引导而非空白或报错
+    renderLbMine(mine, "ttnotap",
+      `<h3><span class="dot"></span>🏆 排行榜 · TapTap 官方榜</h3>
+       <div class="lb-me-row"><span class="lb-rank-badge off">需要在 TapTap 内打开</span></div>`);
+    renderLbList(list, "ttnotap",
+      `<div style="color:var(--dim);padding:34px 10px;text-align:center;line-height:2">
+       🏆 TapTap 排行榜仅在 TapTap App 内可用<br>
+       <span style="font-size:12px">从 TapTap 打开游戏即可与本服玩家同榜比拼</span></div>`);
+    return;
+  }
+  const d = ttLbData[lbBoard];
+  const me = d?.me ?? null;
+  const youLine = me && me.rank > 0
+    ? `<span class="lb-rank-badge in">🏆 第 ${me.rank} 名</span>`
+    : `<span class="lb-rank-badge off">未上榜 · 提交后上榜</span>`;
+  const myScoreTxt = lbBoard === "power" ? fmt(myScore) : String(myScore);
+  const myKillTxt = fmt(st.stats.kills);
+  renderLbMine(mine,
+    `tmine|${lbBoard}|${ttLbBusy ? 1 : 0}|${myScoreTxt}|${me?.rank ?? -1}|${ttLbSubmitErr ?? ""}`,
+    `<h3><span class="dot"></span>🏆 排行榜 · ${esc(ttTapName || "TapTap 玩家")}
+      <span class="rt">
+        <button class="btn mini" data-lb="submit">${ttLbBusy ? "提交中…" : "提交上榜"}</button>
+      </span></h3>
+    <div class="lb-me-row">
+      <div><span class="k">${myLabel}</span>
+        <b>${myScoreTxt}</b>
+        <span class="k" style="margin-left:12px">击杀</span><b>${myKillTxt}</b></div>
+      ${youLine}
+    </div>` +
+    (ttLbSubmitErr
+      ? `<div class="lb-err">⚠ 上次提交失败:${esc(ttLbSubmitErr)} — 点「提交上榜」重试</div>`
+      : ""));
+
+  const segs = LB_BOARDS.map(b =>
+    `<button class="btn mini ${b === lbBoard ? "on" : ""}" data-lb="board" data-a="${b}">${LB_BOARD_NAMES[b]}</button>`).join("");
+  let rows = "";
+  if (d) {
+    rows = d.top.map(r => {
+      const medal = r.rank === 1 ? "🥇" : r.rank === 2 ? "🥈" : r.rank === 3 ? "🥉" : `${r.rank}`;
+      const isMe = me != null && me.rank === r.rank;
+      const sub = lbBoard === "zone" ? `击杀 ${fmt(ttZoneParts(r.score).kills)}` : "";
+      const scoreTxt = lbBoard === "zone" ? `第 ${ttZoneParts(r.score).zone} 区`
+        : lbBoard === "rebirth" ? `×${r.score} 世`
+        : lbBoard === "power" ? fmt(r.score)
+        : lbBoard === "tower" ? `${r.score} 层` : String(r.score);
+      return `<div class="lb-row${isMe ? " me" : ""}">
+        <span class="lb-no">${medal}</span>
+        <span class="lb-name">${esc(r.name)}</span>
+        <span class="lb-sub">${isMe ? "我" : sub}</span>
+        <b class="lb-score">${scoreTxt}</b></div>`;
+    }).join("");
+    if (!rows) rows = `<div style="color:var(--dim);padding:26px;text-align:center">虚位以待——成为第一个上榜的深渊行者</div>`;
+  } else if (ttLbErr[lbBoard]) {
+    rows = `<div class="lb-fail">⚠ ${LB_BOARD_NAMES[lbBoard]}加载失败:${lbErrText(ttLbErr[lbBoard]!)}` +
+      `<br><button class="btn mini" data-lb="retry">重试</button></div>`;
+  } else {
+    rows = `<div style="color:var(--dim);padding:26px;text-align:center">加载中…</div>`;
+  }
+  renderLbList(list,
+    `tt|${lbBoard}|` + (d
+      ? `d:${d.top.length}:${d.top[0]?.score ?? 0}:${me?.rank ?? -1}`
+      : `e:${ttLbErr[lbBoard] ?? "load"}`),
+    `<h3><span class="dot"></span>${LB_BOARD_NAMES[lbBoard]}(周榜)</h3>
+    <div class="lb-segbar">${sectionSegs()}</div>
+    <div class="lb-segbar">${segs}</div>${rows}
+    <p style="color:var(--dim);font-size:11.5px;margin-top:10px">
+      排名来自 TapTap 官方排行榜服务,以 TapTap 昵称上榜;周榜每周重置,保留历史最高分。</p>`);
+}
+
 // ================================================================ 存档周期上云(匿名 save-sync)
 // 每 10 分钟随自动存档节流上传整份存档 + 关页 sendBeacon 兜底;仅生产构建(线上/
 // TapTap)——dev 会话不上传,避免污染远端数据。监控型上行:失败静默,不影响游戏。
@@ -4185,7 +4429,8 @@ let lastSyncPush = 0;
 const SAVE_SYNC_MS = 10 * 60_000;
 function saveSyncPush(beacon = false): void {
   // dev 会话与测试模式端不上传(避免自测档污染远端;测试模式含存档同步+切磋快照)
-  if (IS_DEV || lbTestOff() || !LEADERBOARD_API || g.classId === null) return;
+  // TT_MODE:TapTap 版无自建后端,存档上云整体停用
+  if (TT_MODE || IS_DEV || lbTestOff() || !LEADERBOARD_API || g.classId === null) return;
   const payload = JSON.stringify({ uuid: lbUuid(), name: lbMyName(), save: g.toDict() });
   lastSyncPush = Date.now();
   if (beacon && navigator.sendBeacon) {
@@ -4309,6 +4554,7 @@ function renderLeaderboard(st: State): void {
     return;
   }
   if (lbEditing) return;                     // 昵称编辑中不重建(防输入被打断)
+  if (TT_MODE) { renderLeaderboardTT(st, mine, list); return; }   // TapTap 官方榜
 
   if (!LEADERBOARD_API) {
     mine.innerHTML = `<h3><span class="dot"></span>🏆 排行榜</h3>`;
@@ -4423,6 +4669,7 @@ function renderLeaderboard(st: State): void {
  *  拉取仍每次尝试(玩家进页想看榜,且服务可能刚恢复)。 */
 let lbNetFailAt = 0;
 async function lbEnter(): Promise<void> {
+  if (TT_MODE) { await ttEnter(); return; }   // TapTap 官方榜:提交+拉取见 ttEnter
   if (!LEADERBOARD_API) return;
   await Promise.all([lbFetch(lbBoard), bossFetch(), arenaFetch()]);
   const lastSub = Number(localStorage.getItem("abyss_lblast") ?? 0);
@@ -4465,7 +4712,7 @@ document.addEventListener("click", (e: MouseEvent) => {
   } else if (act === "board") {
     lbBoard = (el.dataset.a === "level" ? "level" : el.dataset.a === "tower" ? "tower"
         : el.dataset.a === "power" ? "power" : el.dataset.a === "rebirth" ? "rebirth" : "zone");
-    void lbFetch(lbBoard).then(() => renderNow());
+    void (TT_MODE ? ttLoad(lbBoard) : lbFetch(lbBoard)).then(() => renderNow());
     renderNow();
   } else if (act === "period") {
     lbPeriod = el.dataset.a === "week" ? "week" : "all";
@@ -4473,13 +4720,14 @@ document.addEventListener("click", (e: MouseEvent) => {
     renderNow();
   } else if (act === "retry") {
     // 重试按所在分段分流:世界BOSS 段重拉 /boss,切磋段重拉 /arena/opponents,四榜段重拉 /board
-    void (lbSection === "boss" ? bossFetch()
+    void (TT_MODE ? ttLoad(lbBoard)
+      : lbSection === "boss" ? bossFetch()
       : lbSection === "arena" ? arenaFetch() : lbFetch(lbBoard)).then(() => renderNow());
     renderNow();
   } else if (act === "submit") {
-    if (!lbServiceOpen()) { toast(lbNetHint()); renderNow(); return; }
-    if (lbTestOff()) { toast("测试模式:上传已停用(?lbtest=0 恢复)"); renderNow(); return; }
-    void lbSubmit().then(err => {
+    if (!TT_MODE && !lbServiceOpen()) { toast(lbNetHint()); renderNow(); return; }
+    if (!TT_MODE && lbTestOff()) { toast("测试模式:上传已停用(?lbtest=0 恢复)"); renderNow(); return; }
+    void (TT_MODE ? ttSubmitCurrent() : lbSubmit()).then(err => {
       lbSubmitErr = err && err !== "未配置" ? err : null;
       if (err) toast(err === "rate limited" ? "提交太频繁,稍后再试" : "提交失败:" + err);
       else toast("已提交,排名已更新");

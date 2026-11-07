@@ -112,9 +112,16 @@
 ## 技术备注(开发者向)
 
 - 打包脚本 `scripts/package-taptap.sh`:`VITE_BASE=./` 相对路径构建 +
-  `VITE_LB_API`(默认 `https://47.118.52.5:8788`,`LB_API=` 可覆盖;2026-11-07 换 IP 事故后指向新地址)注入排行榜/云档端点 →
-  校验无根绝对路径 + **端点已注入产物**(防 import.meta.env 替换失效静默回落 Workers)→
+  `VITE_TT_LB_IDS`(五榜 ID,逗号序 主线,等级,爬塔,战力,转生;2026-11-08 起)注入 →
+  校验无根绝对路径 + **榜单 ID 已注入** + **纯度断言(自建联网端点零残留)** →
   python zipfile 组包(zip 内统一正斜杠)。
+- **TapTap 版联网体系(2026-11-08,2.11.0)**:2.10.1 因「安装包检测到联网功能,需小游戏
+  ICP 核准」被拒后,TapTap 构建整体切换官方能力——五榜走 `tap.getLeaderboardManager()`
+  (免 SDK,榜单在开发者中心「游戏服务→游戏排行」创建:降序/周榜/保留最高分),世界BOSS/
+  切磋/存档上云/Supabase 云账号在 `TT_MODE`(vite --mode taptap,编译期常量)下死代码
+  消除或短路,产物内 `47.118.52.5`/`workers.dev`/`supabase` 零残留(纯度断言把关)。
+  **自建排行榜体系完整保留给网站版**(main.ts 同文件双实现,`TT_MODE` 分流;ECS LB 服务
+  与 workers 版不受影响)。非 TapTap 容器打开产物 → 排行榜页显示引导态。
 - 端点为什么是 https IP:8788:TapTap 托管页为 HTTPS,http 接口被混合内容拦截;
   ECS 用 Let's Encrypt IP 证书做了 TLS 前置(nginx 8788 → 8787),网站版与 TapTap 版
   同一个 SQLite 库。运维/续期/换 IP 见 `docs/ecs-https-lb.md`。

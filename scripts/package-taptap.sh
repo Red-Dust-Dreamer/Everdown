@@ -7,18 +7,23 @@ cd "$(dirname "$0")/.."
 
 VERSION=$(node -p "JSON.parse(require('fs').readFileSync('package.json','utf8')).version")
 OUT="abyss-idle-taptap-${VERSION}.zip"
-# 排行榜/云档端点:TapTap 托管页是 https,端点必须 https——ECS 裸 IP 的 IP 证书
-# TLS 前置(nginx 8788 → 本机 8787,与网站版同一个 SQLite 库;见 docs/ecs-https-lb.md)。
-# 覆盖方式: LB_API=https://xxx bash scripts/package-taptap.sh
-LB_API="${LB_API:-https://47.118.52.5:8788}"
+# TapTap 版排行榜 = 官方排行榜服务(tap.getLeaderboardManager,免 SDK;2026-11-08 起,
+# 2.10.1 因自建联网被 ICP 拒审后整体切换)。五个榜单 ID 在开发者中心「游戏服务→游戏排行」
+# 创建(降序/周榜/保留最高分),逗号序:主线,等级,爬塔,战力,转生。
+TT_LB_IDS="${VITE_TT_LB_IDS:-}"
+if [ -z "$TT_LB_IDS" ]; then
+  TT_LB_IDS="unset-tt-board-ids"   # 本地预览用占位;正式出包必须传真实 ID(断言防呆)
+  echo "!! 未设置 VITE_TT_LB_IDS(五榜 ID),使用占位——仅限本地预览,勿上传"
+fi
 
-echo "== 构建(base=./,LB_API=$LB_API,输出 dist-taptap/)"
+echo "== 构建(base=./,TT_LB_IDS=$TT_LB_IDS,输出 dist-taptap/)"
 rm -rf dist-taptap src/web/dist-taptap "$OUT"
 # MSYS_NO_PATHCONV: 防 Git Bash 把 VITE_BASE 的路径参数转成本地盘符
 # outDir 相对 vite root(src/web)解析,写成 ../../dist-taptap 落到项目根
-MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*" VITE_BASE=./ VITE_LB_API="$LB_API" npx vite build --mode taptap --outDir ../../dist-taptap
+MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*" VITE_BASE=./ VITE_TT_LB_IDS="$TT_LB_IDS" npx vite build --mode taptap --outDir ../../dist-taptap
 rm -rf dist-taptap/admin   # 管理面板仅本地,不进 TapTap 包(锚点:构建之后、grep 校验之前)
 rm -f dist-taptap/assets/admin-*.js   # admin 入口的 JS chunk 一并剔除(只删目录会漏进包)
+rm -f dist-taptap/assets/cloud-*.js   # 云存档 chunk(Supabase):TT_MODE 下动态 import 被消除但 chunk 仍会被 rollup 产出,剔掉
 rm -rf dist-taptap/vendor             # admin 控制台依赖(xterm 终端库),游戏本体不引用
 
 echo "== 校验:产物内不得残留根绝对路径(TapTap 托管在任意子路径)"
@@ -29,9 +34,18 @@ if grep -rqE 'url\("/' dist-taptap/assets/*.css; then
   echo "!! CSS 有绝对路径引用:" && grep -rnE 'url\("/' dist-taptap/assets/*.css && exit 1
 fi
 
-echo "== 校验:排行榜端点已注入产物(防 import.meta.env 替换失效静默回落 Workers)"
-if ! grep -rqF -- "$LB_API" dist-taptap/assets/*.js; then
-  echo "!! 构建产物 JS 里找不到端点 $LB_API(VITE_LB_API 注入失效,会回落 workers.dev)" && exit 1
+echo "== 校验:五个榜单 ID 已注入产物(防 VITE_TT_LB_IDS 替换失效)"
+if ! grep -qF -- "${TT_LB_IDS%%,*}" dist-taptap/assets/main-*.js; then
+  echo "!! 构建产物 JS 里找不到榜单 ID ${TT_LB_IDS%%,*}(VITE_TT_LB_IDS 注入失效)" && exit 1
+fi
+
+echo "== 校验:纯度断言——产物内自建联网端点必须零残留(2026-11-08 ICP 拒审对策;"
+echo "   TapTap 版仅允许官方 tap.* 排行榜,自建 LB/BOSS/切磋/存档/Supabase 全部不进包)"
+PURITY_HITS=$(grep -roE '47\.118\.52\.5|47\.99\.151\.214|workers\.dev|supabase[a-z.]*' \
+     dist-taptap/index.html dist-taptap/assets/*.js dist-taptap/assets/*.css 2>/dev/null | head -5 || true)
+if [ -n "$PURITY_HITS" ]; then
+  echo "$PURITY_HITS"
+  echo "!! TapTap 产物检出自建联网端点残留(见上方命中),禁止出包" && exit 1
 fi
 
 echo "== 组包:第一级唯一文件夹 abyssidle/(纯字母命名,稳妥过审)"
